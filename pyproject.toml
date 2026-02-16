@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meeting-recorder"
+version = "0.1.0"
+description = "Smart meeting recorder with per-app audio capture, VAD, and transcription"
+requires-python = ">=3.11"
+dependencies = [
+    "proc-tap>=0.3.0",
+    "PyAudioWPatch>=0.2.12",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "winotify>=1.1",
+    "psutil>=5.9",
+    "numpy>=1.24",
+    "pydub>=0.25",
+    "tomli>=2.0;python_version<'3.11'",
+    "tomli-w>=1.0",
+    "keyboard>=0.13",
+    "mss>=9.0",
+    "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+local = [
+    "faster-whisper>=1.0",
+    "torch>=2.1",
+    "pyannote.audio>=3.1",
+]
+cloud = [
+    "openai>=1.0",
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+meeting-recorder = "meeting_recorder.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["meeting_recorder*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

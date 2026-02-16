@@ -1,0 +1,163 @@
+"""Sync mic recording mute state with the meeting app's mute shortcut.
+
+Hooks the meeting app's mute keyboard shortcut (e.g., Alt+A for Zoom,
+Ctrl+Shift+M for Teams) and toggles an internal mute flag. When muted,
+the mic capture thread writes silence instead of real audio.
+
+This works by detecting when the user presses the mute shortcut while
+the meeting app window is in the foreground. Since the hook doesn't
+suppress the keystroke, the meeting app also receives it and mutes/unmutes
+simultaneously.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import ctypes.wintypes
+import logging
+import threading
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+user32 = ctypes.windll.user32
+
+# Mute shortcuts per meeting app
+APP_MUTE_SHORTCUTS = {
+    "zoom": "alt+a",
+    "teams": "ctrl+shift+m",
+    "webex": "ctrl+m",
+}
+
+
+class MuteSync:
+    """Detects meeting app mute/unmute and syncs with mic recording.
+
+    Hooks the meeting app's mute keyboard shortcut. When the user presses
+    the shortcut while the meeting app is in the foreground, the internal
+    mute state toggles. The mic capture thread checks is_muted to decide
+    whether to write real audio or silence.
+    """
+
+    def __init__(self, app_key: str, target_pids: set[int], start_muted: bool = True):
+        self._app_key = app_key.lower()
+        self._target_pids = target_pids
+        self._muted = start_muted
+        self._lock = threading.Lock()
+        self._started = False
+
+    @property
+    def is_muted(self) -> bool:
+        with self._lock:
+            return self._muted
+
+    def toggle(self) -> None:
+        """Manually toggle mute state (for resync or manual control)."""
+        with self._lock:
+            self._muted = not self._muted
+            state = "MUTED" if self._muted else "UNMUTED"
+        logger.info("Mic mute toggled: %s", state)
+
+    def start(self, manual_hotkey: str = "ctrl+shift+u") -> None:
+        """Register keyboard hooks for mute sync and manual toggle."""
+        if self._started:
+            return
+
+        try:
+            import keyboard
+
+            # Hook the meeting app's mute shortcut (e.g., Alt+A for Zoom)
+            shortcut = APP_MUTE_SHORTCUTS.get(self._app_key)
+            if shortcut:
+                keyboard.add_hotkey(
+                    shortcut,
+                    self._on_mute_shortcut_pressed,
+                    suppress=False,
+                    trigger_on_release=False,
+                )
+                logger.info(
+                    "Mute sync: monitoring '%s' for %s",
+                    shortcut,
+                    self._app_key,
+                )
+            else:
+                logger.warning(
+                    "No mute shortcut known for app '%s'.", self._app_key,
+                )
+
+            # Register manual toggle hotkey (always available)
+            keyboard.add_hotkey(
+                manual_hotkey,
+                self._on_manual_toggle,
+                suppress=False,
+            )
+            logger.info(
+                "Mute sync: manual toggle hotkey registered: %s", manual_hotkey,
+            )
+
+            state = "MUTED" if self._muted else "UNMUTED"
+            logger.info("Mute sync started (initial state: %s)", state)
+            self._started = True
+            self._manual_hotkey = manual_hotkey
+        except Exception:
+            logger.exception("Failed to register mute sync hotkeys")
+
+    def stop(self) -> None:
+        """Unregister keyboard hooks."""
+        if not self._started:
+            return
+        try:
+            import keyboard
+
+            shortcut = APP_MUTE_SHORTCUTS.get(self._app_key)
+            if shortcut:
+                keyboard.remove_hotkey(shortcut)
+            if hasattr(self, '_manual_hotkey'):
+                keyboard.remove_hotkey(self._manual_hotkey)
+        except Exception:
+            logger.debug("Failed to remove mute sync hotkeys", exc_info=True)
+        self._started = False
+
+    def _on_mute_shortcut_pressed(self) -> None:
+        """Called when the mute shortcut is pressed. Only toggles if
+        the meeting app window is currently in the foreground."""
+        if not self._is_meeting_app_focused():
+            return
+
+        with self._lock:
+            self._muted = not self._muted
+            state = "MUTED" if self._muted else "UNMUTED"
+        logger.info("Mute sync: detected %s shortcut -> %s", self._app_key, state)
+
+    def _on_manual_toggle(self) -> None:
+        """Called when the manual toggle hotkey is pressed (works anywhere)."""
+        with self._lock:
+            self._muted = not self._muted
+            state = "MUTED" if self._muted else "UNMUTED"
+        logger.info("Mute sync: manual toggle -> %s", state)
+
+    def _is_meeting_app_focused(self) -> bool:
+        """Check if the foreground window belongs to the meeting app."""
+        try:
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            pid = ctypes.wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return pid.value in self._target_pids
+        except Exception:
+            return False
+
+
+def get_all_pids_for_process(process_name: str) -> set[int]:
+    """Get all PIDs for a given process name (e.g., 'zoom.exe')."""
+    import psutil
+
+    pids = set()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if proc.info["name"].lower() == process_name.lower():
+                pids.add(proc.info["pid"])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return pids

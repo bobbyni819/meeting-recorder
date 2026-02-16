@@ -1,0 +1,39 @@
+[recording]
+output_dir = "~/MeetingRecordings"
+language = "en"
+user_name = "User"
+
+[audio]
+sample_rate = 16000
+channels = 1
+chunk_duration_ms = 30
+mic_device = ""  # empty = system default
+
+[vad]
+threshold = 0.5
+min_speech_duration_ms = 250
+min_silence_duration_ms = 300
+
+[transcription]
+backend = "local"  # "local" or "cloud"
+model_size = "large-v3"
+device = "cuda"  # "cuda" or "cpu"
+compute_type = "float16"
+openai_api_key = ""
+
+[diarization]
+enabled = true
+huggingface_token = ""
+min_speakers = 2
+max_speakers = 6
+
+[output]
+formats = ["json", "txt", "srt"]
+
+[hotkey]
+toggle_recording = "ctrl+shift+r"
+toggle_mute = "ctrl+shift+u"  # manual mic mute toggle for recorder
+
+[screen_recording]
+enabled = true
+fps = 5.0  # frames per second (2-10 recommended)
