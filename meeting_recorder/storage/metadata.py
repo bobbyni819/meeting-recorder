@@ -36,6 +36,13 @@ class RecordingMetadata:
     segment_count: int = 0
     status: str = "recording"  # recording, processing, completed, error
     error_message: str = ""
+    # Calendar integration
+    meeting_subject: str = ""
+    meeting_organizer: str = ""
+    meeting_attendees: list[str] = field(default_factory=list)
+    meeting_location: str = ""
+    # Google Drive
+    google_drive_folder_id: str = ""
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory."""

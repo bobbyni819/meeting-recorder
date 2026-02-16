@@ -78,6 +78,19 @@ class ScreenRecordingConfig:
 
 
 @dataclass
+class OutlookConfig:
+    enabled: bool = True
+    buffer_minutes: int = 10
+
+
+@dataclass
+class GoogleDriveConfig:
+    enabled: bool = False
+    credentials_path: str = "~/.meeting_recorder/google_credentials.json"
+    folder_id: str = ""
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -87,6 +100,8 @@ class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     screen_recording: ScreenRecordingConfig = field(default_factory=ScreenRecordingConfig)
+    outlook: OutlookConfig = field(default_factory=OutlookConfig)
+    google_drive: GoogleDriveConfig = field(default_factory=GoogleDriveConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -125,6 +140,14 @@ class Config:
             screen_recording=ScreenRecordingConfig(**{
                 k: v for k, v in data.get("screen_recording", {}).items()
                 if k in ScreenRecordingConfig.__dataclass_fields__
+            }),
+            outlook=OutlookConfig(**{
+                k: v for k, v in data.get("outlook", {}).items()
+                if k in OutlookConfig.__dataclass_fields__
+            }),
+            google_drive=GoogleDriveConfig(**{
+                k: v for k, v in data.get("google_drive", {}).items()
+                if k in GoogleDriveConfig.__dataclass_fields__
             }),
         )
 

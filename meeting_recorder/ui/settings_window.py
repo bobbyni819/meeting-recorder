@@ -53,6 +53,11 @@ class SettingsWindow:
         notebook.add(trans_frame, text="Transcription")
         self._build_transcription_tab(trans_frame)
 
+        # Integrations tab
+        integ_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(integ_frame, text="Integrations")
+        self._build_integrations_tab(integ_frame)
+
         # Buttons
         btn_frame = ttk.Frame(self._window)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -181,6 +186,78 @@ class SettingsWindow:
 
         parent.columnconfigure(1, weight=1)
 
+    def _build_integrations_tab(self, parent: ttk.Frame) -> None:
+        """Build the integrations settings tab."""
+        row = 0
+
+        # Outlook section
+        ttk.Label(parent, text="Outlook Calendar", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        self._outlook_var = tk.BooleanVar(value=self.config.outlook.enabled)
+        ttk.Checkbutton(
+            parent, text="Auto-detect meeting name from Outlook calendar",
+            variable=self._outlook_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(parent, text="Search Window (min):").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._outlook_buffer_var = tk.IntVar(value=self.config.outlook.buffer_minutes)
+        ttk.Spinbox(parent, from_=1, to=30, textvariable=self._outlook_buffer_var, width=5).grid(
+            row=row, column=1, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=10
+        )
+
+        # Google Drive section
+        row += 1
+        ttk.Label(parent, text="Google Drive Backup", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        self._gdrive_var = tk.BooleanVar(value=self.config.google_drive.enabled)
+        ttk.Checkbutton(
+            parent, text="Upload recordings to Google Drive after transcription",
+            variable=self._gdrive_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(parent, text="Credentials File:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._gdrive_creds_var = tk.StringVar(value=self.config.google_drive.credentials_path)
+        creds_frame = ttk.Frame(parent)
+        creds_frame.grid(row=row, column=1, sticky=tk.EW, pady=2)
+        ttk.Entry(creds_frame, textvariable=self._gdrive_creds_var, width=30).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(creds_frame, text="Browse", command=self._browse_gdrive_creds).pack(side=tk.RIGHT, padx=5)
+
+        row += 1
+        ttk.Label(parent, text="Drive Folder ID:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._gdrive_folder_var = tk.StringVar(value=self.config.google_drive.folder_id)
+        ttk.Entry(parent, textvariable=self._gdrive_folder_var, width=40).grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Leave Folder ID empty to auto-create a\n'MeetingRecordings' folder in your Drive.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        parent.columnconfigure(1, weight=1)
+
+    def _browse_gdrive_creds(self) -> None:
+        """Open file browser for Google Drive credentials JSON."""
+        path = filedialog.askopenfilename(
+            title="Select Google Drive Credentials JSON",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self._gdrive_creds_var.set(path)
+
     def _browse_output_dir(self) -> None:
         """Open directory browser for output directory."""
         path = filedialog.askdirectory(title="Select Recording Output Directory")
@@ -209,6 +286,13 @@ class SettingsWindow:
 
             self.config.screen_recording.enabled = self._screen_rec_var.get()
             self.config.screen_recording.fps = self._screen_fps_var.get()
+
+            self.config.outlook.enabled = self._outlook_var.get()
+            self.config.outlook.buffer_minutes = self._outlook_buffer_var.get()
+
+            self.config.google_drive.enabled = self._gdrive_var.get()
+            self.config.google_drive.credentials_path = self._gdrive_creds_var.get()
+            self.config.google_drive.folder_id = self._gdrive_folder_var.get()
 
             formats = []
             if self._fmt_json_var.get():

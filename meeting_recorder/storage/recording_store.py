@@ -19,11 +19,12 @@ class RecordingStore:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
 
-    def create_recording_dir(self, app_name: str = "Meeting") -> Path:
+    def create_recording_dir(self, app_name: str = "Meeting", meeting_subject: str = "") -> Path:
         """Create a new recording directory with timestamp.
 
         Args:
             app_name: Name of the meeting app (e.g., "Zoom", "Teams").
+            meeting_subject: Optional meeting subject from calendar for descriptive naming.
 
         Returns:
             Path to the created directory.
@@ -31,7 +32,18 @@ class RecordingStore:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # Sanitize app name
         safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in app_name)
-        dir_name = f"{timestamp}_{safe_name}"
+
+        if meeting_subject:
+            # Use meeting subject for a descriptive folder name
+            safe_subject = "".join(
+                c if c.isalnum() or c in "._- " else "" for c in meeting_subject
+            ).strip().replace(" ", "_")
+            if len(safe_subject) > 60:
+                safe_subject = safe_subject[:60].rstrip("_")
+            dir_name = f"{timestamp}_{safe_subject}_{safe_name}"
+        else:
+            dir_name = f"{timestamp}_{safe_name}"
+
         recording_dir = self.base_dir / dir_name
         recording_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Created recording directory: %s", recording_dir)

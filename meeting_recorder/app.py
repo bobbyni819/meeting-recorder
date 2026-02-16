@@ -19,6 +19,8 @@ from meeting_recorder.storage.metadata import RecordingMetadata
 from meeting_recorder.storage.transcript_formatter import save_all_formats
 from meeting_recorder.ui.tray import TrayIcon
 from meeting_recorder.ui import notifications
+from meeting_recorder.integrations.outlook import find_current_meeting, CalendarEvent
+from meeting_recorder.integrations.google_drive import GoogleDriveUploader, is_google_drive_available
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +79,21 @@ class MeetingRecorderApp:
         self._current_process = process
         logger.info("Found %s (PID %d)", process.display_name, process.pid)
 
-        # Create recording directory
+        # Query Outlook calendar for meeting context
+        calendar_event = None
+        meeting_subject = ""
+        if self.config.outlook.enabled:
+            calendar_event = find_current_meeting(
+                buffer_minutes=self.config.outlook.buffer_minutes
+            )
+            if calendar_event:
+                meeting_subject = calendar_event.subject
+                logger.info("Calendar match: '%s'", meeting_subject)
+
+        # Create recording directory (with meeting subject if available)
         self._current_recording_dir = self._recording_store.create_recording_dir(
-            app_name=process.display_name
+            app_name=process.display_name,
+            meeting_subject=meeting_subject,
         )
 
         # Create metadata
@@ -91,6 +105,12 @@ class MeetingRecorderApp:
             language=self.config.recording.language,
             transcription_backend=self.config.transcription.backend,
         )
+        # Attach calendar info to metadata
+        if calendar_event:
+            self._current_metadata.meeting_subject = calendar_event.subject
+            self._current_metadata.meeting_organizer = calendar_event.organizer
+            self._current_metadata.meeting_attendees = calendar_event.attendees
+            self._current_metadata.meeting_location = calendar_event.location
         self._current_metadata.save(self._current_recording_dir)
 
         # Resolve mic device index
@@ -191,6 +211,10 @@ class MeetingRecorderApp:
                 segment_count=len(segments),
             )
 
+            # Upload to Google Drive if enabled
+            if self.config.google_drive.enabled:
+                self._upload_to_google_drive(recording_dir, metadata)
+
             self._tray.set_state("idle")
             notifications.notify_transcription_complete(str(recording_dir))
             logger.info("Post-processing complete: %s", recording_dir)
@@ -201,6 +225,29 @@ class MeetingRecorderApp:
             notifications.notify_error(f"Transcription failed: {e}")
             if metadata:
                 metadata.set_error(str(e), recording_dir)
+
+    def _upload_to_google_drive(self, recording_dir: Path, metadata: RecordingMetadata) -> None:
+        """Upload recording to Google Drive."""
+        try:
+            creds_path = Path(self.config.google_drive.credentials_path).expanduser()
+            if not is_google_drive_available(creds_path):
+                logger.info("Google Drive not available (missing credentials or libraries).")
+                return
+
+            self._tray.set_state("processing", "Uploading to Drive...")
+            uploader = GoogleDriveUploader(
+                credentials_path=creds_path,
+                folder_id=self.config.google_drive.folder_id,
+            )
+            folder_id = uploader.upload_recording(recording_dir)
+            if folder_id:
+                metadata.google_drive_folder_id = folder_id
+                metadata.save(recording_dir)
+                logger.info("Google Drive upload complete: %s", folder_id)
+            else:
+                logger.warning("Google Drive upload returned no folder ID.")
+        except Exception:
+            logger.exception("Google Drive upload failed (non-fatal)")
 
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""

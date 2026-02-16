@@ -35,11 +35,15 @@ echo   (This is ~2.5GB download, may take a few minutes)
 python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 echo.
-echo [3/4] Installing transcription and diarization...
+echo [3/5] Installing transcription and diarization...
 python -m pip install faster-whisper pyannote.audio
 
 echo.
-echo [4/4] Creating shortcuts...
+echo [4/5] Installing integrations (Outlook + Google Drive)...
+python -m pip install pywin32 google-api-python-client google-auth-oauthlib
+
+echo.
+echo [5/5] Creating shortcuts...
 
 :: Desktop shortcut
 set PYTHONW_PATH=
@@ -96,11 +100,18 @@ echo     1. Launch Meeting Recorder from desktop
 echo     2. Right-click tray icon ^> Settings
 echo     3. Add your HuggingFace token for speaker diarization
 echo        (get one at https://huggingface.co/settings/tokens)
+echo     4. For Google Drive backup: place google_credentials.json in
+echo        %%USERPROFILE%%\.meeting_recorder\ and enable in Settings
 echo.
 echo   Hotkeys:
 echo     Ctrl+Shift+R  Start/stop recording
 echo     Alt+A         Mute sync (Zoom)
 echo     Ctrl+Shift+M  Mute sync (Teams)
+echo     Ctrl+M        Mute sync (Webex)
 echo     Ctrl+Shift+U  Manual mic mute toggle
+echo.
+echo   Integrations:
+echo     Outlook:       Auto-detects meeting name from your calendar
+echo     Google Drive:  Backs up recordings after transcription
 echo.
 pause

@@ -37,3 +37,12 @@ toggle_mute = "ctrl+shift+u"  # manual mic mute toggle for recorder
 [screen_recording]
 enabled = true
 fps = 5.0  # frames per second (2-10 recommended)
+
+[outlook]
+enabled = true         # auto-detect meeting name from Outlook calendar
+buffer_minutes = 10    # search window: current time ± N minutes
+
+[google_drive]
+enabled = false        # upload recordings to Google Drive after transcription
+credentials_path = "~/.meeting_recorder/google_credentials.json"
+folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder

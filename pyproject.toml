@@ -32,6 +32,13 @@ local = [
 cloud = [
     "openai>=1.0",
 ]
+outlook = [
+    "pywin32>=306",
+]
+gdrive = [
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.1",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.1",
