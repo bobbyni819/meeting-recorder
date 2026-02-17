@@ -14,6 +14,7 @@ from meeting_recorder.ui.dashboard import (
     DashboardContext,
     db_to_fraction,
     vu_color,
+    _format_elapsed,
     GREEN_VU,
     YELLOW_VU,
     RED_VU,
@@ -231,6 +232,29 @@ class TestDashboardStateMethods:
         dash.update_elapsed(42.5)
         dash.update_mute_state(True)
         dash.update_transcript("Hello world")
+
+
+# ---------------------------------------------------------------------------
+# Layout constants
+# ---------------------------------------------------------------------------
+
+class TestFormatElapsed:
+    """Test the elapsed time formatter."""
+
+    def test_zero(self):
+        assert _format_elapsed(0) == "00:00:00"
+
+    def test_seconds_only(self):
+        assert _format_elapsed(45) == "00:00:45"
+
+    def test_minutes_and_seconds(self):
+        assert _format_elapsed(754) == "00:12:34"
+
+    def test_hours(self):
+        assert _format_elapsed(3661) == "01:01:01"
+
+    def test_fractional_truncates(self):
+        assert _format_elapsed(59.9) == "00:00:59"
 
 
 # ---------------------------------------------------------------------------

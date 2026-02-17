@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -62,6 +63,13 @@ def vu_color(fraction: float) -> str:
     if fraction > 0.50:
         return YELLOW_VU
     return GREEN_VU
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    h, remainder = divmod(int(seconds), 3600)
+    m, s = divmod(remainder, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 class GameBarDashboard:
@@ -125,6 +133,10 @@ class GameBarDashboard:
         self._expanded_frame: Optional[tk.Frame] = None
         self._collapsed_frame: Optional[tk.Frame] = None
 
+        # Tk thread management
+        self._tk_thread: Optional[threading.Thread] = None
+        self._tk_ready = threading.Event()
+
     @property
     def is_visible(self) -> bool:
         return self._is_visible
@@ -144,43 +156,77 @@ class GameBarDashboard:
         return self._position_x, self._position_y
 
     def show(self, context: Optional[DashboardContext] = None) -> None:
-        """Show the dashboard overlay."""
+        """Show the dashboard overlay.
+
+        Creates the window in a dedicated thread running mainloop() so that
+        tkinter has an event loop for rendering and after() callbacks.
+        """
         if context is not None:
             self._context = context
 
         if self._window is not None:
+            # Re-show an existing hidden window
             try:
-                self._window.deiconify()
                 self._is_visible = True
-                self._start_pulse()
+                self._window.after(0, self._do_reshow)
                 return
             except tk.TclError:
                 self._window = None
 
-        self._build_window()
+        # Spin up a dedicated Tk thread
+        self._tk_ready.clear()
         self._is_visible = True
-        self._start_pulse()
+        self._tk_thread = threading.Thread(
+            target=self._run_tk, name="dashboard-tk", daemon=True,
+        )
+        self._tk_thread.start()
+        self._tk_ready.wait(timeout=5.0)
+
+    def _run_tk(self) -> None:
+        """Create the window and run the Tk event loop (dedicated thread)."""
+        try:
+            self._build_window()
+            self._start_pulse()
+            self._tk_ready.set()
+            self._window.mainloop()
+        except Exception:
+            logger.exception("Dashboard Tk thread error")
+        finally:
+            self._window = None
+            self._is_visible = False
+            self._tk_ready.set()  # unblock show() on error
+
+    def _do_reshow(self) -> None:
+        """Deiconify and restart pulse (must be called on Tk thread)."""
+        if self._window:
+            self._window.deiconify()
+            self._start_pulse()
 
     def hide(self) -> None:
         """Hide the dashboard (does NOT stop recording)."""
-        self._stop_pulse()
+        self._is_visible = False
         if self._window is not None:
             try:
-                self._window.withdraw()
+                self._window.after(0, self._do_hide)
             except tk.TclError:
                 pass
-        self._is_visible = False
+
+    def _do_hide(self) -> None:
+        """Withdraw and stop pulse (must be called on Tk thread)."""
+        self._stop_pulse()
+        if self._window:
+            self._window.withdraw()
 
     def close(self) -> None:
         """Destroy the dashboard window entirely."""
-        self._stop_pulse()
         self._is_visible = False
-        if self._window is not None:
+        w = self._window
+        self._window = None  # prevent further after() calls from other threads
+        if w is not None:
             try:
-                self._window.destroy()
+                w.after(0, w.destroy)
             except tk.TclError:
                 pass
-            self._window = None
 
     def update_audio_levels(
         self, app_rms_db: float, app_peak_db: float, mic_rms_db: float, mic_peak_db: float
