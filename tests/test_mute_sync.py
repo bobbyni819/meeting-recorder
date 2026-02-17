@@ -17,13 +17,13 @@ from meeting_recorder.audio.mute_sync import MuteSync, APP_MUTE_SHORTCUTS
 class TestMuteSyncInitialState:
     """Verify initial mute state."""
 
-    def test_default_start_muted(self):
+    def test_default_start_unmuted(self):
         ms = MuteSync(app_key="zoom", target_pids={100})
-        assert ms.is_muted is True
-
-    def test_start_unmuted(self):
-        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
         assert ms.is_muted is False
+
+    def test_start_muted(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=True)
+        assert ms.is_muted is True
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +189,6 @@ class TestMuteSyncUnknownApp:
 
     def test_no_shortcut_for_unknown_app(self):
         ms = MuteSync(app_key="unknown_app", target_pids={999})
-        # toggle should still work
+        # toggle should still work (default is unmuted, toggle -> muted)
         ms.toggle()
-        assert ms.is_muted is False
+        assert ms.is_muted is True

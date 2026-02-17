@@ -194,7 +194,7 @@ class MeetingRecorderApp:
             ctx = DashboardContext(
                 app_name=process.display_name,
                 meeting_subject=meeting_subject,
-                is_muted=True,  # starts muted by default
+                is_muted=False,  # starts unmuted; mute sync tracks actual state
             )
             self._dashboard.show(ctx)
 

@@ -43,7 +43,7 @@ class MuteSync:
         self,
         app_key: str,
         target_pids: set[int],
-        start_muted: bool = True,
+        start_muted: bool = False,
         on_mute_changed: Optional[callable] = None,
     ):
         self._app_key = app_key.lower()

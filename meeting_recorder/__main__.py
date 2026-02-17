@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+
+
+def _fix_stdio() -> None:
+    """Redirect None stdio streams to devnull for pythonw.exe compatibility.
+
+    Under pythonw.exe (no console), sys.stdout/stderr/stdin are None.
+    Libraries like torch.hub.load crash when they try to write to stderr.
+    """
+    devnull = open(os.devnull, "w")
+    if sys.stdout is None:
+        sys.stdout = devnull
+    if sys.stderr is None:
+        sys.stderr = devnull
+    if sys.stdin is None:
+        sys.stdin = open(os.devnull, "r")
 
 
 def main() -> None:
     """Main entry point for Meeting Recorder."""
+    _fix_stdio()
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
