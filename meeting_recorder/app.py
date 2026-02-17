@@ -18,6 +18,7 @@ from meeting_recorder.storage.recording_store import RecordingStore
 from meeting_recorder.storage.metadata import RecordingMetadata
 from meeting_recorder.storage.transcript_formatter import save_all_formats
 from meeting_recorder.ui.tray import TrayIcon
+from meeting_recorder.ui.dashboard import GameBarDashboard, DashboardContext
 from meeting_recorder.ui import notifications
 from meeting_recorder.integrations.outlook import find_current_meeting, CalendarEvent
 from meeting_recorder.integrations.google_drive import GoogleDriveUploader, is_google_drive_available
@@ -46,6 +47,9 @@ class MeetingRecorderApp:
         self._pipeline = TranscriptionPipeline(self.config)
         self._hotkey_registered = False
 
+        # Dashboard overlay
+        self._dashboard: Optional[GameBarDashboard] = None
+
         # System tray
         self._tray = TrayIcon(
             on_start=self.start_recording,
@@ -54,6 +58,7 @@ class MeetingRecorderApp:
             on_settings=self._open_settings,
             on_open_recordings=self._open_recordings_folder,
             on_search=self._open_search,
+            on_show_dashboard=self._show_dashboard,
         )
 
     def run(self) -> None:
@@ -137,8 +142,31 @@ class MeetingRecorderApp:
             on_audio_levels=self._on_audio_levels,
             on_live_transcript=self._on_live_transcript,
             live_transcription_enabled=self.config.recording.live_transcription,
+            on_mute_changed=self._on_mute_changed,
         )
         self._capture_manager.start()
+
+        # Show dashboard overlay
+        dash_cfg = self.config.dashboard
+        if dash_cfg.enabled and dash_cfg.auto_show:
+            self._dashboard = GameBarDashboard(
+                on_stop=lambda: threading.Thread(target=self.stop_recording, daemon=True).start(),
+                on_toggle_mute=self._toggle_mute,
+                on_open_recordings=self._open_recordings_folder,
+                on_open_settings=self._open_settings,
+                opacity=dash_cfg.opacity,
+                start_collapsed=dash_cfg.start_collapsed,
+                show_transcript=dash_cfg.show_transcript,
+                position_x=dash_cfg.position_x,
+                position_y=dash_cfg.position_y,
+                position=dash_cfg.position,
+            )
+            ctx = DashboardContext(
+                app_name=process.display_name,
+                meeting_subject=meeting_subject,
+                is_muted=True,  # starts muted by default
+            )
+            self._dashboard.show(ctx)
 
         # Update UI
         self._tray.set_state("recording", f"Recording {process.display_name}")
@@ -154,6 +182,9 @@ class MeetingRecorderApp:
         elapsed = self._capture_manager.elapsed_seconds
         self._capture_manager.stop()
         self._capture_manager = None
+
+        # Hide/close dashboard and persist position
+        self._close_dashboard()
 
         duration_str = _format_duration(elapsed)
         notifications.notify_recording_stopped(duration_str)
@@ -178,6 +209,7 @@ class MeetingRecorderApp:
         logger.info("Quitting Meeting Recorder...")
         if self._capture_manager and self._capture_manager.is_recording:
             self._capture_manager.stop()
+        self._close_dashboard()
         self._unregister_hotkey()
         self._tray.stop()
 
@@ -326,10 +358,57 @@ class MeetingRecorderApp:
                 f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
             )
 
+            # Push to dashboard
+            if self._dashboard and self._dashboard.is_visible:
+                self._dashboard.update_audio_levels(app_rms, app_peak, mic_rms, mic_peak)
+                self._dashboard.update_elapsed(elapsed)
+
     def _on_live_transcript(self, text: str) -> None:
         """Handle live transcription preview updates."""
         if text:
             logger.debug("Live preview: %s", text[:80])
+            if self._dashboard and self._dashboard.is_visible:
+                self._dashboard.update_transcript(text)
+
+    def _on_mute_changed(self, is_muted: bool) -> None:
+        """Handle mute state changes from MuteSync."""
+        if self._dashboard and self._dashboard.is_visible:
+            self._dashboard.update_mute_state(is_muted)
+
+    def _toggle_mute(self) -> None:
+        """Toggle mic mute via the capture manager's MuteSync."""
+        if self._capture_manager and self._capture_manager.mute_sync:
+            self._capture_manager.mute_sync.toggle()
+
+    def _toggle_dashboard(self) -> None:
+        """Toggle dashboard visibility (hotkey handler)."""
+        if self._dashboard:
+            if self._dashboard.is_visible:
+                self._dashboard.hide()
+            else:
+                self._dashboard.show()
+
+    def _show_dashboard(self) -> None:
+        """Show the dashboard (tray menu handler)."""
+        if self._dashboard and not self._dashboard.is_visible:
+            self._dashboard.show()
+
+    def _close_dashboard(self) -> None:
+        """Close the dashboard and persist position to config."""
+        if self._dashboard:
+            # Persist position
+            x, y = self._dashboard.position_xy
+            if x >= 0 and y >= 0:
+                self.config.dashboard.position_x = x
+                self.config.dashboard.position_y = y
+                try:
+                    self.config.save()
+                except Exception:
+                    logger.debug("Failed to persist dashboard position", exc_info=True)
+
+            if self.config.dashboard.auto_hide:
+                self._dashboard.close()
+                self._dashboard = None
 
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""
@@ -357,18 +436,22 @@ class MeetingRecorderApp:
         os.startfile(str(output_dir))
 
     def _register_hotkey(self) -> None:
-        """Register the global hotkey for toggling recording."""
+        """Register global hotkeys for toggling recording and dashboard."""
         try:
             import keyboard
 
             hotkey = self.config.hotkey.toggle_recording
             keyboard.add_hotkey(hotkey, self._toggle_recording)
+
+            dash_hotkey = self.config.hotkey.toggle_dashboard
+            keyboard.add_hotkey(dash_hotkey, self._toggle_dashboard)
+
             self._hotkey_registered = True
-            logger.info("Global hotkey registered: %s", hotkey)
+            logger.info("Global hotkeys registered: %s, %s", hotkey, dash_hotkey)
         except ImportError:
             logger.warning("keyboard module not installed. Global hotkey disabled.")
         except Exception:
-            logger.exception("Failed to register global hotkey")
+            logger.exception("Failed to register global hotkeys")
 
     def _unregister_hotkey(self) -> None:
         """Unregister the global hotkey."""

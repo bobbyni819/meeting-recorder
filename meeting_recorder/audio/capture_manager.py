@@ -50,6 +50,7 @@ class CaptureManager:
         on_audio_levels: Optional[callable] = None,
         on_live_transcript: Optional[callable] = None,
         live_transcription_enabled: bool = False,
+        on_mute_changed: Optional[callable] = None,
     ):
         self.pid = pid
         self.output_dir = output_dir
@@ -80,7 +81,11 @@ class CaptureManager:
         if app_key and process_name:
             target_pids = get_all_pids_for_process(process_name)
             if target_pids:
-                self._mute_sync = MuteSync(app_key=app_key, target_pids=target_pids)
+                self._mute_sync = MuteSync(
+                    app_key=app_key,
+                    target_pids=target_pids,
+                    on_mute_changed=on_mute_changed,
+                )
 
         # Capture instances
         self._app_capture = AppAudioCapture(
@@ -298,6 +303,11 @@ class CaptureManager:
     def level_monitor(self) -> AudioLevelMonitor:
         """Access the audio level monitor for current levels."""
         return self._level_monitor
+
+    @property
+    def mute_sync(self) -> Optional[MuteSync]:
+        """Access the mute sync instance (if available)."""
+        return self._mute_sync
 
     @property
     def is_recording(self) -> bool:

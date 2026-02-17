@@ -37,6 +37,7 @@ class TrayIcon:
         on_settings: Optional[Callable] = None,
         on_open_recordings: Optional[Callable] = None,
         on_search: Optional[Callable] = None,
+        on_show_dashboard: Optional[Callable] = None,
     ):
         self._on_start = on_start
         self._on_stop = on_stop
@@ -44,6 +45,7 @@ class TrayIcon:
         self._on_settings = on_settings
         self._on_open_recordings = on_open_recordings
         self._on_search = on_search
+        self._on_show_dashboard = on_show_dashboard
         self._state = "idle"
         self._status_text = "Idle"
         self._icon: Optional[pystray.Icon] = None
@@ -81,6 +83,12 @@ class TrayIcon:
                     Item("Teams: Ctrl+Shift+M  Mute Sync", None, enabled=False),
                     Item("Webex: Ctrl+M    Mute Sync", None, enabled=False),
                 )),
+                pystray.Menu.SEPARATOR,
+                Item(
+                    "Show Dashboard",
+                    self._handle_show_dashboard,
+                    enabled=lambda _: self._state == "recording",
+                ),
                 pystray.Menu.SEPARATOR,
                 Item("Open Recordings", self._handle_open_recordings),
                 Item("Search Recordings...", self._handle_search),
@@ -145,6 +153,11 @@ class TrayIcon:
         """Handle search recordings menu click."""
         if self._on_search:
             threading.Thread(target=self._on_search, daemon=True).start()
+
+    def _handle_show_dashboard(self, icon, item) -> None:
+        """Handle show dashboard menu click."""
+        if self._on_show_dashboard:
+            threading.Thread(target=self._on_show_dashboard, daemon=True).start()
 
     def _handle_quit(self, icon, item) -> None:
         """Handle quit menu click."""

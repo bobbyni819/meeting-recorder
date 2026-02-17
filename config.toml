@@ -34,6 +34,7 @@ formats = ["json", "txt", "srt"]
 [hotkey]
 toggle_recording = "ctrl+shift+r"
 toggle_mute = "ctrl+shift+u"  # manual mic mute toggle for recorder
+toggle_dashboard = "ctrl+shift+d"  # show/hide recording dashboard
 
 [screen_recording]
 enabled = true
@@ -54,3 +55,14 @@ provider = "openai"    # "openai" or "anthropic"
 api_key = ""
 model = ""             # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
 max_transcript_tokens = 0  # 0 = no limit
+
+[dashboard]
+enabled = true
+auto_show = true       # auto-show dashboard when recording starts
+auto_hide = true       # auto-hide dashboard when recording stops
+opacity = 0.92
+position = "top-right" # top-left, top-right, bottom-left, bottom-right, center
+position_x = -1        # -1 = use position preset
+position_y = -1
+start_collapsed = false
+show_transcript = true

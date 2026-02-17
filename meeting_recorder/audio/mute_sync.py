@@ -39,10 +39,17 @@ class MuteSync:
     whether to write real audio or silence.
     """
 
-    def __init__(self, app_key: str, target_pids: set[int], start_muted: bool = True):
+    def __init__(
+        self,
+        app_key: str,
+        target_pids: set[int],
+        start_muted: bool = True,
+        on_mute_changed: Optional[callable] = None,
+    ):
         self._app_key = app_key.lower()
         self._target_pids = target_pids
         self._muted = start_muted
+        self._on_mute_changed = on_mute_changed
         self._lock = threading.Lock()
         self._started = False
 
@@ -55,8 +62,18 @@ class MuteSync:
         """Manually toggle mute state (for resync or manual control)."""
         with self._lock:
             self._muted = not self._muted
-            state = "MUTED" if self._muted else "UNMUTED"
+            muted = self._muted
+            state = "MUTED" if muted else "UNMUTED"
         logger.info("Mic mute toggled: %s", state)
+        self._fire_mute_changed(muted)
+
+    def _fire_mute_changed(self, is_muted: bool) -> None:
+        """Notify listener of mute state change."""
+        if self._on_mute_changed is not None:
+            try:
+                self._on_mute_changed(is_muted)
+            except Exception:
+                logger.debug("on_mute_changed callback error", exc_info=True)
 
     def start(self, manual_hotkey: str = "ctrl+shift+u") -> None:
         """Register keyboard hooks for mute sync and manual toggle."""
@@ -126,15 +143,19 @@ class MuteSync:
 
         with self._lock:
             self._muted = not self._muted
-            state = "MUTED" if self._muted else "UNMUTED"
+            muted = self._muted
+            state = "MUTED" if muted else "UNMUTED"
         logger.info("Mute sync: detected %s shortcut -> %s", self._app_key, state)
+        self._fire_mute_changed(muted)
 
     def _on_manual_toggle(self) -> None:
         """Called when the manual toggle hotkey is pressed (works anywhere)."""
         with self._lock:
             self._muted = not self._muted
-            state = "MUTED" if self._muted else "UNMUTED"
+            muted = self._muted
+            state = "MUTED" if muted else "UNMUTED"
         logger.info("Mute sync: manual toggle -> %s", state)
+        self._fire_mute_changed(muted)
 
     def _is_meeting_app_focused(self) -> bool:
         """Check if the foreground window belongs to the meeting app."""

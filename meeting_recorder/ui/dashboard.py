@@ -1,0 +1,641 @@
+"""Game-Bar-style floating recording dashboard overlay."""
+
+from __future__ import annotations
+
+import logging
+import tkinter as tk
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+from meeting_recorder.audio.level_monitor import MIN_DB
+
+logger = logging.getLogger(__name__)
+
+# Layout constants
+EXPANDED_WIDTH = 380
+EXPANDED_HEIGHT = 280
+COLLAPSED_WIDTH = 380
+COLLAPSED_HEIGHT = 44
+
+# Colors
+BG_COLOR = "#1a1a2e"
+BG_HEADER = "#16213e"
+BG_CONTROLS = "#0f3460"
+TEXT_COLOR = "#e0e0e0"
+TEXT_DIM = "#888888"
+RED_DOT = "#e74c3c"
+RED_DOT_OFF = "#5a2020"
+GREEN_VU = "#2ecc71"
+YELLOW_VU = "#f1c40f"
+RED_VU = "#e74c3c"
+VU_BG = "#2c2c3e"
+BUTTON_BG = "#0f3460"
+BUTTON_HOVER = "#1a5276"
+MUTED_COLOR = "#e74c3c"
+UNMUTED_COLOR = "#2ecc71"
+
+
+@dataclass
+class DashboardContext:
+    """Data passed to the dashboard when recording starts."""
+    app_name: str = "Meeting"
+    meeting_subject: str = ""
+    is_muted: bool = True
+
+
+def db_to_fraction(db: float) -> float:
+    """Convert dB value to 0.0-1.0 fraction for VU meter display.
+
+    Maps MIN_DB..0 dB range to 0.0..1.0.
+    """
+    if db <= MIN_DB:
+        return 0.0
+    if db >= 0.0:
+        return 1.0
+    return (db - MIN_DB) / (0.0 - MIN_DB)
+
+
+def vu_color(fraction: float) -> str:
+    """Return VU meter color based on signal level fraction (0.0 to 1.0)."""
+    if fraction > 0.80:
+        return RED_VU
+    if fraction > 0.50:
+        return YELLOW_VU
+    return GREEN_VU
+
+
+class GameBarDashboard:
+    """Floating overlay dashboard shown during recording.
+
+    Displays live VU meters, elapsed time, mute state, transcript preview,
+    and quick-action buttons. Follows the same overlay pattern as
+    LiveTranscriptWindow (overrideredirect, topmost, alpha, draggable).
+    """
+
+    def __init__(
+        self,
+        on_stop: Optional[Callable[[], None]] = None,
+        on_toggle_mute: Optional[Callable[[], None]] = None,
+        on_open_recordings: Optional[Callable[[], None]] = None,
+        on_open_settings: Optional[Callable[[], None]] = None,
+        opacity: float = 0.92,
+        start_collapsed: bool = False,
+        show_transcript: bool = True,
+        position_x: int = -1,
+        position_y: int = -1,
+        position: str = "top-right",
+    ):
+        self._on_stop = on_stop
+        self._on_toggle_mute = on_toggle_mute
+        self._on_open_recordings = on_open_recordings
+        self._on_open_settings = on_open_settings
+        self._opacity = opacity
+        self._start_collapsed = start_collapsed
+        self._show_transcript = show_transcript
+        self._position_x = position_x
+        self._position_y = position_y
+        self._position = position
+
+        self._window: Optional[tk.Tk] = None
+        self._is_visible = False
+        self._is_collapsed = start_collapsed
+        self._context: Optional[DashboardContext] = None
+
+        # Widget references
+        self._red_dot_label: Optional[tk.Label] = None
+        self._header_label: Optional[tk.Label] = None
+        self._elapsed_label: Optional[tk.Label] = None
+        self._app_vu_canvas: Optional[tk.Canvas] = None
+        self._mic_vu_canvas: Optional[tk.Canvas] = None
+        self._app_db_label: Optional[tk.Label] = None
+        self._mic_db_label: Optional[tk.Label] = None
+        self._mute_btn: Optional[tk.Label] = None
+        self._transcript_label: Optional[tk.Label] = None
+        self._collapsed_elapsed: Optional[tk.Label] = None
+
+        # VU state
+        self._app_vu_fraction = 0.0
+        self._mic_vu_fraction = 0.0
+
+        # Pulsing red dot state
+        self._dot_visible = True
+        self._pulse_after_id: Optional[str] = None
+
+        # Expanded/collapsed frames
+        self._expanded_frame: Optional[tk.Frame] = None
+        self._collapsed_frame: Optional[tk.Frame] = None
+
+    @property
+    def is_visible(self) -> bool:
+        return self._is_visible
+
+    @property
+    def is_collapsed(self) -> bool:
+        return self._is_collapsed
+
+    @property
+    def position_xy(self) -> tuple[int, int]:
+        """Return the current window position (for persisting)."""
+        if self._window is not None:
+            try:
+                return self._window.winfo_x(), self._window.winfo_y()
+            except tk.TclError:
+                pass
+        return self._position_x, self._position_y
+
+    def show(self, context: Optional[DashboardContext] = None) -> None:
+        """Show the dashboard overlay."""
+        if context is not None:
+            self._context = context
+
+        if self._window is not None:
+            try:
+                self._window.deiconify()
+                self._is_visible = True
+                self._start_pulse()
+                return
+            except tk.TclError:
+                self._window = None
+
+        self._build_window()
+        self._is_visible = True
+        self._start_pulse()
+
+    def hide(self) -> None:
+        """Hide the dashboard (does NOT stop recording)."""
+        self._stop_pulse()
+        if self._window is not None:
+            try:
+                self._window.withdraw()
+            except tk.TclError:
+                pass
+        self._is_visible = False
+
+    def close(self) -> None:
+        """Destroy the dashboard window entirely."""
+        self._stop_pulse()
+        self._is_visible = False
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except tk.TclError:
+                pass
+            self._window = None
+
+    def update_audio_levels(
+        self, app_rms_db: float, app_peak_db: float, mic_rms_db: float, mic_peak_db: float
+    ) -> None:
+        """Update VU meters with new audio levels (thread-safe)."""
+        if self._window is None or not self._is_visible or self._is_collapsed:
+            return
+        app_frac = db_to_fraction(app_rms_db)
+        mic_frac = db_to_fraction(mic_rms_db)
+        try:
+            self._window.after(0, self._draw_vu_meters, app_frac, mic_frac, app_rms_db, mic_rms_db)
+        except tk.TclError:
+            pass
+
+    def update_elapsed(self, elapsed_seconds: float) -> None:
+        """Update the elapsed time display (thread-safe)."""
+        if self._window is None or not self._is_visible:
+            return
+        text = _format_elapsed(elapsed_seconds)
+        try:
+            self._window.after(0, self._set_elapsed, text)
+        except tk.TclError:
+            pass
+
+    def update_mute_state(self, is_muted: bool) -> None:
+        """Update the mute button appearance (thread-safe)."""
+        if self._window is None or not self._is_visible:
+            return
+        try:
+            self._window.after(0, self._set_mute_display, is_muted)
+        except tk.TclError:
+            pass
+
+    def update_transcript(self, text: str) -> None:
+        """Update the transcript preview text (thread-safe)."""
+        if self._window is None or not self._is_visible or self._is_collapsed:
+            return
+        if not self._show_transcript:
+            return
+        try:
+            if len(text) > 200:
+                text = "..." + text[-197:]
+            self._window.after(0, self._set_transcript, text)
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Window construction
+    # ------------------------------------------------------------------
+
+    def _build_window(self) -> None:
+        """Create the overlay window and all widgets."""
+        self._window = tk.Tk()
+        self._window.title("Recording Dashboard")
+        self._window.attributes("-topmost", True)
+        self._window.attributes("-alpha", self._opacity)
+        self._window.overrideredirect(True)
+        self._window.configure(bg=BG_COLOR)
+
+        # Position
+        self._apply_position()
+
+        # Build both frames
+        self._expanded_frame = tk.Frame(self._window, bg=BG_COLOR)
+        self._collapsed_frame = tk.Frame(self._window, bg=BG_COLOR)
+
+        self._build_expanded(self._expanded_frame)
+        self._build_collapsed(self._collapsed_frame)
+
+        # Show appropriate frame
+        if self._start_collapsed:
+            self._is_collapsed = True
+            self._collapsed_frame.pack(fill=tk.BOTH, expand=True)
+            self._window.geometry(f"{COLLAPSED_WIDTH}x{COLLAPSED_HEIGHT}")
+        else:
+            self._is_collapsed = False
+            self._expanded_frame.pack(fill=tk.BOTH, expand=True)
+            self._window.geometry(
+                f"{EXPANDED_WIDTH}x{EXPANDED_HEIGHT if self._show_transcript else EXPANDED_HEIGHT - 60}"
+            )
+
+        # Dragging
+        self._window.bind("<Button-1>", self._start_drag)
+        self._window.bind("<B1-Motion>", self._do_drag)
+
+        # Right-click context menu
+        self._window.bind("<Button-3>", self._show_context_menu)
+
+    def _build_expanded(self, parent: tk.Frame) -> None:
+        """Build the expanded view widgets."""
+        ctx = self._context or DashboardContext()
+
+        # --- Header (36px) ---
+        header_frame = tk.Frame(parent, bg=BG_HEADER, height=36)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+
+        self._red_dot_label = tk.Label(
+            header_frame, text="\u2b24", font=("Segoe UI", 10),
+            fg=RED_DOT, bg=BG_HEADER,
+        )
+        self._red_dot_label.pack(side=tk.LEFT, padx=(8, 4))
+
+        title = ctx.app_name
+        if ctx.meeting_subject:
+            title += f" - {ctx.meeting_subject}"
+        if len(title) > 35:
+            title = title[:32] + "..."
+        self._header_label = tk.Label(
+            header_frame, text=title, font=("Segoe UI", 10, "bold"),
+            fg=TEXT_COLOR, bg=BG_HEADER, anchor=tk.W,
+        )
+        self._header_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Close button (hide, NOT stop)
+        close_btn = tk.Label(
+            header_frame, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        close_btn.bind("<Button-1>", lambda e: self.hide())
+
+        # Collapse button
+        collapse_btn = tk.Label(
+            header_frame, text="\u2015", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2",
+        )
+        collapse_btn.pack(side=tk.RIGHT, padx=(0, 4))
+        collapse_btn.bind("<Button-1>", lambda e: self._toggle_collapse())
+
+        # Recording sub-header
+        self._elapsed_label = tk.Label(
+            parent, text="Recording 00:00:00", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
+        )
+        self._elapsed_label.pack(fill=tk.X, padx=10, pady=(2, 4))
+
+        # --- VU Meters ---
+        vu_frame = tk.Frame(parent, bg=BG_COLOR)
+        vu_frame.pack(fill=tk.X, padx=10, pady=2)
+
+        # App VU
+        app_row = tk.Frame(vu_frame, bg=BG_COLOR)
+        app_row.pack(fill=tk.X, pady=1)
+        tk.Label(app_row, text="App", font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR, width=4, anchor=tk.W).pack(side=tk.LEFT)
+        self._app_vu_canvas = tk.Canvas(app_row, width=260, height=14, bg=VU_BG, highlightthickness=0)
+        self._app_vu_canvas.pack(side=tk.LEFT, padx=4)
+        self._app_db_label = tk.Label(app_row, text=f"{MIN_DB:.0f} dB", font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR, width=7, anchor=tk.E)
+        self._app_db_label.pack(side=tk.LEFT)
+
+        # Mic VU
+        mic_row = tk.Frame(vu_frame, bg=BG_COLOR)
+        mic_row.pack(fill=tk.X, pady=1)
+        tk.Label(mic_row, text="Mic", font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR, width=4, anchor=tk.W).pack(side=tk.LEFT)
+        self._mic_vu_canvas = tk.Canvas(mic_row, width=260, height=14, bg=VU_BG, highlightthickness=0)
+        self._mic_vu_canvas.pack(side=tk.LEFT, padx=4)
+        self._mic_db_label = tk.Label(mic_row, text=f"{MIN_DB:.0f} dB", font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR, width=7, anchor=tk.E)
+        self._mic_db_label.pack(side=tk.LEFT)
+
+        # --- Controls (40px) ---
+        ctrl_frame = tk.Frame(parent, bg=BG_CONTROLS, height=40)
+        ctrl_frame.pack(fill=tk.X, pady=(4, 0))
+        ctrl_frame.pack_propagate(False)
+
+        stop_btn = tk.Label(
+            ctrl_frame, text=" Stop ", font=("Segoe UI", 9, "bold"),
+            fg="#ffffff", bg="#c0392b", cursor="hand2", padx=8, pady=4,
+        )
+        stop_btn.pack(side=tk.LEFT, padx=(10, 6), pady=6)
+        stop_btn.bind("<Button-1>", lambda e: self._handle_stop())
+        stop_btn.bind("<Enter>", lambda e: stop_btn.configure(bg="#e74c3c"))
+        stop_btn.bind("<Leave>", lambda e: stop_btn.configure(bg="#c0392b"))
+
+        mute_text = "Muted" if (ctx.is_muted) else "Unmuted"
+        mute_fg = MUTED_COLOR if ctx.is_muted else UNMUTED_COLOR
+        self._mute_btn = tk.Label(
+            ctrl_frame, text=f" {mute_text} ", font=("Segoe UI", 9),
+            fg=mute_fg, bg=BG_CONTROLS, cursor="hand2",
+            relief=tk.GROOVE, padx=6, pady=2,
+        )
+        self._mute_btn.pack(side=tk.LEFT, padx=4, pady=6)
+        self._mute_btn.bind("<Button-1>", lambda e: self._handle_mute_toggle())
+
+        # Elapsed on the right side of controls
+        ctrl_elapsed = tk.Label(
+            ctrl_frame, text="00:00:00", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_CONTROLS,
+        )
+        ctrl_elapsed.pack(side=tk.RIGHT, padx=10, pady=6)
+        self._ctrl_elapsed_label = ctrl_elapsed
+
+        # --- Transcript preview (60px) ---
+        if self._show_transcript:
+            transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=60)
+            transcript_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
+            transcript_frame.pack_propagate(False)
+
+            self._transcript_label = tk.Label(
+                transcript_frame,
+                text="Waiting for speech...",
+                font=("Segoe UI", 9),
+                fg=TEXT_COLOR, bg=BG_COLOR,
+                wraplength=355, justify=tk.LEFT, anchor=tk.NW,
+            )
+            self._transcript_label.pack(fill=tk.BOTH, expand=True)
+
+        # --- Footer (32px) ---
+        footer_frame = tk.Frame(parent, bg=BG_COLOR, height=32)
+        footer_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        footer_frame.pack_propagate(False)
+
+        if self._on_open_recordings:
+            rec_btn = tk.Label(
+                footer_frame, text=" Open Recordings ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4, pady=2,
+            )
+            rec_btn.pack(side=tk.LEFT, padx=(10, 4), pady=4)
+            rec_btn.bind("<Button-1>", lambda e: self._on_open_recordings())
+            rec_btn.bind("<Enter>", lambda e: rec_btn.configure(bg=BUTTON_HOVER))
+            rec_btn.bind("<Leave>", lambda e: rec_btn.configure(bg=BUTTON_BG))
+
+        if self._on_open_settings:
+            set_btn = tk.Label(
+                footer_frame, text=" Settings ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4, pady=2,
+            )
+            set_btn.pack(side=tk.LEFT, padx=4, pady=4)
+            set_btn.bind("<Button-1>", lambda e: self._on_open_settings())
+            set_btn.bind("<Enter>", lambda e: set_btn.configure(bg=BUTTON_HOVER))
+            set_btn.bind("<Leave>", lambda e: set_btn.configure(bg=BUTTON_BG))
+
+    def _build_collapsed(self, parent: tk.Frame) -> None:
+        """Build the collapsed mini-indicator view."""
+        ctx = self._context or DashboardContext()
+
+        inner = tk.Frame(parent, bg=BG_HEADER, height=COLLAPSED_HEIGHT)
+        inner.pack(fill=tk.BOTH, expand=True)
+        inner.pack_propagate(False)
+
+        # Pulsing red dot
+        dot = tk.Label(
+            inner, text="\u2b24", font=("Segoe UI", 10),
+            fg=RED_DOT, bg=BG_HEADER,
+        )
+        dot.pack(side=tk.LEFT, padx=(8, 4))
+        self._collapsed_dot = dot
+
+        tk.Label(
+            inner, text="Recording", font=("Segoe UI", 9, "bold"),
+            fg=TEXT_COLOR, bg=BG_HEADER,
+        ).pack(side=tk.LEFT)
+
+        self._collapsed_elapsed = tk.Label(
+            inner, text="00:00:00", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_HEADER,
+        )
+        self._collapsed_elapsed.pack(side=tk.LEFT, padx=6)
+
+        # Expand button
+        expand_btn = tk.Label(
+            inner, text="\u25b2", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2",
+        )
+        expand_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        expand_btn.bind("<Button-1>", lambda e: self._toggle_collapse())
+
+        # Close
+        close_btn = tk.Label(
+            inner, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT, padx=(0, 4))
+        close_btn.bind("<Button-1>", lambda e: self.hide())
+
+    # ------------------------------------------------------------------
+    # VU meter drawing
+    # ------------------------------------------------------------------
+
+    def _draw_vu_meters(
+        self, app_frac: float, mic_frac: float, app_db: float, mic_db: float
+    ) -> None:
+        """Redraw VU meter bars on the canvas (must be called from main thread)."""
+        self._app_vu_fraction = app_frac
+        self._mic_vu_fraction = mic_frac
+
+        if self._app_vu_canvas:
+            self._draw_single_vu(self._app_vu_canvas, app_frac)
+        if self._mic_vu_canvas:
+            self._draw_single_vu(self._mic_vu_canvas, mic_frac)
+        if self._app_db_label:
+            self._app_db_label.configure(text=f"{app_db:.0f} dB")
+        if self._mic_db_label:
+            self._mic_db_label.configure(text=f"{mic_db:.0f} dB")
+
+    def _draw_single_vu(self, canvas: tk.Canvas, fraction: float) -> None:
+        """Draw a single VU bar on a canvas."""
+        canvas.delete("vu")
+        w = canvas.winfo_width() or 260
+        h = canvas.winfo_height() or 14
+        bar_w = int(w * fraction)
+        if bar_w > 0:
+            color = vu_color(fraction)
+            canvas.create_rectangle(0, 0, bar_w, h, fill=color, outline="", tags="vu")
+
+    # ------------------------------------------------------------------
+    # State updates (called from window.after)
+    # ------------------------------------------------------------------
+
+    def _set_elapsed(self, text: str) -> None:
+        """Set elapsed time on all relevant labels."""
+        if self._elapsed_label:
+            self._elapsed_label.configure(text=f"Recording {text}")
+        if hasattr(self, '_ctrl_elapsed_label') and self._ctrl_elapsed_label:
+            self._ctrl_elapsed_label.configure(text=text)
+        if self._collapsed_elapsed:
+            self._collapsed_elapsed.configure(text=text)
+
+    def _set_mute_display(self, is_muted: bool) -> None:
+        """Update the mute button text and color."""
+        if self._mute_btn:
+            text = "Muted" if is_muted else "Unmuted"
+            fg = MUTED_COLOR if is_muted else UNMUTED_COLOR
+            self._mute_btn.configure(text=f" {text} ", fg=fg)
+
+    def _set_transcript(self, text: str) -> None:
+        """Update the transcript preview label."""
+        if self._transcript_label:
+            self._transcript_label.configure(text=f'"{text}"')
+
+    # ------------------------------------------------------------------
+    # Pulsing red dot
+    # ------------------------------------------------------------------
+
+    def _start_pulse(self) -> None:
+        """Start the pulsing red dot animation."""
+        self._dot_visible = True
+        self._pulse_tick()
+
+    def _stop_pulse(self) -> None:
+        """Stop the pulsing red dot animation."""
+        if self._pulse_after_id and self._window:
+            try:
+                self._window.after_cancel(self._pulse_after_id)
+            except tk.TclError:
+                pass
+            self._pulse_after_id = None
+
+    def _pulse_tick(self) -> None:
+        """Toggle the red dot visibility every 500ms."""
+        if not self._is_visible or self._window is None:
+            return
+        self._dot_visible = not self._dot_visible
+        color = RED_DOT if self._dot_visible else RED_DOT_OFF
+        try:
+            if self._red_dot_label:
+                self._red_dot_label.configure(fg=color)
+            if hasattr(self, '_collapsed_dot') and self._collapsed_dot:
+                self._collapsed_dot.configure(fg=color)
+            self._pulse_after_id = self._window.after(500, self._pulse_tick)
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Collapse / Expand
+    # ------------------------------------------------------------------
+
+    def _toggle_collapse(self) -> None:
+        """Toggle between expanded and collapsed views."""
+        if self._window is None:
+            return
+
+        if self._is_collapsed:
+            # Expand
+            self._collapsed_frame.pack_forget()
+            self._expanded_frame.pack(fill=tk.BOTH, expand=True)
+            height = EXPANDED_HEIGHT if self._show_transcript else EXPANDED_HEIGHT - 60
+            self._window.geometry(f"{EXPANDED_WIDTH}x{height}")
+            self._is_collapsed = False
+        else:
+            # Collapse
+            self._expanded_frame.pack_forget()
+            self._collapsed_frame.pack(fill=tk.BOTH, expand=True)
+            self._window.geometry(f"{COLLAPSED_WIDTH}x{COLLAPSED_HEIGHT}")
+            self._is_collapsed = True
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _handle_stop(self) -> None:
+        """Handle the Stop button click."""
+        if self._on_stop:
+            self._on_stop()
+
+    def _handle_mute_toggle(self) -> None:
+        """Handle the mute toggle click."""
+        if self._on_toggle_mute:
+            self._on_toggle_mute()
+
+    def _show_context_menu(self, event) -> None:
+        """Show right-click context menu."""
+        if self._window is None:
+            return
+        menu = tk.Menu(self._window, tearoff=0, bg=BG_COLOR, fg=TEXT_COLOR,
+                       activebackground=BUTTON_HOVER, activeforeground=TEXT_COLOR)
+        menu.add_command(label="Hide Dashboard", command=self.hide)
+        if self._on_open_settings:
+            menu.add_command(label="Settings", command=self._on_open_settings)
+        menu.add_separator()
+        menu.add_command(label="Stop Recording", command=self._handle_stop)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    # ------------------------------------------------------------------
+    # Positioning
+    # ------------------------------------------------------------------
+
+    def _apply_position(self) -> None:
+        """Set the initial window position."""
+        if self._window is None:
+            return
+
+        # Use saved coordinates if available
+        if self._position_x >= 0 and self._position_y >= 0:
+            self._window.geometry(f"+{self._position_x}+{self._position_y}")
+            return
+
+        # Otherwise use preset position
+        screen_w = self._window.winfo_screenwidth()
+        screen_h = self._window.winfo_screenheight()
+        win_w = EXPANDED_WIDTH
+        win_h = EXPANDED_HEIGHT
+
+        positions = {
+            "top-left": (20, 20),
+            "top-right": (screen_w - win_w - 20, 20),
+            "bottom-left": (20, screen_h - win_h - 80),
+            "bottom-right": (screen_w - win_w - 20, screen_h - win_h - 80),
+            "center": ((screen_w - win_w) // 2, (screen_h - win_h) // 2),
+        }
+        x, y = positions.get(self._position, positions["top-right"])
+        self._window.geometry(f"+{x}+{y}")
+
+    # ------------------------------------------------------------------
+    # Dragging
+    # ------------------------------------------------------------------
+
+    def _start_drag(self, event) -> None:
+        self._drag_x = event.x
+        self._drag_y = event.y
+
+    def _do_drag(self, event) -> None:
+        if self._window:
+            x = self._window.winfo_x() + event.x - self._drag_x
+            y = self._window.winfo_y() + event.y - self._drag_y
+            self._window.geometry(f"+{x}+{y}")

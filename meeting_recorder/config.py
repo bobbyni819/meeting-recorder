@@ -70,6 +70,20 @@ class OutputConfig:
 class HotkeyConfig:
     toggle_recording: str = "ctrl+shift+r"
     toggle_mute: str = "ctrl+shift+u"
+    toggle_dashboard: str = "ctrl+shift+d"
+
+
+@dataclass
+class DashboardConfig:
+    enabled: bool = True
+    auto_show: bool = True
+    auto_hide: bool = True
+    opacity: float = 0.92
+    position: str = "top-right"  # top-left, top-right, bottom-left, bottom-right, center
+    position_x: int = -1  # -1 = auto (use position preset)
+    position_y: int = -1
+    start_collapsed: bool = False
+    show_transcript: bool = True
 
 
 @dataclass
@@ -113,6 +127,7 @@ class Config:
     outlook: OutlookConfig = field(default_factory=OutlookConfig)
     google_drive: GoogleDriveConfig = field(default_factory=GoogleDriveConfig)
     summary: SummaryConfig = field(default_factory=SummaryConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -163,6 +178,10 @@ class Config:
             summary=SummaryConfig(**{
                 k: v for k, v in data.get("summary", {}).items()
                 if k in SummaryConfig.__dataclass_fields__
+            }),
+            dashboard=DashboardConfig(**{
+                k: v for k, v in data.get("dashboard", {}).items()
+                if k in DashboardConfig.__dataclass_fields__
             }),
         )
 

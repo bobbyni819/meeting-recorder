@@ -53,6 +53,11 @@ class SettingsWindow:
         notebook.add(trans_frame, text="Transcription")
         self._build_transcription_tab(trans_frame)
 
+        # Dashboard tab
+        dash_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(dash_frame, text="Dashboard")
+        self._build_dashboard_tab(dash_frame)
+
         # Integrations tab
         integ_frame = ttk.Frame(notebook, padding=10)
         notebook.add(integ_frame, text="Integrations")
@@ -183,6 +188,64 @@ class SettingsWindow:
         ttk.Checkbutton(fmt_frame, text="JSON", variable=self._fmt_json_var).pack(side=tk.LEFT)
         ttk.Checkbutton(fmt_frame, text="TXT", variable=self._fmt_txt_var).pack(side=tk.LEFT)
         ttk.Checkbutton(fmt_frame, text="SRT", variable=self._fmt_srt_var).pack(side=tk.LEFT)
+
+        parent.columnconfigure(1, weight=1)
+
+    def _build_dashboard_tab(self, parent: ttk.Frame) -> None:
+        """Build the dashboard overlay settings tab."""
+        row = 0
+
+        self._dash_enabled_var = tk.BooleanVar(value=self.config.dashboard.enabled)
+        ttk.Checkbutton(parent, text="Enable recording dashboard overlay", variable=self._dash_enabled_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        self._dash_auto_show_var = tk.BooleanVar(value=self.config.dashboard.auto_show)
+        ttk.Checkbutton(parent, text="Auto-show when recording starts", variable=self._dash_auto_show_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        self._dash_auto_hide_var = tk.BooleanVar(value=self.config.dashboard.auto_hide)
+        ttk.Checkbutton(parent, text="Auto-hide when recording stops", variable=self._dash_auto_hide_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        self._dash_collapsed_var = tk.BooleanVar(value=self.config.dashboard.start_collapsed)
+        ttk.Checkbutton(parent, text="Start collapsed (mini indicator)", variable=self._dash_collapsed_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        self._dash_transcript_var = tk.BooleanVar(value=self.config.dashboard.show_transcript)
+        ttk.Checkbutton(parent, text="Show transcript preview", variable=self._dash_transcript_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        ttk.Label(parent, text="Opacity:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._dash_opacity_var = tk.DoubleVar(value=self.config.dashboard.opacity)
+        ttk.Scale(parent, from_=0.3, to=1.0, variable=self._dash_opacity_var, orient=tk.HORIZONTAL).grid(
+            row=row, column=1, sticky=tk.EW, pady=5
+        )
+
+        row += 1
+        ttk.Label(parent, text="Position:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._dash_position_var = tk.StringVar(value=self.config.dashboard.position)
+        ttk.Combobox(
+            parent, textvariable=self._dash_position_var, width=15,
+            values=["top-left", "top-right", "bottom-left", "bottom-right", "center"],
+            state="readonly",
+        ).grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Hotkey: Ctrl+Shift+D to toggle dashboard\nDragging remembers position across sessions.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(10, 2))
 
         parent.columnconfigure(1, weight=1)
 
@@ -345,6 +408,14 @@ class SettingsWindow:
             self.config.summary.provider = self._summary_provider_var.get()
             self.config.summary.api_key = self._summary_api_key_var.get()
             self.config.summary.model = self._summary_model_var.get()
+
+            self.config.dashboard.enabled = self._dash_enabled_var.get()
+            self.config.dashboard.auto_show = self._dash_auto_show_var.get()
+            self.config.dashboard.auto_hide = self._dash_auto_hide_var.get()
+            self.config.dashboard.start_collapsed = self._dash_collapsed_var.get()
+            self.config.dashboard.show_transcript = self._dash_transcript_var.get()
+            self.config.dashboard.opacity = self._dash_opacity_var.get()
+            self.config.dashboard.position = self._dash_position_var.get()
 
             formats = []
             if self._fmt_json_var.get():
