@@ -12,7 +12,7 @@ from typing import Optional
 from meeting_recorder.config import Config
 from meeting_recorder.audio.process_finder import find_primary_meeting_process, MeetingProcess
 from meeting_recorder.audio.capture_manager import CaptureManager
-from meeting_recorder.audio.mixer import mix_tracks
+from meeting_recorder.audio.mixer import mix_tracks_streaming
 from meeting_recorder.transcription.pipeline import TranscriptionPipeline
 from meeting_recorder.storage.recording_store import RecordingStore
 from meeting_recorder.storage.metadata import RecordingMetadata
@@ -53,6 +53,7 @@ class MeetingRecorderApp:
             on_quit=self.quit,
             on_settings=self._open_settings,
             on_open_recordings=self._open_recordings_folder,
+            on_search=self._open_search,
         )
 
     def run(self) -> None:
@@ -133,6 +134,9 @@ class MeetingRecorderApp:
             process_name=process.name,
             app_key=process.app_key,
             mute_toggle_hotkey=self.config.hotkey.toggle_mute,
+            on_audio_levels=self._on_audio_levels,
+            on_live_transcript=self._on_live_transcript,
+            live_transcription_enabled=self.config.recording.live_transcription,
         )
         self._capture_manager.start()
 
@@ -191,10 +195,21 @@ class MeetingRecorderApp:
             mixed_audio = recording_dir / "mixed.wav"
 
             if app_audio.exists() and mic_audio.exists():
-                mix_tracks(app_audio, mic_audio, mixed_audio)
+                mix_tracks_streaming(app_audio, mic_audio, mixed_audio)
 
-            # Run transcription pipeline
-            segments = self._pipeline.process(recording_dir)
+            # Run transcription pipeline (with speaker resolution if attendees available)
+            segments = self._pipeline.process(
+                recording_dir,
+                attendees=metadata.meeting_attendees,
+                organizer=metadata.meeting_organizer,
+            )
+
+            # Store speaker mapping from pipeline
+            mapping = self._pipeline.last_speaker_mapping
+            if mapping is not None:
+                metadata.speaker_map = mapping.speaker_map
+                metadata.speaker_map_confidence = mapping.confidence
+                metadata.speaker_map_method = mapping.method
 
             # Save transcripts in all configured formats
             save_all_formats(
@@ -203,6 +218,10 @@ class MeetingRecorderApp:
                 formats=self.config.output.formats,
             )
 
+            # Generate AI summary if enabled
+            if self.config.summary.enabled:
+                self._generate_summary(recording_dir, segments, metadata)
+
             # Finalize metadata
             speakers = set(s.speaker for s in segments if s.speaker)
             metadata.finalize(
@@ -210,6 +229,9 @@ class MeetingRecorderApp:
                 speaker_count=len(speakers),
                 segment_count=len(segments),
             )
+
+            # Index recording for search
+            self._index_recording(recording_dir)
 
             # Upload to Google Drive if enabled
             if self.config.google_drive.enabled:
@@ -248,6 +270,66 @@ class MeetingRecorderApp:
                 logger.warning("Google Drive upload returned no folder ID.")
         except Exception:
             logger.exception("Google Drive upload failed (non-fatal)")
+
+    def _generate_summary(
+        self, recording_dir: Path, segments, metadata: RecordingMetadata
+    ) -> None:
+        """Generate AI meeting summary (non-fatal)."""
+        try:
+            from meeting_recorder.summary.summarizer import generate_summary, save_summary
+
+            self._tray.set_state("processing", "Generating summary...")
+            summary = generate_summary(
+                segments=segments,
+                config=self.config.summary,
+                meeting_subject=metadata.meeting_subject,
+                attendees=metadata.meeting_attendees,
+                duration_seconds=metadata.duration_seconds,
+            )
+            save_summary(summary, recording_dir)
+            metadata.has_summary = True
+            metadata.summary_provider = summary.provider_used
+            metadata.summary_model = summary.model_used
+            logger.info("AI summary generated successfully.")
+        except Exception:
+            logger.exception("AI summary generation failed (non-fatal)")
+
+    def _index_recording(self, recording_dir: Path) -> None:
+        """Add recording to the search index (non-fatal)."""
+        try:
+            from meeting_recorder.search.index import RecordingIndex
+
+            index = RecordingIndex()
+            index.index_recording(recording_dir)
+            index.close()
+        except Exception:
+            logger.exception("Search indexing failed (non-fatal)")
+
+    def _open_search(self) -> None:
+        """Open the search recordings dialog."""
+        from meeting_recorder.ui.search_window import SearchWindow
+
+        search = SearchWindow()
+        search.show()
+
+    def _on_audio_levels(
+        self, app_rms: float, app_peak: float, mic_rms: float, mic_peak: float
+    ) -> None:
+        """Handle audio level updates from the capture manager."""
+        # Update tray tooltip with current audio levels during recording
+        if self._capture_manager and self._capture_manager.is_recording:
+            elapsed = self._capture_manager.elapsed_seconds
+            duration_str = _format_duration(elapsed)
+            app_name = self._current_process.display_name if self._current_process else "Meeting"
+            self._tray.set_state(
+                "recording",
+                f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
+            )
+
+    def _on_live_transcript(self, text: str) -> None:
+        """Handle live transcription preview updates."""
+        if text:
+            logger.debug("Live preview: %s", text[:80])
 
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""

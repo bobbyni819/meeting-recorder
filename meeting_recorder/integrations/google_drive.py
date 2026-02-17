@@ -39,7 +39,7 @@ UPLOAD_EXTENSIONS = {
 }
 
 # Files to always upload by name
-UPLOAD_FILENAMES = {"metadata.json", "mixed.wav", "transcript.json", "transcript.txt", "transcript.srt", "screen.mp4"}
+UPLOAD_FILENAMES = {"metadata.json", "mixed.wav", "transcript.json", "transcript.txt", "transcript.srt", "screen.mp4", "summary.json", "summary.md"}
 
 
 class GoogleDriveUploader:

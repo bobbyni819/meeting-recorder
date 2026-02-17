@@ -2,6 +2,7 @@
 output_dir = "~/MeetingRecordings"
 language = "en"
 user_name = "User"
+live_transcription = false  # real-time transcription preview during recording (uses tiny model on CPU)
 
 [audio]
 sample_rate = 16000
@@ -46,3 +47,10 @@ buffer_minutes = 10    # search window: current time ± N minutes
 enabled = false        # upload recordings to Google Drive after transcription
 credentials_path = "~/.meeting_recorder/google_credentials.json"
 folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
+
+[summary]
+enabled = false        # generate AI summary after transcription
+provider = "openai"    # "openai" or "anthropic"
+api_key = ""
+model = ""             # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
+max_transcript_tokens = 0  # 0 = no limit

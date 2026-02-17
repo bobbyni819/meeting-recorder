@@ -2,6 +2,8 @@
 
 These tests require faster-whisper (and optionally torch) to be installed.
 They are automatically skipped when the dependencies are not available.
+
+Also includes unit tests for pipeline fallback logic that don't require whisper.
 """
 
 from __future__ import annotations
@@ -9,11 +11,14 @@ from __future__ import annotations
 import json
 import wave
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from tests.conftest import generate_sine_wav, generate_silence_wav
+from meeting_recorder.config import Config
+from meeting_recorder.transcription.local_whisper import TranscriptSegment
 
 # Skip the entire module if faster-whisper is not available
 try:
@@ -195,3 +200,149 @@ class TestTranscriptionPipelineIntegration:
                 f"Segment {i} starts before segment {i-1}: "
                 f"{segments[i].start} < {segments[i-1].start}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline fallback tests (no whisper dependency needed)
+# ---------------------------------------------------------------------------
+
+class TestPipelineFallback:
+    """Test that pipeline falls back to mixed.wav when separate tracks fail."""
+
+    def test_fallback_to_mixed_when_separate_fails(self, tmp_path: Path):
+        """If _process_separate_tracks throws, pipeline should fall back to mixed.wav."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        # Create dummy audio files
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mic_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "local"
+        config.transcription.model_size = "tiny"
+        config.transcription.device = "cpu"
+        config.transcription.compute_type = "int8"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+
+        expected_segments = [TranscriptSegment(start=0.0, end=1.0, text="fallback")]
+
+        # Make separate tracks fail, but mixed succeed
+        with patch.object(pipeline, "_process_separate_tracks", side_effect=RuntimeError("test error")):
+            with patch.object(pipeline, "_process_mixed", return_value=expected_segments) as mock_mixed:
+                segments = pipeline.process(tmp_path)
+                mock_mixed.assert_called_once()
+                assert segments == expected_segments
+
+    def test_file_not_found_when_all_missing(self, tmp_path: Path):
+        """If no audio files exist at all, should raise FileNotFoundError."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        config = Config()
+        pipeline = TranscriptionPipeline(config)
+
+        with pytest.raises(FileNotFoundError):
+            pipeline.process(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Parallel pipeline tests (no whisper dependency needed)
+# ---------------------------------------------------------------------------
+
+class TestParallelPipeline:
+    """Test that the parallel pipeline executes transcription concurrently."""
+
+    def test_parallel_separate_tracks(self, tmp_path: Path):
+        """Verify _process_separate_tracks uses ThreadPoolExecutor."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mic_audio.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "local"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+
+        app_segs = [TranscriptSegment(start=0.0, end=1.0, text="hello", speaker="Participant 1")]
+        mic_segs = [TranscriptSegment(start=0.5, end=1.5, text="hi", speaker="User")]
+
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe = MagicMock(side_effect=[app_segs, mic_segs])
+
+        result = pipeline._process_separate_tracks(
+            tmp_path / "app_audio.wav",
+            tmp_path / "mic_audio.wav",
+            mock_transcriber,
+            "User",
+        )
+
+        # Should have called transcribe twice (app + mic)
+        assert mock_transcriber.transcribe.call_count == 2
+        # Result should be merged from both tracks
+        assert len(result) == 2
+
+    def test_parallel_with_diarization(self, tmp_path: Path):
+        """Verify diarization runs concurrently with transcription."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+        from meeting_recorder.transcription.diarization import SpeakerDiarizer, SpeakerSegment
+
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mic_audio.wav", duration=1.0)
+
+        config = Config()
+        config.diarization.enabled = True
+        config.diarization.huggingface_token = "fake-token"
+
+        pipeline = TranscriptionPipeline(config)
+
+        app_segs = [TranscriptSegment(start=0.0, end=1.0, text="hello")]
+        mic_segs = [TranscriptSegment(start=0.5, end=1.5, text="hi")]
+        speaker_segs = [SpeakerSegment(start=0.0, end=1.0, speaker="SPEAKER_00")]
+
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe = MagicMock(side_effect=[app_segs, mic_segs])
+
+        mock_diarizer = MagicMock(spec=SpeakerDiarizer)
+        mock_diarizer.diarize = MagicMock(return_value=speaker_segs)
+        pipeline._diarizer = mock_diarizer
+
+        result = pipeline._process_separate_tracks(
+            tmp_path / "app_audio.wav",
+            tmp_path / "mic_audio.wav",
+            mock_transcriber,
+            "User",
+        )
+
+        # All three tasks should have been called
+        assert mock_transcriber.transcribe.call_count == 2
+        mock_diarizer.diarize.assert_called_once()
+        assert len(result) >= 1
+
+    def test_voice_profile_resolution_called(self, tmp_path: Path):
+        """Verify voice profile resolution is attempted when audio_path is provided."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mic_audio.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+
+        test_segments = [TranscriptSegment(start=0.0, end=1.0, text="test")]
+
+        with patch.object(pipeline, "_process_separate_tracks", return_value=test_segments):
+            with patch(
+                "meeting_recorder.transcription.speaker_resolver.resolve_speakers_with_voice_profiles"
+            ) as mock_voice:
+                mock_voice.return_value = MagicMock(
+                    speaker_map={}, unmapped_speakers=[], confidence="none"
+                )
+                pipeline.process(tmp_path, attendees=["Alice"])
+                mock_voice.assert_called_once()

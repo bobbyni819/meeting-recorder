@@ -36,12 +36,14 @@ class TrayIcon:
         on_quit: Optional[Callable] = None,
         on_settings: Optional[Callable] = None,
         on_open_recordings: Optional[Callable] = None,
+        on_search: Optional[Callable] = None,
     ):
         self._on_start = on_start
         self._on_stop = on_stop
         self._on_quit = on_quit
         self._on_settings = on_settings
         self._on_open_recordings = on_open_recordings
+        self._on_search = on_search
         self._state = "idle"
         self._status_text = "Idle"
         self._icon: Optional[pystray.Icon] = None
@@ -81,6 +83,7 @@ class TrayIcon:
                 )),
                 pystray.Menu.SEPARATOR,
                 Item("Open Recordings", self._handle_open_recordings),
+                Item("Search Recordings...", self._handle_search),
                 Item("Settings", self._handle_settings),
                 pystray.Menu.SEPARATOR,
                 Item("Quit", self._handle_quit),
@@ -137,6 +140,11 @@ class TrayIcon:
         """Handle open recordings folder click."""
         if self._on_open_recordings:
             threading.Thread(target=self._on_open_recordings, daemon=True).start()
+
+    def _handle_search(self, icon, item) -> None:
+        """Handle search recordings menu click."""
+        if self._on_search:
+            threading.Thread(target=self._on_search, daemon=True).start()
 
     def _handle_quit(self, icon, item) -> None:
         """Handle quit menu click."""

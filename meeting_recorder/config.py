@@ -26,6 +26,7 @@ class RecordingConfig:
     output_dir: str = "~/MeetingRecordings"
     language: str = "en"
     user_name: str = "User"
+    live_transcription: bool = False
 
 
 @dataclass
@@ -91,6 +92,15 @@ class GoogleDriveConfig:
 
 
 @dataclass
+class SummaryConfig:
+    enabled: bool = False
+    provider: str = "openai"      # "openai" or "anthropic"
+    api_key: str = ""
+    model: str = ""               # empty = provider default
+    max_transcript_tokens: int = 0  # 0 = no limit
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -102,6 +112,7 @@ class Config:
     screen_recording: ScreenRecordingConfig = field(default_factory=ScreenRecordingConfig)
     outlook: OutlookConfig = field(default_factory=OutlookConfig)
     google_drive: GoogleDriveConfig = field(default_factory=GoogleDriveConfig)
+    summary: SummaryConfig = field(default_factory=SummaryConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -148,6 +159,10 @@ class Config:
             google_drive=GoogleDriveConfig(**{
                 k: v for k, v in data.get("google_drive", {}).items()
                 if k in GoogleDriveConfig.__dataclass_fields__
+            }),
+            summary=SummaryConfig(**{
+                k: v for k, v in data.get("summary", {}).items()
+                if k in SummaryConfig.__dataclass_fields__
             }),
         )
 

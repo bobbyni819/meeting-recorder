@@ -39,6 +39,12 @@ gdrive = [
     "google-api-python-client>=2.100",
     "google-auth-oauthlib>=1.1",
 ]
+summary-openai = [
+    "openai>=1.0",
+]
+summary-anthropic = [
+    "anthropic>=0.18",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.1",

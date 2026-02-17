@@ -247,6 +247,53 @@ class SettingsWindow:
             foreground="gray",
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
 
+        row += 1
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=10
+        )
+
+        # AI Summary section
+        row += 1
+        ttk.Label(parent, text="AI Meeting Summary", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        self._summary_var = tk.BooleanVar(value=self.config.summary.enabled)
+        ttk.Checkbutton(
+            parent, text="Generate AI summary after transcription",
+            variable=self._summary_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(parent, text="Provider:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._summary_provider_var = tk.StringVar(value=self.config.summary.provider)
+        ttk.Combobox(
+            parent, textvariable=self._summary_provider_var, width=12,
+            values=["openai", "anthropic"], state="readonly",
+        ).grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(parent, text="API Key:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._summary_api_key_var = tk.StringVar(value=self.config.summary.api_key)
+        ttk.Entry(parent, textvariable=self._summary_api_key_var, width=40, show="*").grid(
+            row=row, column=1, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        ttk.Label(parent, text="Model:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._summary_model_var = tk.StringVar(value=self.config.summary.model)
+        ttk.Entry(parent, textvariable=self._summary_model_var, width=25).grid(
+            row=row, column=1, sticky=tk.W, pady=2
+        )
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Leave Model empty for provider default\n(gpt-4o / claude-sonnet-4-20250514).",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
         parent.columnconfigure(1, weight=1)
 
     def _browse_gdrive_creds(self) -> None:
@@ -293,6 +340,11 @@ class SettingsWindow:
             self.config.google_drive.enabled = self._gdrive_var.get()
             self.config.google_drive.credentials_path = self._gdrive_creds_var.get()
             self.config.google_drive.folder_id = self._gdrive_folder_var.get()
+
+            self.config.summary.enabled = self._summary_var.get()
+            self.config.summary.provider = self._summary_provider_var.get()
+            self.config.summary.api_key = self._summary_api_key_var.get()
+            self.config.summary.model = self._summary_model_var.get()
 
             formats = []
             if self._fmt_json_var.get():

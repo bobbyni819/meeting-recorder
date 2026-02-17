@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from math import gcd
 from typing import Optional
 
 import numpy as np
-from scipy.signal import resample_poly
 
 from meeting_recorder.audio.ring_buffer import RingBuffer
+from meeting_recorder.audio.resampling import resample_to_16khz_mono
 from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mute_sync import MuteSync
 
@@ -68,6 +67,8 @@ class MicAudioCapture:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("Mic capture thread did not terminate (zombie).")
             self._thread = None
         logger.info("Mic audio capture stopped.")
 
@@ -111,13 +112,6 @@ class MicAudioCapture:
 
             logger.info("Mic stream opened (native chunk: %d samples).", native_chunk)
 
-            # Resample ratio
-            need_resample = native_rate != self.target_sample_rate
-            if need_resample:
-                g = gcd(native_rate, self.target_sample_rate)
-                up = self.target_sample_rate // g
-                down = native_rate // g
-
             # Silence for VAD_CHUNK_SAMPLES at 16kHz mono int16
             silence = b"\x00" * (VAD_CHUNK_SAMPLES * 2)
 
@@ -129,17 +123,15 @@ class MicAudioCapture:
                     continue
 
                 # Convert to numpy int16
-                audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+                audio_raw = np.frombuffer(audio_data, dtype=np.int16)
 
-                # Stereo to mono
-                if native_channels == 2:
-                    audio_int16 = audio_int16.reshape(-1, 2).mean(axis=1).astype(np.int16)
-
-                # Resample to target rate
-                if need_resample:
-                    audio_f32 = audio_int16.astype(np.float32) / 32768.0
-                    audio_f32 = resample_poly(audio_f32, up, down).astype(np.float32)
-                    audio_int16 = np.clip(audio_f32 * 32767, -32768, 32767).astype(np.int16)
+                # Resample to 16kHz mono int16 using shared utility
+                audio_int16 = resample_to_16khz_mono(
+                    audio_raw,
+                    source_rate=native_rate,
+                    target_rate=self.target_sample_rate,
+                    source_channels=native_channels,
+                )
 
                 # Ensure exactly VAD_CHUNK_SAMPLES for Silero
                 chunk_bytes = audio_int16.tobytes()
@@ -174,13 +166,17 @@ class MicAudioCapture:
                 try:
                     stream.stop_stream()
                     stream.close()
+                except OSError:
+                    pass  # Expected device-release errors
                 except Exception:
-                    pass
+                    logger.warning("Unexpected error during mic stream cleanup", exc_info=True)
             if p is not None:
                 try:
                     p.terminate()
+                except OSError:
+                    pass  # Expected device-release errors
                 except Exception:
-                    pass
+                    logger.warning("Unexpected error during PyAudio cleanup", exc_info=True)
             logger.info("Mic capture thread exiting.")
 
     @property

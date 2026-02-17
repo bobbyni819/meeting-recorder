@@ -43,6 +43,14 @@ class RecordingMetadata:
     meeting_location: str = ""
     # Google Drive
     google_drive_folder_id: str = ""
+    # Speaker resolution
+    speaker_map: dict[str, str] = field(default_factory=dict)
+    speaker_map_confidence: str = ""
+    speaker_map_method: str = ""
+    # AI Summary
+    has_summary: bool = False
+    summary_provider: str = ""
+    summary_model: str = ""
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory."""

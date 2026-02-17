@@ -16,6 +16,7 @@ from meeting_recorder.audio.mic_audio import MicAudioCapture
 from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mute_sync import MuteSync, get_all_pids_for_process
 from meeting_recorder.audio.process_finder import is_process_running
+from meeting_recorder.audio.level_monitor import AudioLevelMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,9 @@ class CaptureManager:
         process_name: str = "",
         app_key: str = "",
         mute_toggle_hotkey: str = "ctrl+shift+u",
+        on_audio_levels: Optional[callable] = None,
+        on_live_transcript: Optional[callable] = None,
+        live_transcription_enabled: bool = False,
     ):
         self.pid = pid
         self.output_dir = output_dir
@@ -57,6 +61,15 @@ class CaptureManager:
         # Ring buffers
         self._app_buffer = RingBuffer(max_chunks=2000)
         self._mic_buffer = RingBuffer(max_chunks=2000)
+
+        # Audio level monitor
+        self._level_monitor = AudioLevelMonitor(on_levels=on_audio_levels)
+        self._level_thread: Optional[threading.Thread] = None
+
+        # Live transcription
+        self._live_transcriber = None
+        self._on_live_transcript = on_live_transcript
+        self._live_transcription_enabled = live_transcription_enabled
 
         # VAD
         self._vad = VoiceActivityDetector(threshold=vad_threshold)
@@ -158,6 +171,29 @@ class CaptureManager:
         )
         self._monitor_thread.start()
 
+        # Start audio level monitoring
+        self._level_monitor.reset()
+        self._level_thread = threading.Thread(
+            target=self._level_monitor_loop,
+            name="audio-level-monitor",
+            daemon=True,
+        )
+        self._level_thread.start()
+
+        # Start live transcription if enabled
+        if self._live_transcription_enabled:
+            try:
+                from meeting_recorder.transcription.live_transcriber import LiveTranscriber
+
+                self._live_transcriber = LiveTranscriber(
+                    on_transcript=self._on_live_transcript,
+                )
+                self._live_transcriber.start()
+            except ImportError:
+                logger.warning("Live transcription dependencies not available.")
+            except Exception:
+                logger.exception("Failed to start live transcription")
+
         self._is_recording = True
         logger.info("Recording started. Output: %s", self.output_dir)
 
@@ -177,18 +213,28 @@ class CaptureManager:
         if self._mute_sync is not None:
             self._mute_sync.stop()
 
+        # Stop live transcription
+        if self._live_transcriber is not None:
+            self._live_transcriber.stop()
+            self._live_transcriber = None
+
         # Stop capture threads
         self._app_capture.stop()
         self._mic_capture.stop()
         self._vad.reset()
 
-        # Wait for writers to flush
-        if self._app_writer_thread:
-            self._app_writer_thread.join(timeout=10.0)
-        if self._mic_writer_thread:
-            self._mic_writer_thread.join(timeout=10.0)
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=5.0)
+        # Wait for writers to flush and check for zombies
+        threads_to_join = [
+            (self._app_writer_thread, 10.0, "app WAV writer"),
+            (self._mic_writer_thread, 10.0, "mic WAV writer"),
+            (self._monitor_thread, 5.0, "process monitor"),
+            (self._level_thread, 3.0, "audio level monitor"),
+        ]
+        for thread, timeout, label in threads_to_join:
+            if thread is not None:
+                thread.join(timeout=timeout)
+                if thread.is_alive():
+                    logger.warning("%s thread did not terminate (zombie).", label)
 
         self._is_recording = False
         duration = time.time() - self._start_time if self._start_time else 0
@@ -209,6 +255,14 @@ class CaptureManager:
                 if chunks:
                     for chunk in chunks:
                         wf.writeframes(chunk)
+                        # Feed audio level monitor
+                        if label == "app":
+                            self._level_monitor.update_app_level(chunk)
+                        else:
+                            self._level_monitor.update_mic_level(chunk)
+                        # Feed live transcriber (mixed audio from both tracks)
+                        if self._live_transcriber is not None:
+                            self._live_transcriber.feed_audio(chunk)
                 else:
                     time.sleep(0.01)
 
@@ -233,6 +287,17 @@ class CaptureManager:
                     self._on_stopped()
                 return
             time.sleep(2.0)
+
+    def _level_monitor_loop(self) -> None:
+        """Periodically notify the audio level callback."""
+        while not self._stop_event.is_set():
+            self._level_monitor.notify()
+            self._stop_event.wait(0.1)
+
+    @property
+    def level_monitor(self) -> AudioLevelMonitor:
+        """Access the audio level monitor for current levels."""
+        return self._level_monitor
 
     @property
     def is_recording(self) -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,7 @@ class TranscriptionPipeline:
     2. Run speaker diarization on app audio
     3. Merge transcription with speaker labels
     4. Label mic segments as user
+    5. Resolve speaker names using calendar attendees (if available)
 
     The pipeline can use either local (faster-whisper) or cloud (OpenAI) transcription.
     """
@@ -34,6 +36,7 @@ class TranscriptionPipeline:
         self.config = config
         self._transcriber = None
         self._diarizer = None
+        self._last_speaker_mapping = None
 
     def _get_transcriber(self):
         """Get or create the transcription backend."""
@@ -73,15 +76,28 @@ class TranscriptionPipeline:
             )
         return self._diarizer
 
-    def process(self, recording_dir: Path) -> list[TranscriptSegment]:
+    @property
+    def last_speaker_mapping(self):
+        """Return the speaker mapping from the last process() call, or None."""
+        return self._last_speaker_mapping
+
+    def process(
+        self,
+        recording_dir: Path,
+        attendees: list[str] | None = None,
+        organizer: str = "",
+    ) -> list[TranscriptSegment]:
         """Run the full transcription pipeline on a recording.
 
         Args:
             recording_dir: Directory containing app_audio.wav, mic_audio.wav, mixed.wav.
+            attendees: Optional list of attendee names from calendar for speaker resolution.
+            organizer: Optional meeting organizer name for speaker resolution.
 
         Returns:
             List of TranscriptSegment with speaker labels and timestamps.
         """
+        self._last_speaker_mapping = None
         app_audio = recording_dir / "app_audio.wav"
         mic_audio = recording_dir / "mic_audio.wav"
         mixed_audio = recording_dir / "mixed.wav"
@@ -92,15 +108,67 @@ class TranscriptionPipeline:
         # Strategy: Transcribe both tracks separately for better speaker identification
         # If separate tracks exist, transcribe them independently
         if app_audio.exists() and mic_audio.exists():
-            return self._process_separate_tracks(
-                app_audio, mic_audio, transcriber, user_name
-            )
+            try:
+                segments = self._process_separate_tracks(
+                    app_audio, mic_audio, transcriber, user_name
+                )
+                self._resolve_speakers(
+                    segments, attendees, organizer, user_name, audio_path=app_audio,
+                )
+                return segments
+            except Exception:
+                logger.exception(
+                    "Separate track processing failed, falling back to mixed audio"
+                )
 
         # Fallback: transcribe mixed audio
         if mixed_audio.exists():
-            return self._process_mixed(mixed_audio, transcriber, user_name)
+            segments = self._process_mixed(mixed_audio, transcriber, user_name)
+            self._resolve_speakers(
+                segments, attendees, organizer, user_name, audio_path=mixed_audio,
+            )
+            return segments
 
         raise FileNotFoundError(f"No audio files found in {recording_dir}")
+
+    def _resolve_speakers(
+        self,
+        segments: list[TranscriptSegment],
+        attendees: list[str] | None,
+        organizer: str,
+        user_name: str,
+        audio_path: Path | None = None,
+    ) -> None:
+        """Attempt to resolve speaker labels to real names.
+
+        Tries voice profile matching first, then falls back to calendar-based resolution.
+        """
+        try:
+            from meeting_recorder.transcription.speaker_resolver import (
+                resolve_speakers,
+                resolve_speakers_with_voice_profiles,
+                apply_speaker_map,
+            )
+
+            # Strategy 1: Voice profile matching (cross-meeting speaker ID)
+            if audio_path is not None:
+                voice_mapping = resolve_speakers_with_voice_profiles(
+                    segments, audio_path, user_name
+                )
+                if voice_mapping.speaker_map:
+                    apply_speaker_map(segments, voice_mapping.speaker_map)
+                    self._last_speaker_mapping = voice_mapping
+                    if not voice_mapping.unmapped_speakers:
+                        return  # All speakers resolved via voice profiles
+
+            # Strategy 2: Calendar-based resolution for remaining speakers
+            if attendees:
+                mapping = resolve_speakers(segments, attendees, organizer, user_name)
+                if mapping.speaker_map:
+                    apply_speaker_map(segments, mapping.speaker_map)
+                self._last_speaker_mapping = mapping
+        except Exception:
+            logger.exception("Speaker resolution failed (non-fatal)")
 
     def _process_separate_tracks(
         self,
@@ -109,22 +177,32 @@ class TranscriptionPipeline:
         transcriber,
         user_name: str,
     ) -> list[TranscriptSegment]:
-        """Process separate app and mic audio tracks."""
-        logger.info("Processing separate tracks...")
+        """Process separate app and mic audio tracks with parallel execution.
 
-        # Transcribe app audio (remote participants)
-        app_segments = transcriber.transcribe(app_audio)
+        Runs app transcription, mic transcription, and diarization concurrently
+        using a thread pool to reduce total processing time.
+        """
+        logger.info("Processing separate tracks (parallel)...")
 
-        # Run diarization on app audio to identify different remote speakers
         diarizer = self._get_diarizer()
-        if diarizer and app_segments:
-            speaker_segments = diarizer.diarize(app_audio)
-            app_segments = merge_transcript_with_speakers(
-                app_segments, speaker_segments, user_name
-            )
 
-        # Transcribe mic audio (user)
-        mic_segments = transcriber.transcribe(mic_audio)
+        # Submit all independent tasks concurrently
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="pipeline") as pool:
+            app_future: Future = pool.submit(transcriber.transcribe, app_audio)
+            mic_future: Future = pool.submit(transcriber.transcribe, mic_audio)
+            diarize_future: Optional[Future] = None
+            if diarizer:
+                diarize_future = pool.submit(diarizer.diarize, app_audio)
+
+            # Collect results
+            app_segments = app_future.result()
+            mic_segments = mic_future.result()
+
+            if diarize_future and app_segments:
+                speaker_segments = diarize_future.result()
+                app_segments = merge_transcript_with_speakers(
+                    app_segments, speaker_segments, user_name
+                )
 
         # Merge both track transcripts chronologically
         merged = merge_user_and_app_transcripts(mic_segments, app_segments, user_name)
