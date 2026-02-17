@@ -23,8 +23,15 @@ class VoiceActivityDetector:
         self._torch = None
         self._sample_rate = 16000
 
+    @property
+    def is_loaded(self) -> bool:
+        """Whether the VAD model has been loaded."""
+        return self._model is not None
+
     def load(self) -> None:
-        """Load the Silero VAD model."""
+        """Load the Silero VAD model (idempotent — skips if already loaded)."""
+        if self._model is not None:
+            return
         import torch
         self._torch = torch
         logger.info("Loading Silero VAD model...")

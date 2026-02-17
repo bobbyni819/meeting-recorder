@@ -51,6 +51,7 @@ class CaptureManager:
         on_live_transcript: Optional[callable] = None,
         live_transcription_enabled: bool = False,
         on_mute_changed: Optional[callable] = None,
+        vad: Optional[VoiceActivityDetector] = None,
     ):
         self.pid = pid
         self.output_dir = output_dir
@@ -72,8 +73,8 @@ class CaptureManager:
         self._on_live_transcript = on_live_transcript
         self._live_transcription_enabled = live_transcription_enabled
 
-        # VAD
-        self._vad = VoiceActivityDetector(threshold=vad_threshold)
+        # VAD (accept pre-loaded instance to avoid loading in background threads)
+        self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
 
         # Mute sync — detects when user mutes in meeting app
         self._mute_sync = None

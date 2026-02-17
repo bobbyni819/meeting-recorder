@@ -12,6 +12,7 @@ from typing import Optional
 from meeting_recorder.config import Config
 from meeting_recorder.audio.process_finder import find_primary_meeting_process, MeetingProcess
 from meeting_recorder.audio.capture_manager import CaptureManager
+from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mixer import mix_tracks_streaming
 from meeting_recorder.transcription.pipeline import TranscriptionPipeline
 from meeting_recorder.storage.recording_store import RecordingStore
@@ -47,6 +48,9 @@ class MeetingRecorderApp:
         self._pipeline = TranscriptionPipeline(self.config)
         self._hotkey_registered = False
 
+        # Pre-loaded VAD model (loaded once in run(), reused across recordings)
+        self._vad: Optional[VoiceActivityDetector] = None
+
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
 
@@ -65,6 +69,18 @@ class MeetingRecorderApp:
         """Start the application. Blocks until quit."""
         logger.info("Meeting Recorder starting...")
         self._recording_store.ensure_base_dir()
+
+        # Pre-load VAD model on the main thread before pystray blocks.
+        # Loading in a background thread after pystray starts can deadlock
+        # due to torch.hub.load + keyboard hooks + pystray threading interaction.
+        try:
+            self._vad = VoiceActivityDetector(threshold=self.config.vad.threshold)
+            self._vad.load()
+            logger.info("VAD model pre-loaded successfully.")
+        except Exception:
+            logger.exception("Failed to pre-load VAD model. Recording will attempt lazy load.")
+            self._vad = None
+
         self._register_hotkey()
         # Tray icon runs on the main thread (blocks)
         self._tray.run()
@@ -85,6 +101,19 @@ class MeetingRecorderApp:
         self._current_process = process
         logger.info("Found %s (PID %d)", process.display_name, process.pid)
 
+        try:
+            self._start_recording_for_process(process)
+        except Exception:
+            logger.exception("Failed to start recording for %s", process.display_name)
+            notifications.notify_error(f"Failed to start recording: see log for details")
+            self._capture_manager = None
+            self._current_recording_dir = None
+            self._current_metadata = None
+            self._current_process = None
+            self._tray.set_state("idle")
+
+    def _start_recording_for_process(self, process: MeetingProcess) -> None:
+        """Inner method that performs all recording setup. Raises on failure."""
         # Query Outlook calendar for meeting context
         calendar_event = None
         meeting_subject = ""
@@ -124,7 +153,7 @@ class MeetingRecorderApp:
         if self.config.audio.mic_device:
             mic_device = self._find_mic_device_index(self.config.audio.mic_device)
 
-        # Start capture manager
+        # Start capture manager (pass pre-loaded VAD to avoid threading deadlock)
         self._capture_manager = CaptureManager(
             pid=process.pid,
             output_dir=self._current_recording_dir,
@@ -143,6 +172,7 @@ class MeetingRecorderApp:
             on_live_transcript=self._on_live_transcript,
             live_transcription_enabled=self.config.recording.live_transcription,
             on_mute_changed=self._on_mute_changed,
+            vad=self._vad,
         )
         self._capture_manager.start()
 
