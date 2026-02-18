@@ -6,6 +6,11 @@ import numpy as np
 from scipy.signal import resample_poly
 from math import gcd
 
+# Noise gate defaults (relative to int16 full-scale 32768)
+_GATE_THRESHOLD_DB = -50.0  # Open gate above this RMS level
+_GATE_FLOOR_DB = -80.0      # Attenuate below-threshold audio to this level
+_GATE_SMOOTHING = 0.05      # EMA smoothing factor (lower = smoother transitions)
+
 
 def resample_to_16khz_mono(
     audio: np.ndarray,
@@ -50,3 +55,51 @@ def resample_to_16khz_mono(
 
     # Convert float32 [-1, 1] to int16
     return np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+
+
+class NoiseGate:
+    """Simple noise gate with smoothed gain transitions.
+
+    Attenuates audio when the RMS level drops below a threshold,
+    reducing background hiss during silence. Uses exponential
+    moving average smoothing to avoid click artifacts at gate edges.
+    """
+
+    def __init__(
+        self,
+        threshold_db: float = _GATE_THRESHOLD_DB,
+        floor_db: float = _GATE_FLOOR_DB,
+        smoothing: float = _GATE_SMOOTHING,
+    ):
+        self._threshold = 10 ** (threshold_db / 20.0) * 32768.0  # RMS in int16 scale
+        self._floor_gain = 10 ** (floor_db / 20.0) / (10 ** (threshold_db / 20.0))
+        self._smoothing = smoothing
+        self._gain = 0.0  # Current smoothed gain (0 = fully gated, 1 = open)
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        """Apply noise gate to int16 audio chunk.
+
+        Returns the gated audio (int16). Maintains internal state
+        for smooth gain transitions across consecutive chunks.
+        """
+        if len(audio) == 0:
+            return audio
+
+        rms = np.sqrt(np.mean(audio.astype(np.float64) ** 2))
+
+        # Target gain: 1.0 when above threshold, floor_gain when below
+        if rms >= self._threshold:
+            target = 1.0
+        else:
+            target = self._floor_gain
+
+        # Smooth gain transition (exponential moving average)
+        self._gain += self._smoothing * (target - self._gain)
+
+        # Fast path: gain ~1.0 means no processing needed
+        if self._gain > 0.99:
+            return audio
+
+        return np.clip(
+            audio.astype(np.float32) * self._gain, -32768, 32767
+        ).astype(np.int16)

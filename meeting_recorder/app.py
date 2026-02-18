@@ -53,6 +53,8 @@ class MeetingRecorderApp:
 
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
+        self._capture_mode_reported: bool = False
+        self._preview_frame_counter: int = 0
 
         # System tray
         self._tray = TrayIcon(
@@ -174,6 +176,8 @@ class MeetingRecorderApp:
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
         )
+        self._capture_mode_reported = False
+        self._preview_frame_counter = 0
         self._capture_manager.start()
 
         # Show dashboard overlay
@@ -194,7 +198,15 @@ class MeetingRecorderApp:
             ctx = DashboardContext(
                 app_name=process.display_name,
                 meeting_subject=meeting_subject,
-                is_muted=False,  # starts unmuted; mute sync tracks actual state
+                is_muted=(
+                    self._capture_manager.mute_sync.is_muted
+                    if self._capture_manager.mute_sync
+                    else False
+                ),
+                show_screen_preview=(
+                    dash_cfg.show_screen_preview
+                    and self.config.screen_recording.enabled
+                ),
             )
             self._dashboard.show(ctx)
 
@@ -388,10 +400,26 @@ class MeetingRecorderApp:
                 f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
             )
 
+            # One-time check: detect capture mode and warn dashboard if system-wide
+            if not self._capture_mode_reported:
+                mode = self._capture_manager.is_app_capture_process_specific
+                if mode is not None:
+                    self._capture_mode_reported = True
+                    if not mode and self._dashboard:
+                        self._dashboard.update_capture_mode(False)
+
             # Push to dashboard
             if self._dashboard and self._dashboard.is_visible:
                 self._dashboard.update_audio_levels(app_rms, app_peak, mic_rms, mic_peak)
                 self._dashboard.update_elapsed(elapsed)
+
+                # Push screen preview at ~2 Hz (every 5th call of 10 Hz levels)
+                self._preview_frame_counter += 1
+                if self._preview_frame_counter >= 5:
+                    self._preview_frame_counter = 0
+                    frame = self._capture_manager.get_screen_frame()
+                    if frame is not None:
+                        self._dashboard.update_screen_preview(frame)
 
     def _on_live_transcript(self, text: str) -> None:
         """Handle live transcription preview updates."""

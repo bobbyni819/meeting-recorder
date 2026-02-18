@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from meeting_recorder.audio.resampling import resample_to_16khz_mono
+from meeting_recorder.audio.resampling import resample_to_16khz_mono, NoiseGate
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +237,72 @@ class TestMonoResampleOnly:
         assert len(result) == expected_samples
         # Verify signal has non-zero content (not all silence)
         assert np.abs(result).max() > 0
+
+
+# ---------------------------------------------------------------------------
+# Noise gate
+# ---------------------------------------------------------------------------
+
+class TestNoiseGate:
+    """Tests for the NoiseGate used to reduce background hiss."""
+
+    def test_loud_audio_passes_through(self):
+        """Audio well above threshold should not be attenuated."""
+        gate = NoiseGate(threshold_db=-50.0, smoothing=0.05)
+        # Warm up the gate with loud audio (need ~60 iterations at smoothing=0.05
+        # to reach 95% gain: 1 - 0.95^60 ≈ 0.954)
+        loud = (np.sin(np.linspace(0, 10, 4800)) * 16000).astype(np.int16)
+        for _ in range(80):
+            gate.process(loud)
+        result = gate.process(loud)
+        # RMS should be approximately preserved
+        original_rms = np.sqrt(np.mean(loud.astype(np.float64) ** 2))
+        result_rms = np.sqrt(np.mean(result.astype(np.float64) ** 2))
+        assert result_rms > original_rms * 0.95
+
+    def test_silence_is_attenuated(self):
+        """Near-silent audio below threshold should be heavily attenuated."""
+        gate = NoiseGate(threshold_db=-50.0, floor_db=-80.0)
+        # Very quiet audio (RMS ~ 3, which is about -80 dBFS)
+        quiet = np.full(4800, 3, dtype=np.int16)
+        # Process several chunks to let the gate close
+        for _ in range(40):
+            result = gate.process(quiet)
+        # After gate closes, output should be much quieter than input
+        result_rms = np.sqrt(np.mean(result.astype(np.float64) ** 2))
+        input_rms = np.sqrt(np.mean(quiet.astype(np.float64) ** 2))
+        assert result_rms < input_rms * 0.5
+
+    def test_empty_array_passthrough(self):
+        """Empty arrays should be returned as-is."""
+        gate = NoiseGate()
+        empty = np.array([], dtype=np.int16)
+        result = gate.process(empty)
+        assert len(result) == 0
+
+    def test_output_dtype_is_int16(self):
+        """Output must always be int16."""
+        gate = NoiseGate()
+        audio = np.zeros(480, dtype=np.int16)
+        result = gate.process(audio)
+        assert result.dtype == np.int16
+
+    def test_gain_smoothing_prevents_clicks(self):
+        """Gain should change gradually, not jump instantly."""
+        gate = NoiseGate(threshold_db=-50.0, smoothing=0.05)
+        # Start with loud audio to open gate
+        loud = (np.sin(np.linspace(0, 10, 480)) * 10000).astype(np.int16)
+        for _ in range(80):
+            gate.process(loud)
+        # Verify gate is open (internal gain close to 1)
+        assert gate._gain > 0.95
+        # Switch to quiet audio that's below threshold but loud enough
+        # to survive int16 rounding after attenuation.
+        quiet = np.full(480, 50, dtype=np.int16)  # RMS=50, threshold ~104
+        gains = []
+        for _ in range(10):
+            result = gate.process(quiet)
+            gains.append(gate._gain)
+        # Internal gain should decrease over time (smooth closing)
+        assert gains[0] > gains[-1], "Gate should close over time"
+        assert gains[0] > 0.5, "First chunk should still have high gain (smoothing)"

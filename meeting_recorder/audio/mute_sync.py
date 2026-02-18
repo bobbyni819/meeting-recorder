@@ -182,3 +182,90 @@ def get_all_pids_for_process(process_name: str) -> set[int]:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return pids
+
+
+def detect_initial_mute_state(pid: int) -> Optional[bool]:
+    """Detect whether the meeting app is currently muted via registry.
+
+    Checks the Windows CapabilityAccessManager registry for microphone
+    usage by the process. If the mic was recently released (LastUsedTimeStop
+    > 0), the app is likely muted. If the mic is actively in use
+    (LastUsedTimeStop == 0), the app is likely unmuted.
+
+    Args:
+        pid: Process ID of the meeting app.
+
+    Returns:
+        False if unmuted (mic in use), True if muted (mic not in use),
+        None if detection failed.
+    """
+    import winreg
+
+    import psutil
+
+    try:
+        exe_path = psutil.Process(pid).exe()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        logger.debug("Could not get exe path for PID %d", pid)
+        return None
+
+    # Convert exe path to registry format: replace \ and / with #
+    exe_registry = exe_path.replace("\\", "#").replace("/", "#")
+
+    base_key_path = (
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+        r"\CapabilityAccessManager\ConsentStore\microphone\NonPackaged"
+    )
+
+    try:
+        base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, base_key_path)
+    except OSError:
+        logger.debug("Registry key not found: HKCU\\%s", base_key_path)
+        return None
+
+    try:
+        idx = 0
+        while True:
+            try:
+                subkey_name = winreg.EnumKey(base_key, idx)
+            except OSError:
+                break
+            idx += 1
+
+            if exe_registry.lower() not in subkey_name.lower():
+                continue
+
+            try:
+                subkey = winreg.OpenKey(base_key, subkey_name)
+                try:
+                    value, _ = winreg.QueryValueEx(subkey, "LastUsedTimeStop")
+                    if value == 0:
+                        logger.info(
+                            "Registry mute detection: PID %d (%s) mic IN USE "
+                            "(unmuted)",
+                            pid, exe_path,
+                        )
+                        return False
+                    else:
+                        logger.info(
+                            "Registry mute detection: PID %d (%s) mic NOT in "
+                            "use (muted)",
+                            pid, exe_path,
+                        )
+                        return True
+                finally:
+                    winreg.CloseKey(subkey)
+            except OSError:
+                logger.debug(
+                    "Could not read LastUsedTimeStop from subkey %s",
+                    subkey_name,
+                )
+                continue
+    finally:
+        winreg.CloseKey(base_key)
+
+    logger.debug(
+        "No matching registry subkey for exe %s (registry format: %s)",
+        exe_path, exe_registry,
+    )
+    return None

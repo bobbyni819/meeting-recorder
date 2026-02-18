@@ -22,6 +22,7 @@ from meeting_recorder.ui.dashboard import (
     EXPANDED_HEIGHT,
     COLLAPSED_WIDTH,
     COLLAPSED_HEIGHT,
+    PREVIEW_HEIGHT,
 )
 
 
@@ -111,6 +112,7 @@ class TestDashboardContext:
         assert ctx.app_name == "Meeting"
         assert ctx.meeting_subject == ""
         assert ctx.is_muted is True
+        assert ctx.show_screen_preview is False
 
     def test_custom_values(self):
         ctx = DashboardContext(
@@ -141,6 +143,7 @@ class TestDashboardConfig:
         assert cfg.position_y == -1
         assert cfg.start_collapsed is False
         assert cfg.show_transcript is True
+        assert cfg.show_screen_preview is True
 
     def test_config_has_dashboard(self):
         cfg = Config()
@@ -232,6 +235,14 @@ class TestDashboardStateMethods:
         dash.update_elapsed(42.5)
         dash.update_mute_state(True)
         dash.update_transcript("Hello world")
+        dash.update_screen_preview(None)
+
+    def test_update_screen_preview_safe_without_window(self):
+        """update_screen_preview should be a no-op when window is None."""
+        import numpy as np
+        dash = GameBarDashboard()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        dash.update_screen_preview(frame)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +285,6 @@ class TestLayoutConstants:
 
     def test_collapsed_smaller_than_expanded(self):
         assert COLLAPSED_HEIGHT < EXPANDED_HEIGHT
+
+    def test_preview_height_reasonable(self):
+        assert 100 < PREVIEW_HEIGHT < 200

@@ -21,13 +21,14 @@ dependencies = [
     "keyboard>=0.13",
     "mss>=9.0",
     "opencv-python>=4.8",
+    "pycaw>=20230407",
 ]
 
 [project.optional-dependencies]
 local = [
     "faster-whisper>=1.0",
     "torch>=2.1",
-    "pyannote.audio>=3.1",
+    "pyannote.audio>=3.1,<4.0",
 ]
 cloud = [
     "openai>=1.0",
@@ -49,6 +50,11 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.1",
 ]
+e2e = [
+    "sounddevice>=0.4",
+    "soundfile>=0.12",
+    "playwright>=1.40",
+]
 
 [project.scripts]
 meeting-recorder = "meeting_recorder.__main__:main"
@@ -59,3 +65,8 @@ include = ["meeting_recorder*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests requiring VB-Cable and meeting app",
+]

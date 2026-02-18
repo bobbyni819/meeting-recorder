@@ -14,7 +14,11 @@ from meeting_recorder.audio.ring_buffer import RingBuffer
 from meeting_recorder.audio.app_audio import AppAudioCapture
 from meeting_recorder.audio.mic_audio import MicAudioCapture
 from meeting_recorder.audio.vad import VoiceActivityDetector
-from meeting_recorder.audio.mute_sync import MuteSync, get_all_pids_for_process
+from meeting_recorder.audio.mute_sync import (
+    MuteSync,
+    get_all_pids_for_process,
+    detect_initial_mute_state,
+)
 from meeting_recorder.audio.process_finder import is_process_running
 from meeting_recorder.audio.level_monitor import AudioLevelMonitor
 
@@ -82,9 +86,12 @@ class CaptureManager:
         if app_key and process_name:
             target_pids = get_all_pids_for_process(process_name)
             if target_pids:
+                detected = detect_initial_mute_state(pid)
+                start_muted = detected if detected is not None else False
                 self._mute_sync = MuteSync(
                     app_key=app_key,
                     target_pids=target_pids,
+                    start_muted=start_muted,
                     on_mute_changed=on_mute_changed,
                 )
 
@@ -266,8 +273,9 @@ class CaptureManager:
                             self._level_monitor.update_app_level(chunk)
                         else:
                             self._level_monitor.update_mic_level(chunk)
-                        # Feed live transcriber (mixed audio from both tracks)
-                        if self._live_transcriber is not None:
+                        # Feed live transcriber (app track only — feeding both
+                        # tracks interleaves chunks and corrupts the audio stream)
+                        if label == "app" and self._live_transcriber is not None:
                             self._live_transcriber.feed_audio(chunk)
                 else:
                     time.sleep(0.01)
@@ -309,6 +317,19 @@ class CaptureManager:
     def mute_sync(self) -> Optional[MuteSync]:
         """Access the mute sync instance (if available)."""
         return self._mute_sync
+
+    @property
+    def is_app_capture_process_specific(self) -> Optional[bool]:
+        """Whether app audio capture is using per-process or system-wide loopback."""
+        if self._app_capture is None:
+            return None
+        return self._app_capture.is_process_specific
+
+    def get_screen_frame(self):
+        """Return the latest captured screen frame, or None."""
+        if self._screen_capture is not None:
+            return self._screen_capture.latest_frame
+        return None
 
     @property
     def is_recording(self) -> bool:

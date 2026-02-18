@@ -5,9 +5,16 @@ from __future__ import annotations
 import threading
 from unittest import mock
 
+import winreg
+
+import psutil
 import pytest
 
-from meeting_recorder.audio.mute_sync import MuteSync, APP_MUTE_SHORTCUTS
+from meeting_recorder.audio.mute_sync import (
+    MuteSync,
+    APP_MUTE_SHORTCUTS,
+    detect_initial_mute_state,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +199,113 @@ class TestMuteSyncUnknownApp:
         # toggle should still work (default is unmuted, toggle -> muted)
         ms.toggle()
         assert ms.is_muted is True
+
+
+# ---------------------------------------------------------------------------
+# detect_initial_mute_state
+# ---------------------------------------------------------------------------
+
+class TestDetectInitialMuteState:
+    """Test registry-based initial mute detection."""
+
+    ZOOM_EXE = r"C:\Program Files\Zoom\bin\Zoom.exe"
+    ZOOM_REGISTRY = "C:#Program Files#Zoom#bin#Zoom.exe"
+    BASE_KEY_PATH = (
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+        r"\CapabilityAccessManager\ConsentStore\microphone\NonPackaged"
+    )
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_detect_unmuted_when_mic_in_use(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """LastUsedTimeStop == 0 means mic in use -> unmuted (False)."""
+        mock_process.return_value.exe.return_value = self.ZOOM_EXE
+
+        mock_base_key = mock.MagicMock()
+        mock_sub_key = mock.MagicMock()
+        mock_open_key.side_effect = [mock_base_key, mock_sub_key]
+
+        subkey_name = f"{self.ZOOM_REGISTRY}"
+        mock_enum_key.side_effect = [subkey_name, OSError]
+
+        mock_query.return_value = (0, winreg.REG_QWORD)
+
+        result = detect_initial_mute_state(1234)
+
+        assert result is False
+        mock_process.assert_called_once_with(1234)
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_detect_muted_when_mic_not_in_use(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """LastUsedTimeStop > 0 means mic not in use -> muted (True)."""
+        mock_process.return_value.exe.return_value = self.ZOOM_EXE
+
+        mock_base_key = mock.MagicMock()
+        mock_sub_key = mock.MagicMock()
+        mock_open_key.side_effect = [mock_base_key, mock_sub_key]
+
+        subkey_name = f"{self.ZOOM_REGISTRY}"
+        mock_enum_key.side_effect = [subkey_name, OSError]
+
+        mock_query.return_value = (133200000000000000, winreg.REG_QWORD)
+
+        result = detect_initial_mute_state(1234)
+
+        assert result is True
+
+    @mock.patch("psutil.Process")
+    def test_returns_none_when_process_not_found(self, mock_process):
+        """NoSuchProcess exception -> None."""
+        mock_process.side_effect = psutil.NoSuchProcess(9999)
+
+        result = detect_initial_mute_state(9999)
+
+        assert result is None
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.OpenKey")
+    def test_returns_none_when_registry_key_missing(
+        self, mock_open_key, mock_process,
+    ):
+        """OSError opening base registry key -> None."""
+        mock_process.return_value.exe.return_value = self.ZOOM_EXE
+        mock_open_key.side_effect = OSError("Registry key not found")
+
+        result = detect_initial_mute_state(1234)
+
+        assert result is None
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_returns_none_when_no_matching_subkey(
+        self, mock_open_key, mock_enum_key, mock_close, mock_process,
+    ):
+        """No subkey matches the exe path -> None."""
+        mock_process.return_value.exe.return_value = self.ZOOM_EXE
+
+        mock_base_key = mock.MagicMock()
+        mock_open_key.return_value = mock_base_key
+
+        # Return subkeys that don't match Zoom's exe path
+        mock_enum_key.side_effect = [
+            "C:#Program Files#Teams#teams.exe",
+            "C:#Program Files#Webex#webex.exe",
+            OSError,
+        ]
+
+        result = detect_initial_mute_state(1234)
+
+        assert result is None

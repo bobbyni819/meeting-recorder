@@ -17,6 +17,7 @@ EXPANDED_WIDTH = 380
 EXPANDED_HEIGHT = 280
 COLLAPSED_WIDTH = 380
 COLLAPSED_HEIGHT = 44
+PREVIEW_HEIGHT = 115  # 101px thumbnail + 14px padding
 
 # Colors
 BG_COLOR = "#1a1a2e"
@@ -34,6 +35,7 @@ BUTTON_BG = "#0f3460"
 BUTTON_HOVER = "#1a5276"
 MUTED_COLOR = "#e74c3c"
 UNMUTED_COLOR = "#2ecc71"
+AMBER_WARNING = "#f39c12"
 
 
 @dataclass
@@ -42,6 +44,8 @@ class DashboardContext:
     app_name: str = "Meeting"
     meeting_subject: str = ""
     is_muted: bool = True
+    is_process_specific: bool = True
+    show_screen_preview: bool = False
 
 
 def db_to_fraction(db: float) -> float:
@@ -119,7 +123,11 @@ class GameBarDashboard:
         self._mic_db_label: Optional[tk.Label] = None
         self._mute_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
+        self._capture_warning_label: Optional[tk.Label] = None
         self._collapsed_elapsed: Optional[tk.Label] = None
+        self._preview_label: Optional[tk.Label] = None
+        self._preview_photo = None  # ImageTk.PhotoImage ref (prevent Tk GC)
+        self._show_screen_preview: bool = False
 
         # VU state
         self._app_vu_fraction = 0.0
@@ -260,6 +268,15 @@ class GameBarDashboard:
         except tk.TclError:
             pass
 
+    def update_capture_mode(self, is_process_specific: bool) -> None:
+        """Show or hide the capture mode warning (thread-safe)."""
+        if self._window is None or not self._is_visible:
+            return
+        try:
+            self._window.after(0, self._set_capture_warning, is_process_specific)
+        except tk.TclError:
+            pass
+
     def update_transcript(self, text: str) -> None:
         """Update the transcript preview text (thread-safe)."""
         if self._window is None or not self._is_visible or self._is_collapsed:
@@ -272,6 +289,40 @@ class GameBarDashboard:
             self._window.after(0, self._set_transcript, text)
         except tk.TclError:
             pass
+
+    def update_screen_preview(self, frame) -> None:
+        """Update the screen preview thumbnail (thread-safe).
+
+        Args:
+            frame: BGR numpy array from screen capture, or None.
+        """
+        if self._window is None or not self._is_visible or self._is_collapsed:
+            return
+        if not self._show_screen_preview or self._preview_label is None:
+            return
+        if frame is None:
+            return
+        try:
+            self._window.after(0, lambda f=frame: self._set_screen_preview(f))
+        except tk.TclError:
+            pass
+
+    def _set_screen_preview(self, frame) -> None:
+        """Resize frame to thumbnail and display it (must be called on Tk thread)."""
+        if self._preview_label is None:
+            return
+        try:
+            import cv2
+            from PIL import Image, ImageTk
+
+            thumb = cv2.resize(frame, (180, 101))
+            rgb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb)
+            photo = ImageTk.PhotoImage(img)
+            self._preview_label.configure(image=photo, text="")
+            self._preview_photo = photo  # prevent GC
+        except Exception:
+            logger.debug("Screen preview update failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Window construction
@@ -289,6 +340,10 @@ class GameBarDashboard:
         # Position
         self._apply_position()
 
+        # Track screen preview setting from context
+        ctx = self._context or DashboardContext()
+        self._show_screen_preview = ctx.show_screen_preview
+
         # Build both frames
         self._expanded_frame = tk.Frame(self._window, bg=BG_COLOR)
         self._collapsed_frame = tk.Frame(self._window, bg=BG_COLOR)
@@ -304,9 +359,12 @@ class GameBarDashboard:
         else:
             self._is_collapsed = False
             self._expanded_frame.pack(fill=tk.BOTH, expand=True)
-            self._window.geometry(
-                f"{EXPANDED_WIDTH}x{EXPANDED_HEIGHT if self._show_transcript else EXPANDED_HEIGHT - 60}"
-            )
+            height = EXPANDED_HEIGHT
+            if not self._show_transcript:
+                height -= 60
+            if self._show_screen_preview:
+                height += PREVIEW_HEIGHT
+            self._window.geometry(f"{EXPANDED_WIDTH}x{height}")
 
         # Dragging
         self._window.bind("<Button-1>", self._start_drag)
@@ -356,6 +414,15 @@ class GameBarDashboard:
         )
         collapse_btn.pack(side=tk.RIGHT, padx=(0, 4))
         collapse_btn.bind("<Button-1>", lambda e: self._toggle_collapse())
+
+        # Capture mode warning (hidden by default, shown if system-wide fallback)
+        self._capture_warning_label = tk.Label(
+            parent, text="\u26a0 System volume affects recording",
+            font=("Segoe UI", 8, "bold"),
+            fg=AMBER_WARNING, bg=BG_COLOR, anchor=tk.W,
+        )
+        if not ctx.is_process_specific:
+            self._capture_warning_label.pack(fill=tk.X, padx=10, pady=(2, 0))
 
         # Recording sub-header
         self._elapsed_label = tk.Label(
@@ -417,6 +484,23 @@ class GameBarDashboard:
         )
         ctrl_elapsed.pack(side=tk.RIGHT, padx=10, pady=6)
         self._ctrl_elapsed_label = ctrl_elapsed
+
+        # --- Screen preview thumbnail (optional) ---
+        if self._show_screen_preview:
+            preview_frame = tk.Frame(parent, bg=BG_COLOR, height=PREVIEW_HEIGHT)
+            preview_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
+            preview_frame.pack_propagate(False)
+            self._preview_label = tk.Label(
+                preview_frame,
+                text="No preview",
+                font=("Segoe UI", 8),
+                fg=TEXT_DIM,
+                bg="#0d0d1a",
+                width=180,
+                height=101,
+                anchor=tk.CENTER,
+            )
+            self._preview_label.pack(expand=True)
 
         # --- Transcript preview (60px) ---
         if self._show_transcript:
@@ -544,6 +628,14 @@ class GameBarDashboard:
         if self._collapsed_elapsed:
             self._collapsed_elapsed.configure(text=text)
 
+    def _set_capture_warning(self, is_process_specific: bool) -> None:
+        """Show or hide the capture mode warning label."""
+        if self._capture_warning_label:
+            if is_process_specific:
+                self._capture_warning_label.pack_forget()
+            else:
+                self._capture_warning_label.pack(fill=tk.X, padx=10, pady=(2, 0))
+
     def _set_mute_display(self, is_muted: bool) -> None:
         """Update the mute button text and color."""
         if self._mute_btn:
@@ -602,7 +694,11 @@ class GameBarDashboard:
             # Expand
             self._collapsed_frame.pack_forget()
             self._expanded_frame.pack(fill=tk.BOTH, expand=True)
-            height = EXPANDED_HEIGHT if self._show_transcript else EXPANDED_HEIGHT - 60
+            height = EXPANDED_HEIGHT
+            if not self._show_transcript:
+                height -= 60
+            if self._show_screen_preview:
+                height += PREVIEW_HEIGHT
             self._window.geometry(f"{EXPANDED_WIDTH}x{height}")
             self._is_collapsed = False
         else:

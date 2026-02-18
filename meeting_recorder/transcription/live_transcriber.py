@@ -215,7 +215,7 @@ class LiveTranscriber:
                     self._on_transcript(transcript)
 
             except Exception:
-                logger.debug("Live transcription error (non-fatal)", exc_info=True)
+                logger.warning("Live transcription error (non-fatal)", exc_info=True)
 
     def clear_buffer(self) -> None:
         """Clear the audio buffer."""

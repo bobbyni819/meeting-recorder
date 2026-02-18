@@ -10,6 +10,10 @@ from meeting_recorder.audio.process_finder import (
     find_meeting_processes,
     find_primary_meeting_process,
     is_process_running,
+    _find_meeting_window_pid,
+    _score_meeting_window,
+    _get_audio_rendering_pids,
+    _AUDIO_SESSION_BONUS,
     MEETING_APPS,
     MeetingProcess,
 )
@@ -138,11 +142,54 @@ class TestFindMeetingProcesses:
 # find_primary_meeting_process -- priority
 # ---------------------------------------------------------------------------
 
-class TestFindPrimaryMeetingProcess:
-    """Test priority selection logic."""
+class TestScoreMeetingWindow:
+    """Test window title scoring for different apps."""
 
+    def test_zoom_meeting_window(self):
+        assert _score_meeting_window("Zoom Meeting", "zoom") == 100
+
+    def test_zoom_generic_window(self):
+        assert _score_meeting_window("Zoom Workplace", "zoom") == 10
+
+    def test_zoom_irrelevant_window(self):
+        assert _score_meeting_window("Notepad", "zoom") == 0
+
+    def test_teams_generic_main_window(self):
+        assert _score_meeting_window("Microsoft Teams", "teams") == 10
+
+    def test_teams_chat_window_penalized(self):
+        """Chat windows should score very low — they're never meetings."""
+        assert _score_meeting_window("Chat | Faye Guo | Microsoft Teams", "teams") == 5
+        assert _score_meeting_window("Chat | Microsoft Teams", "teams") == 5
+
+    def test_teams_named_tab_window(self):
+        """Calendar, channels, etc. — might be meeting, might not."""
+        assert _score_meeting_window("Sprint Planning | Microsoft Teams", "teams") == 30
+
+    def test_teams_meeting_popout(self):
+        """Pop-out meeting windows don't have 'Microsoft Teams' in the title."""
+        assert _score_meeting_window("Weekly Standup", "teams") == 50
+        assert _score_meeting_window("1:1 with Bob", "teams") == 50
+
+    def test_teams_popout_beats_generic(self):
+        """Meeting pop-out (50) should outscore generic main window (10)."""
+        popout = _score_meeting_window("Sprint Planning", "teams")
+        generic = _score_meeting_window("Microsoft Teams", "teams")
+        assert popout > generic
+
+    def test_empty_title_scores_zero(self):
+        assert _score_meeting_window("", "zoom") == 0
+        assert _score_meeting_window("", "teams") == 0
+
+
+class TestFindPrimaryMeetingProcess:
+    """Test priority and scoring selection logic."""
+
+    # _find_meeting_window_pid now returns (pid, score) tuples
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid", return_value=(None, 0))
     @mock.patch("meeting_recorder.audio.process_finder.psutil")
-    def test_prefers_zoom_over_teams(self, mock_psutil):
+    def test_prefers_zoom_over_teams_when_no_windows(self, mock_psutil, _mock_wnd):
         mock_psutil.process_iter.return_value = [
             _make_mock_process(300, "ms-teams.exe"),
             _make_mock_process(100, "zoom.exe"),
@@ -152,8 +199,9 @@ class TestFindPrimaryMeetingProcess:
         assert result is not None
         assert result.app_key == "zoom"
 
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid", return_value=(None, 0))
     @mock.patch("meeting_recorder.audio.process_finder.psutil")
-    def test_prefers_teams_over_webex(self, mock_psutil):
+    def test_prefers_teams_over_webex(self, mock_psutil, _mock_wnd):
         mock_psutil.process_iter.return_value = [
             _make_mock_process(400, "atmgr.exe"),
             _make_mock_process(300, "teams.exe"),
@@ -163,14 +211,153 @@ class TestFindPrimaryMeetingProcess:
         assert result is not None
         assert result.app_key == "teams"
 
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid", return_value=(None, 0))
     @mock.patch("meeting_recorder.audio.process_finder.psutil")
-    def test_returns_none_when_nothing_found(self, mock_psutil):
+    def test_returns_none_when_nothing_found(self, mock_psutil, _mock_wnd):
         mock_psutil.process_iter.return_value = [
             _make_mock_process(1, "notepad.exe"),
         ]
 
         result = find_primary_meeting_process()
         assert result is None
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_window_match_selects_correct_zoom_pid(self, mock_psutil, mock_wnd):
+        """When window matching finds the meeting PID, use it over the lobby PID."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),  # lobby
+            _make_mock_process(200, "zoom.exe"),  # meeting
+        ]
+        mock_wnd.return_value = (200, 100)  # meeting PID, high score
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 200
+        assert result.app_key == "zoom"
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_window_match_creates_new_if_pid_not_in_list(self, mock_psutil, mock_wnd):
+        """If the window-matched PID isn't in the process list, create a new entry."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),
+        ]
+        mock_wnd.return_value = (999, 100)  # child process PID
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 999
+        assert result.app_key == "zoom"
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid", return_value=(None, 0))
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_falls_back_when_no_window_match(self, mock_psutil, _mock_wnd):
+        """When no window match is found, fall back to first process."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),
+        ]
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 100
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_teams_meeting_beats_idle_zoom(self, mock_psutil, mock_wnd):
+        """Active Teams meeting (score 50) beats idle Zoom lobby (score 10)."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),      # idle Zoom
+            _make_mock_process(300, "ms-teams.exe"),   # active Teams meeting
+        ]
+
+        # Zoom: generic lobby window (score 10)
+        # Teams: meeting pop-out (score 50)
+        mock_wnd.side_effect = [(100, 10), (300, 50)]
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 300
+        assert result.app_key == "teams"
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_zoom_meeting_beats_idle_teams(self, mock_psutil, mock_wnd):
+        """Active Zoom meeting (score 100) beats idle Teams (score 10)."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),
+            _make_mock_process(300, "ms-teams.exe"),
+        ]
+
+        # Zoom: active meeting (score 100), Teams: generic window (score 10)
+        mock_wnd.side_effect = [(100, 100), (300, 10)]
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 100
+        assert result.app_key == "zoom"
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_both_in_meetings_uses_priority(self, mock_psutil, mock_wnd):
+        """When both apps have high scores, Zoom wins by priority tiebreak."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(100, "zoom.exe"),
+            _make_mock_process(300, "ms-teams.exe"),
+        ]
+
+        # Both have meeting windows with equal score
+        mock_wnd.side_effect = [(100, 100), (300, 100)]
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 100
+        assert result.app_key == "zoom"
+
+    @mock.patch("meeting_recorder.audio.process_finder._find_meeting_window_pid")
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_teams_popout_beats_teams_chat(self, mock_psutil, mock_wnd):
+        """Teams meeting pop-out window should be chosen over the chat window.
+
+        This is the user's reported issue: multiple Teams windows open and the
+        recorder picks the chat window instead of the meeting.
+        """
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(300, "ms-teams.exe"),
+        ]
+
+        # _find_meeting_window_pid is called once for "teams" and should
+        # internally pick the highest-scored window. We mock the result
+        # as if it correctly picked the pop-out (pid=300, score=50).
+        mock_wnd.return_value = (300, 50)
+
+        result = find_primary_meeting_process()
+        assert result is not None
+        assert result.pid == 300
+
+
+# ---------------------------------------------------------------------------
+# Audio session detection
+# ---------------------------------------------------------------------------
+
+class TestAudioSessionDetection:
+    """Test audio session PID detection."""
+
+    def test_returns_empty_when_pycaw_missing(self):
+        """Gracefully returns empty set if pycaw is not available."""
+        with mock.patch.dict("sys.modules", {"pycaw": None, "pycaw.pycaw": None}):
+            result = _get_audio_rendering_pids({100, 200})
+            assert result == set()
+
+    def test_audio_bonus_is_large(self):
+        """Audio bonus should dominate window title scores."""
+        assert _AUDIO_SESSION_BONUS > 100
+
+    def test_chat_with_audio_bonus_beats_popout_without(self):
+        """Even a chat window scores high when its PID has active audio."""
+        chat_score = _score_meeting_window("Chat | Microsoft Teams", "teams")
+        popout_score = _score_meeting_window("Weekly Standup", "teams")
+        assert chat_score + _AUDIO_SESSION_BONUS > popout_score
 
 
 # ---------------------------------------------------------------------------

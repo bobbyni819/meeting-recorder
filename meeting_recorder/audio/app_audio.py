@@ -9,7 +9,7 @@ from typing import Optional
 import numpy as np
 
 from meeting_recorder.audio.ring_buffer import RingBuffer
-from meeting_recorder.audio.resampling import resample_to_16khz_mono
+from meeting_recorder.audio.resampling import resample_to_16khz_mono, NoiseGate
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ class AppAudioCapture:
         self.chunk_duration_ms = chunk_duration_ms
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._is_process_specific: Optional[bool] = None
+        self._noise_gate = NoiseGate()  # Reduces background hiss during silence
 
     def start(self) -> None:
         """Start capturing audio in a background thread."""
@@ -80,6 +82,26 @@ class AppAudioCapture:
                 "ProcTap stream opened for PID %d: %s", self.pid, fmt
             )
 
+            # Detect whether ProcTap achieved per-process capture or fell back
+            # to system-wide loopback. This uses a private API that may change.
+            try:
+                is_ps = cap._backend._native.is_process_specific()
+                self._is_process_specific = is_ps
+                if is_ps:
+                    logger.info(
+                        "ProcTap capture mode: process-specific "
+                        "(system volume won't affect recording)"
+                    )
+                else:
+                    logger.warning(
+                        "ProcTap capture mode: system-wide fallback "
+                        "(system volume affects recording!)"
+                    )
+            except (AttributeError, Exception):
+                logger.debug(
+                    "Could not detect ProcTap capture mode (private API unavailable)"
+                )
+
             while not self._stop_event.is_set():
                 data = cap.read(timeout=0.5)
                 if data is None or len(data) == 0:
@@ -95,6 +117,10 @@ class AppAudioCapture:
                     target_rate=self.target_sample_rate,
                     source_channels=PROCTAP_CHANNELS,
                 )
+
+                # Apply noise gate to reduce background hiss during silence
+                audio_int16 = self._noise_gate.process(audio_int16)
+
                 self.ring_buffer.put(audio_int16.tobytes())
 
         except ImportError:
@@ -113,6 +139,14 @@ class AppAudioCapture:
                 except Exception:
                     logger.warning("Unexpected error during app audio cleanup", exc_info=True)
             logger.info("App audio capture thread exiting.")
+
+    @property
+    def is_process_specific(self) -> Optional[bool]:
+        """Whether ProcTap is using per-process capture (True) or system-wide fallback (False).
+
+        Returns None if detection hasn't run yet or the private API was unavailable.
+        """
+        return self._is_process_specific
 
     @property
     def is_running(self) -> bool:

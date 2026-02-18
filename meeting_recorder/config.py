@@ -84,6 +84,7 @@ class DashboardConfig:
     position_y: int = -1
     start_collapsed: bool = False
     show_transcript: bool = True
+    show_screen_preview: bool = True
 
 
 @dataclass
