@@ -340,13 +340,43 @@ class CaptureManager:
         return [(hwnd, title) for hwnd, title, _pid in list_visible_windows()]
 
     def switch_screen_window(self, hwnd: int) -> None:
-        """Switch the active screen capture to a different window.
+        """Switch screen capture AND audio capture to the window's owning process.
 
-        Safe to call at any time during recording; takes effect on the
-        next capture frame.
+        Safe to call at any time during recording. Screen switch takes effect on
+        the next capture frame; audio restarts within ~500 ms.
         """
         if self._screen_capture is not None:
             self._screen_capture.switch_window(hwnd)
+
+        # Also switch audio to the process that owns the new window
+        from meeting_recorder.video.window_finder import get_hwnd_pid
+        new_pid = get_hwnd_pid(hwnd)
+        if new_pid and new_pid != self.pid:
+            logger.info(
+                "Window switch: also switching audio capture from PID %d to PID %d",
+                self.pid,
+                new_pid,
+            )
+            self._switch_app_audio_pid(new_pid)
+
+    def _switch_app_audio_pid(self, new_pid: int) -> None:
+        """Hot-swap app audio capture to a different process PID.
+
+        Stops the current capture, creates a new AppAudioCapture on the same
+        ring buffer (so the WAV writer continues uninterrupted), and starts it.
+        """
+        old_capture = self._app_capture
+        old_capture.stop()
+        self._app_capture = AppAudioCapture(
+            pid=new_pid,
+            ring_buffer=self._app_buffer,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            chunk_duration_ms=self.chunk_duration_ms,
+        )
+        self._app_capture.start()
+        self.pid = new_pid
+        logger.info("Audio capture hot-swapped to PID %d", new_pid)
 
     @property
     def is_recording(self) -> bool:

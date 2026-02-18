@@ -51,6 +51,10 @@ class MeetingRecorderApp:
         # Pre-loaded VAD model (loaded once in run(), reused across recordings)
         self._vad: Optional[VoiceActivityDetector] = None
 
+        # Prevents double-invocation of stop_recording() from concurrent callers
+        # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
+        self._stop_lock = threading.Lock()
+
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
         self._capture_mode_reported: bool = False
@@ -225,13 +229,25 @@ class MeetingRecorderApp:
 
     def stop_recording(self) -> None:
         """Stop recording and begin post-processing."""
-        if not self._capture_manager or not self._capture_manager.is_recording:
-            logger.warning("Not currently recording.")
-            return
+        # Lock prevents two concurrent callers (e.g. Stop button + process-exit
+        # auto-stop) from both passing the guard and spawning duplicate
+        # post-processing pipelines.
+        with self._stop_lock:
+            if not self._capture_manager or not self._capture_manager.is_recording:
+                logger.warning("Not currently recording.")
+                return
+            # Grab refs and clear state atomically before releasing the lock so
+            # any racing caller sees _capture_manager = None and bails out.
+            capture_manager = self._capture_manager
+            recording_dir = self._current_recording_dir
+            metadata = self._current_metadata
+            elapsed = capture_manager.elapsed_seconds
+            self._capture_manager = None
+            self._current_recording_dir = None
+            self._current_metadata = None
+            self._current_process = None
 
-        elapsed = self._capture_manager.elapsed_seconds
-        self._capture_manager.stop()
-        self._capture_manager = None
+        capture_manager.stop()
 
         # Hide/close dashboard and persist position
         self._close_dashboard()
@@ -239,13 +255,6 @@ class MeetingRecorderApp:
         duration_str = _format_duration(elapsed)
         notifications.notify_recording_stopped(duration_str)
         logger.info("Recording stopped. Duration: %s", duration_str)
-
-        # Start post-processing in background
-        recording_dir = self._current_recording_dir
-        metadata = self._current_metadata
-        self._current_recording_dir = None
-        self._current_metadata = None
-        self._current_process = None
 
         threading.Thread(
             target=self._post_process,

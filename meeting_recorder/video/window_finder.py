@@ -128,6 +128,13 @@ def get_window_title(hwnd: int) -> str:
     return buf.value
 
 
+def get_hwnd_pid(hwnd: int) -> Optional[int]:
+    """Return the PID that owns the given window handle, or None."""
+    pid = ctypes.wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value if pid.value else None
+
+
 def list_visible_windows() -> list[tuple[int, str, int]]:
     """Enumerate all visible top-level windows with non-empty titles.
 
