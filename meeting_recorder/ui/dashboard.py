@@ -90,6 +90,8 @@ class GameBarDashboard:
         on_toggle_mute: Optional[Callable[[], None]] = None,
         on_open_recordings: Optional[Callable[[], None]] = None,
         on_open_settings: Optional[Callable[[], None]] = None,
+        on_list_windows: Optional[Callable[[], list]] = None,
+        on_pick_window: Optional[Callable[[int], None]] = None,
         opacity: float = 0.92,
         start_collapsed: bool = False,
         show_transcript: bool = True,
@@ -101,6 +103,8 @@ class GameBarDashboard:
         self._on_toggle_mute = on_toggle_mute
         self._on_open_recordings = on_open_recordings
         self._on_open_settings = on_open_settings
+        self._on_list_windows = on_list_windows
+        self._on_pick_window = on_pick_window
         self._opacity = opacity
         self._start_collapsed = start_collapsed
         self._show_transcript = show_transcript
@@ -477,6 +481,18 @@ class GameBarDashboard:
         self._mute_btn.pack(side=tk.LEFT, padx=4, pady=6)
         self._mute_btn.bind("<Button-1>", lambda e: self._handle_mute_toggle())
 
+        # Window picker button (only when screen recording is active)
+        if self._on_list_windows and self._on_pick_window:
+            pick_btn = tk.Label(
+                ctrl_frame, text=" \u29bf Window ", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_CONTROLS, cursor="hand2",
+                relief=tk.GROOVE, padx=6, pady=2,
+            )
+            pick_btn.pack(side=tk.LEFT, padx=4, pady=6)
+            pick_btn.bind("<Button-1>", lambda e: self._open_window_picker())
+            pick_btn.bind("<Enter>", lambda e: pick_btn.configure(fg=TEXT_COLOR))
+            pick_btn.bind("<Leave>", lambda e: pick_btn.configure(fg=TEXT_DIM))
+
         # Elapsed on the right side of controls
         ctrl_elapsed = tk.Label(
             ctrl_frame, text="00:00:00", font=("Segoe UI", 9),
@@ -711,6 +727,86 @@ class GameBarDashboard:
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def _open_window_picker(self) -> None:
+        """Open the window selection dialog (must be called on Tk thread)."""
+        if not self._on_list_windows or not self._on_pick_window or not self._window:
+            return
+
+        windows = self._on_list_windows()  # [(hwnd, title), ...]
+        if not windows:
+            return
+
+        picker = tk.Toplevel(self._window)
+        picker.title("Pick Capture Window")
+        picker.configure(bg=BG_COLOR)
+        picker.attributes("-topmost", True)
+        picker.geometry("420x320")
+        picker.resizable(False, False)
+
+        tk.Label(
+            picker, text="Select the window to capture:",
+            font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
+
+        # Listbox + scrollbar
+        list_frame = tk.Frame(picker, bg=BG_COLOR)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12)
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            bg="#0d0d1a",
+            fg=TEXT_COLOR,
+            selectbackground=BG_CONTROLS,
+            selectforeground=TEXT_COLOR,
+            activestyle="none",
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=1,
+            highlightcolor=BG_CONTROLS,
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=listbox.yview)
+
+        for _hwnd, title in windows:
+            listbox.insert(tk.END, f"  {title}")
+
+        def _confirm():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            chosen_hwnd, chosen_title = windows[sel[0]]
+            picker.destroy()
+            logger.info("User picked capture window: '%s' (HWND %d)", chosen_title, chosen_hwnd)
+            self._on_pick_window(chosen_hwnd)
+
+        listbox.bind("<Double-Button-1>", lambda e: _confirm())
+
+        # Buttons
+        btn_frame = tk.Frame(picker, bg=BG_COLOR)
+        btn_frame.pack(fill=tk.X, padx=12, pady=10)
+
+        sel_btn = tk.Label(
+            btn_frame, text=" Capture This Window ",
+            font=("Segoe UI", 9, "bold"), fg="#ffffff", bg="#0f3460",
+            cursor="hand2", padx=8, pady=4,
+        )
+        sel_btn.pack(side=tk.LEFT)
+        sel_btn.bind("<Button-1>", lambda e: _confirm())
+        sel_btn.bind("<Enter>", lambda e: sel_btn.configure(bg=BUTTON_HOVER))
+        sel_btn.bind("<Leave>", lambda e: sel_btn.configure(bg=BG_CONTROLS))
+
+        cancel_btn = tk.Label(
+            btn_frame, text=" Cancel ",
+            font=("Segoe UI", 9), fg=TEXT_DIM, bg=BUTTON_BG,
+            cursor="hand2", padx=8, pady=4,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=8)
+        cancel_btn.bind("<Button-1>", lambda e: picker.destroy())
 
     def _handle_stop(self) -> None:
         """Handle the Stop button click."""

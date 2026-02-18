@@ -126,3 +126,36 @@ def get_window_title(hwnd: int) -> str:
     buf = ctypes.create_unicode_buffer(length)
     user32.GetWindowTextW(hwnd, buf, length)
     return buf.value
+
+
+def list_visible_windows() -> list[tuple[int, str, int]]:
+    """Enumerate all visible top-level windows with non-empty titles.
+
+    Returns a list of (hwnd, title, pid) tuples, sorted alphabetically
+    by title. Excludes zero-area and untitled windows.
+    """
+    results = []
+
+    def _cb(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        title_len = user32.GetWindowTextLengthW(hwnd)
+        if title_len <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(title_len + 1)
+        user32.GetWindowTextW(hwnd, buf, title_len + 1)
+        title = buf.value.strip()
+        if not title:
+            return True
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        if (rect.right - rect.left) <= 0 or (rect.bottom - rect.top) <= 0:
+            return True
+        pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        results.append((hwnd, title, pid.value))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    results.sort(key=lambda x: x[1].lower())
+    return results

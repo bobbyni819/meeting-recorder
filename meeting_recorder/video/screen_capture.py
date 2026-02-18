@@ -67,6 +67,9 @@ class ScreenCapture:
         # Latest captured frame for live preview. Each frame is a new numpy array
         # (never mutated in-place), so Python's GIL guarantees atomic ref read/write.
         self._latest_frame: Optional[np.ndarray] = None
+        # Pending window switch: set by switch_window(), consumed by capture loop.
+        # Python GIL makes int/None reference assignment atomic.
+        self._override_hwnd: Optional[int] = None
 
     def start(self) -> None:
         """Start the screen capture thread."""
@@ -78,6 +81,16 @@ class ScreenCapture:
         )
         self._thread.start()
         logger.info("Screen capture started for PID %d", self.pid)
+
+    def switch_window(self, hwnd: int) -> None:
+        """Request the capture loop to switch to a different window.
+
+        The switch is applied on the next frame iteration. The video output
+        dimensions stay fixed at the original window's size; frames from the
+        new window are resized to match if necessary.
+        """
+        self._override_hwnd = hwnd
+        logger.info("Window switch requested: HWND %d", hwnd)
 
     def stop(self) -> None:
         """Stop the screen capture thread and finalize the video."""
@@ -207,9 +220,12 @@ class ScreenCapture:
             frame_count = 0
             last_good_frame = None  # Cache for gap-filling dropped frames
 
+            # current_hwnd tracks the active window (can be changed by switch_window())
+            current_hwnd = hwnd
+
             # Determine capture method: try PrintWindow first, fall back to mss
             use_printwindow = True
-            test_frame = self._capture_printwindow(hwnd, init_width, init_height)
+            test_frame = self._capture_printwindow(current_hwnd, init_width, init_height)
             if test_frame is None or np.max(test_frame) < 5:
                 logger.info(
                     "PrintWindow returned blank frame; falling back to mss region capture."
@@ -228,8 +244,38 @@ class ScreenCapture:
             while not self._stop_event.is_set():
                 frame_start = time.monotonic()
 
+                # Check for a pending window-switch request
+                pending = self._override_hwnd
+                if pending is not None and pending != current_hwnd:
+                    self._override_hwnd = None  # consume
+                    new_rect = get_window_rect(pending)
+                    if new_rect is not None:
+                        current_hwnd = pending
+                        new_title = get_window_title(pending)
+                        logger.info(
+                            "Switched capture to: '%s' (HWND %d)", new_title, current_hwnd
+                        )
+                        # Re-probe capture method for the new window
+                        probe = self._capture_printwindow(
+                            current_hwnd, new_rect[2], new_rect[3]
+                        )
+                        if probe is not None and np.max(probe) >= 5:
+                            use_printwindow = True
+                            if sct is not None:
+                                sct.close()
+                                sct = None
+                        else:
+                            use_printwindow = False
+                            if sct is None:
+                                import mss
+                                sct = mss.mss()
+                    else:
+                        logger.warning(
+                            "Requested HWND %d is not visible; ignoring switch.", pending
+                        )
+
                 # Get current window position/size
-                rect = get_window_rect(hwnd)
+                rect = get_window_rect(current_hwnd)
                 if rect is None:
                     # Window minimized or transiently unavailable — repeat last
                     # good frame to avoid black-frame flicker.
@@ -246,7 +292,7 @@ class ScreenCapture:
 
                 try:
                     if use_printwindow:
-                        frame = self._capture_printwindow(hwnd, cur_w, cur_h)
+                        frame = self._capture_printwindow(current_hwnd, cur_w, cur_h)
                         if frame is None:
                             # PrintWindow failed — repeat last good frame instead
                             # of skipping, which causes timing gaps and flicker.

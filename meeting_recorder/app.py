@@ -188,6 +188,14 @@ class MeetingRecorderApp:
                 on_toggle_mute=self._toggle_mute,
                 on_open_recordings=self._open_recordings_folder,
                 on_open_settings=self._open_settings,
+                on_list_windows=(
+                    self._capture_manager.list_capturable_windows
+                    if self.config.screen_recording.enabled else None
+                ),
+                on_pick_window=(
+                    self._on_pick_capture_window
+                    if self.config.screen_recording.enabled else None
+                ),
                 opacity=dash_cfg.opacity,
                 start_collapsed=dash_cfg.start_collapsed,
                 show_transcript=dash_cfg.show_transcript,
@@ -492,6 +500,11 @@ class MeetingRecorderApp:
         output_dir = self.config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(output_dir))
+
+    def _on_pick_capture_window(self, hwnd: int) -> None:
+        """Switch the screen capture to the window the user selected."""
+        if self._capture_manager is not None:
+            self._capture_manager.switch_screen_window(hwnd)
 
     def _register_hotkey(self) -> None:
         """Register global hotkeys for toggling recording and dashboard."""

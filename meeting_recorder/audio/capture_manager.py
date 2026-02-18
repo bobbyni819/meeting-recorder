@@ -331,6 +331,23 @@ class CaptureManager:
             return self._screen_capture.latest_frame
         return None
 
+    def list_capturable_windows(self) -> list[tuple[int, str]]:
+        """Return (hwnd, title) pairs for all visible top-level windows.
+
+        Used to populate the window picker in the recording dashboard.
+        """
+        from meeting_recorder.video.window_finder import list_visible_windows
+        return [(hwnd, title) for hwnd, title, _pid in list_visible_windows()]
+
+    def switch_screen_window(self, hwnd: int) -> None:
+        """Switch the active screen capture to a different window.
+
+        Safe to call at any time during recording; takes effect on the
+        next capture frame.
+        """
+        if self._screen_capture is not None:
+            self._screen_capture.switch_window(hwnd)
+
     @property
     def is_recording(self) -> bool:
         return self._is_recording
