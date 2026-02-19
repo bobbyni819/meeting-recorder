@@ -47,6 +47,24 @@ def _get_audio_rendering_pids(target_pids: set[int]) -> set[int]:
         return set()
 
 
+def _get_descendant_pids(parent_pids: set[int]) -> set[int]:
+    """Get all descendant PIDs of the given parent processes.
+
+    Teams (ms-teams.exe) renders meeting audio through msedgewebview2.exe
+    child processes. This walks the process tree so audio session detection
+    can find those child renderers.
+    """
+    descendants: set[int] = set()
+    for ppid in parent_pids:
+        try:
+            parent = psutil.Process(ppid)
+            for child in parent.children(recursive=True):
+                descendants.add(child.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return descendants
+
+
 # Callback type for EnumWindows
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
@@ -94,7 +112,10 @@ def find_meeting_processes() -> list[MeetingProcess]:
     for proc in psutil.process_iter(["pid", "name"]):
         try:
             pid = proc.info["pid"]
-            pname = proc.info["name"].lower()
+            raw_name = proc.info["name"]
+            if not raw_name:
+                continue
+            pname = raw_name.lower()
 
             if pid in seen_pids:
                 continue
@@ -126,6 +147,7 @@ def _score_meeting_window(title: str, app_key: str) -> int:
     Higher score = more likely to be the actual meeting window.
     Scores:
       100 = Definite meeting (e.g. "Zoom Meeting")
+       80 = Strong meeting signal (e.g. "Meeting with Bobby Ni | Microsoft Teams")
        50 = Likely meeting (e.g. Teams pop-out with meeting subject)
        30 = Possible meeting (e.g. "Sprint Planning | Microsoft Teams")
        10 = Generic app window (e.g. "Microsoft Teams", "Zoom Workplace")
@@ -146,12 +168,22 @@ def _score_meeting_window(title: str, app_key: str) -> int:
         # Exact "Microsoft Teams" is the main chat/activity window
         if t == "microsoft teams":
             return 10
-        # "Chat | ..." is definitely a chat window, not a meeting
+        # Utility/navigation windows — never a meeting
         if t.startswith("chat |") or "| chat |" in t:
             return 5
-        # "{subject} | Microsoft Teams" could be a meeting or a chat tab
+        if "calendar" in t:
+            return 5   # "Calendar | Calendar | Microsoft Teams" etc.
+        if "activity" in t and "microsoft teams" in t:
+            return 5   # Activity feed
+        if "notifications" in t:
+            return 2
+        # "Meeting with ..." or "Teams Meeting" — almost certainly the meeting window
+        if "meeting" in t and "microsoft teams" in t:
+            return 80
+        # "{subject} | Microsoft Teams" — likely a meeting or open channel; score higher
+        # than calendar/chat so a real meeting subject beats utility windows
         if "microsoft teams" in t:
-            return 30
+            return 35
         # A Teams-process window WITHOUT "Microsoft Teams" in the title
         # is typically the meeting pop-out window (just shows the subject)
         return 50
@@ -194,8 +226,17 @@ def _find_meeting_window_pid(app_key: str) -> tuple[int | None, int]:
     if not target_pids:
         return (None, 0)
 
+    # Include child processes in audio detection — Teams renders audio
+    # through msedgewebview2.exe children, not through ms-teams.exe itself.
+    child_pids = _get_descendant_pids(target_pids)
+    audio_candidate_pids = target_pids | child_pids
+    if child_pids:
+        logger.debug(
+            "Including %d child PIDs for %s audio detection", len(child_pids), app_key,
+        )
+
     # Check which PIDs are actively rendering audio (strong meeting signal)
-    audio_pids = _get_audio_rendering_pids(target_pids)
+    audio_pids = _get_audio_rendering_pids(audio_candidate_pids)
     if audio_pids:
         logger.info(
             "Audio-active PIDs for %s: %s", app_key, sorted(audio_pids),

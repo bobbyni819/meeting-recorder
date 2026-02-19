@@ -21,6 +21,12 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 BUNDLED_CONFIG = Path(__file__).parent.parent / "config.toml"
 
 
+def _safe_init(cls, data: dict, section: str):
+    """Create a dataclass instance from a dict, ignoring unknown keys."""
+    raw = data.get(section, {})
+    return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
+
+
 @dataclass
 class RecordingConfig:
     output_dir: str = "~/MeetingRecordings"
@@ -46,11 +52,13 @@ class VadConfig:
 
 @dataclass
 class TranscriptionConfig:
-    backend: str = "local"
+    backend: str = "local"        # "local", "cloud", or "gemini"
     model_size: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "float16"
     openai_api_key: str = ""
+    gemini_api_key: str = ""
+    gemini_model: str = ""        # empty = use GeminiTranscriber.DEFAULT_MODEL
 
 
 @dataclass
@@ -109,7 +117,7 @@ class GoogleDriveConfig:
 @dataclass
 class SummaryConfig:
     enabled: bool = False
-    provider: str = "openai"      # "openai" or "anthropic"
+    provider: str = "openai"      # "openai", "anthropic", or "gemini"
     api_key: str = ""
     model: str = ""               # empty = provider default
     max_transcript_tokens: int = 0  # 0 = no limit
@@ -154,44 +162,32 @@ class Config:
     def _from_dict(cls, data: dict) -> Config:
         """Create Config from a dictionary, using defaults for missing keys."""
         return cls(
-            recording=RecordingConfig(**data.get("recording", {})),
-            audio=AudioConfig(**data.get("audio", {})),
-            vad=VadConfig(**data.get("vad", {})),
-            transcription=TranscriptionConfig(**data.get("transcription", {})),
-            diarization=DiarizationConfig(**{
-                k: v for k, v in data.get("diarization", {}).items()
-                if k in DiarizationConfig.__dataclass_fields__
-            }),
-            output=OutputConfig(**data.get("output", {})),
-            hotkey=HotkeyConfig(**data.get("hotkey", {})),
-            screen_recording=ScreenRecordingConfig(**{
-                k: v for k, v in data.get("screen_recording", {}).items()
-                if k in ScreenRecordingConfig.__dataclass_fields__
-            }),
-            outlook=OutlookConfig(**{
-                k: v for k, v in data.get("outlook", {}).items()
-                if k in OutlookConfig.__dataclass_fields__
-            }),
-            google_drive=GoogleDriveConfig(**{
-                k: v for k, v in data.get("google_drive", {}).items()
-                if k in GoogleDriveConfig.__dataclass_fields__
-            }),
-            summary=SummaryConfig(**{
-                k: v for k, v in data.get("summary", {}).items()
-                if k in SummaryConfig.__dataclass_fields__
-            }),
-            dashboard=DashboardConfig(**{
-                k: v for k, v in data.get("dashboard", {}).items()
-                if k in DashboardConfig.__dataclass_fields__
-            }),
+            recording=_safe_init(RecordingConfig, data, "recording"),
+            audio=_safe_init(AudioConfig, data, "audio"),
+            vad=_safe_init(VadConfig, data, "vad"),
+            transcription=_safe_init(TranscriptionConfig, data, "transcription"),
+            diarization=_safe_init(DiarizationConfig, data, "diarization"),
+            output=_safe_init(OutputConfig, data, "output"),
+            hotkey=_safe_init(HotkeyConfig, data, "hotkey"),
+            screen_recording=_safe_init(ScreenRecordingConfig, data, "screen_recording"),
+            outlook=_safe_init(OutlookConfig, data, "outlook"),
+            google_drive=_safe_init(GoogleDriveConfig, data, "google_drive"),
+            summary=_safe_init(SummaryConfig, data, "summary"),
+            dashboard=_safe_init(DashboardConfig, data, "dashboard"),
         )
 
     def save(self) -> None:
-        """Save current config to file."""
+        """Save current config to file.
+
+        Uses atomic write (write to temp file then rename) to prevent
+        corruption if the process crashes during the write.
+        """
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
-        with open(CONFIG_FILE, "wb") as f:
+        tmp_path = CONFIG_FILE.with_suffix(".toml.tmp")
+        with open(tmp_path, "wb") as f:
             tomli_w.dump(data, f)
+        tmp_path.replace(CONFIG_FILE)  # atomic on NTFS
 
     @property
     def output_dir(self) -> Path:

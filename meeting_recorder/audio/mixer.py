@@ -136,11 +136,15 @@ def mix_tracks_streaming(
                 app_samples = np.frombuffer(app_bytes, dtype=np.int16) if app_bytes else np.array([], dtype=np.int16)
                 mic_samples = np.frombuffer(mic_bytes, dtype=np.int16) if mic_bytes else np.array([], dtype=np.int16)
 
-                # Zero-pad if one track is shorter
-                if len(app_samples) < expected_samples:
-                    app_samples = np.pad(app_samples, (0, expected_samples - len(app_samples)))
-                if len(mic_samples) < expected_samples:
-                    mic_samples = np.pad(mic_samples, (0, expected_samples - len(mic_samples)))
+                # Fast path: both tracks have expected length (common case)
+                if len(app_samples) == expected_samples and len(mic_samples) == expected_samples:
+                    pass  # no padding needed
+                else:
+                    # Zero-pad if one track is shorter (near EOF)
+                    if len(app_samples) < expected_samples:
+                        app_samples = np.pad(app_samples, (0, expected_samples - len(app_samples)))
+                    if len(mic_samples) < expected_samples:
+                        mic_samples = np.pad(mic_samples, (0, expected_samples - len(mic_samples)))
 
                 # Mix and clip
                 mixed = app_samples.astype(np.float32) * app_volume + mic_samples.astype(np.float32) * mic_volume

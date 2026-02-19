@@ -53,10 +53,16 @@ class RecordingMetadata:
     summary_model: str = ""
 
     def save(self, recording_dir: Path) -> None:
-        """Save metadata to a JSON file in the recording directory."""
+        """Save metadata to a JSON file in the recording directory.
+
+        Uses atomic write (write to temp file then rename) to prevent
+        corruption if the process crashes during the write.
+        """
         path = recording_dir / METADATA_FILENAME
-        with open(path, "w", encoding="utf-8") as f:
+        tmp_path = path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(asdict(self), f, indent=2, ensure_ascii=False)
+        tmp_path.replace(path)  # atomic on NTFS
         logger.debug("Metadata saved: %s", path)
 
     @classmethod

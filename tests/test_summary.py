@@ -311,9 +311,16 @@ class TestCreateProvider:
         assert provider.api_key == "sk-ant-test"
 
     def test_unknown_provider_raises(self):
-        config = MockSummaryConfig(provider="gemini", api_key="test-key")
+        config = MockSummaryConfig(provider="notareal_provider", api_key="test-key")
         with pytest.raises(ValueError, match="Unknown summary provider"):
             create_provider(config)
+
+    def test_gemini_provider_created(self):
+        config = MockSummaryConfig(provider="gemini", api_key="test-key", model="gemini-2.0-flash")
+        provider = create_provider(config)
+        from meeting_recorder.summary.summarizer import GeminiSummaryProvider
+        assert isinstance(provider, GeminiSummaryProvider)
+        assert provider.model == "gemini-2.0-flash"
 
     def test_empty_api_key_raises(self):
         config = MockSummaryConfig(provider="openai", api_key="")

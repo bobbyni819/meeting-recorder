@@ -92,6 +92,7 @@ class GameBarDashboard:
         on_open_settings: Optional[Callable[[], None]] = None,
         on_list_windows: Optional[Callable[[], list]] = None,
         on_pick_window: Optional[Callable[[int], None]] = None,
+        on_toggle_audio_mode: Optional[Callable[[], None]] = None,
         opacity: float = 0.92,
         start_collapsed: bool = False,
         show_transcript: bool = True,
@@ -105,6 +106,7 @@ class GameBarDashboard:
         self._on_open_settings = on_open_settings
         self._on_list_windows = on_list_windows
         self._on_pick_window = on_pick_window
+        self._on_toggle_audio_mode = on_toggle_audio_mode
         self._opacity = opacity
         self._start_collapsed = start_collapsed
         self._show_transcript = show_transcript
@@ -128,10 +130,13 @@ class GameBarDashboard:
         self._mute_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
         self._capture_warning_label: Optional[tk.Label] = None
+        self._audio_mode_btn: Optional[tk.Label] = None
         self._collapsed_elapsed: Optional[tk.Label] = None
         self._preview_label: Optional[tk.Label] = None
         self._preview_photo = None  # ImageTk.PhotoImage ref (prevent Tk GC)
         self._show_screen_preview: bool = False
+        self._ctrl_elapsed_label: Optional[tk.Label] = None
+        self._collapsed_dot: Optional[tk.Label] = None
 
         # VU state
         self._app_vu_fraction = 0.0
@@ -278,6 +283,15 @@ class GameBarDashboard:
             return
         try:
             self._window.after(0, self._set_capture_warning, is_process_specific)
+        except tk.TclError:
+            pass
+
+    def update_audio_mode(self, is_desktop: bool) -> None:
+        """Update the audio mode toggle button appearance (thread-safe)."""
+        if self._window is None or not self._is_visible:
+            return
+        try:
+            self._window.after(0, self._set_audio_mode, is_desktop)
         except tk.TclError:
             pass
 
@@ -493,6 +507,24 @@ class GameBarDashboard:
             pick_btn.bind("<Enter>", lambda e: pick_btn.configure(fg=TEXT_COLOR))
             pick_btn.bind("<Leave>", lambda e: pick_btn.configure(fg=TEXT_DIM))
 
+        # Audio mode toggle button (app ↔ desktop)
+        if self._on_toggle_audio_mode:
+            self._audio_mode_btn = tk.Label(
+                ctrl_frame, text=" App Audio ", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_CONTROLS, cursor="hand2",
+                relief=tk.GROOVE, padx=6, pady=2,
+            )
+            self._audio_mode_btn.pack(side=tk.LEFT, padx=4, pady=6)
+            self._audio_mode_btn.bind("<Button-1>", lambda e: self._on_toggle_audio_mode())
+            self._audio_mode_btn.bind(
+                "<Enter>", lambda e: self._audio_mode_btn.configure(fg=TEXT_COLOR)
+                if self._audio_mode_btn.cget("fg") != AMBER_WARNING else None
+            )
+            self._audio_mode_btn.bind(
+                "<Leave>", lambda e: self._audio_mode_btn.configure(fg=TEXT_DIM)
+                if self._audio_mode_btn.cget("fg") != AMBER_WARNING else None
+            )
+
         # Elapsed on the right side of controls
         ctrl_elapsed = tk.Label(
             ctrl_frame, text="00:00:00", font=("Segoe UI", 9),
@@ -639,7 +671,7 @@ class GameBarDashboard:
         """Set elapsed time on all relevant labels."""
         if self._elapsed_label:
             self._elapsed_label.configure(text=f"Recording {text}")
-        if hasattr(self, '_ctrl_elapsed_label') and self._ctrl_elapsed_label:
+        if self._ctrl_elapsed_label:
             self._ctrl_elapsed_label.configure(text=text)
         if self._collapsed_elapsed:
             self._collapsed_elapsed.configure(text=text)
@@ -651,6 +683,16 @@ class GameBarDashboard:
                 self._capture_warning_label.pack_forget()
             else:
                 self._capture_warning_label.pack(fill=tk.X, padx=10, pady=(2, 0))
+
+    def _set_audio_mode(self, is_desktop: bool) -> None:
+        """Update the audio mode button text, color, and capture warning."""
+        if self._audio_mode_btn:
+            if is_desktop:
+                self._audio_mode_btn.configure(text=" Desktop Audio ", fg=AMBER_WARNING)
+            else:
+                self._audio_mode_btn.configure(text=" App Audio ", fg=TEXT_DIM)
+        # Also toggle the capture warning label
+        self._set_capture_warning(not is_desktop)
 
     def _set_mute_display(self, is_muted: bool) -> None:
         """Update the mute button text and color."""
@@ -691,7 +733,7 @@ class GameBarDashboard:
         try:
             if self._red_dot_label:
                 self._red_dot_label.configure(fg=color)
-            if hasattr(self, '_collapsed_dot') and self._collapsed_dot:
+            if self._collapsed_dot:
                 self._collapsed_dot.configure(fg=color)
             self._pulse_after_id = self._window.after(500, self._pulse_tick)
         except tk.TclError:

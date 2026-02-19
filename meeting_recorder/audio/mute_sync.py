@@ -52,6 +52,7 @@ class MuteSync:
         self._on_mute_changed = on_mute_changed
         self._lock = threading.Lock()
         self._started = False
+        self._manual_hotkey: str = ""
 
     @property
     def is_muted(self) -> bool:
@@ -129,7 +130,7 @@ class MuteSync:
             shortcut = APP_MUTE_SHORTCUTS.get(self._app_key)
             if shortcut:
                 keyboard.remove_hotkey(shortcut)
-            if hasattr(self, '_manual_hotkey'):
+            if self._manual_hotkey:
                 keyboard.remove_hotkey(self._manual_hotkey)
         except Exception:
             logger.debug("Failed to remove mute sync hotkeys", exc_info=True)
@@ -177,7 +178,7 @@ def get_all_pids_for_process(process_name: str) -> set[int]:
     pids = set()
     for proc in psutil.process_iter(["pid", "name"]):
         try:
-            if proc.info["name"].lower() == process_name.lower():
+            if proc.info["name"] and proc.info["name"].lower() == process_name.lower():
                 pids.add(proc.info["pid"])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue

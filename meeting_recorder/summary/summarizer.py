@@ -99,6 +99,33 @@ class AnthropicSummaryProvider:
         return response.content[0].text
 
 
+class GeminiSummaryProvider:
+    """Gemini-based summary provider.
+
+    Uses the same system/user prompt as other providers — Gemini is instructed
+    to return JSON so the existing _parse_summary_response() can handle it.
+    Uses the current ``google-genai`` SDK (not the deprecated ``google.generativeai``).
+    """
+
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+        self.api_key = api_key
+        self.model = model
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=self.api_key)
+        response = client.models.generate_content(
+            model=self.model,
+            contents=f"{system_prompt}\n\n{user_prompt}",
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            ),
+        )
+        return response.text
+
+
 def create_provider(config) -> SummaryProvider:
     """Factory to create the appropriate summary provider.
 
@@ -120,6 +147,9 @@ def create_provider(config) -> SummaryProvider:
     elif config.provider == "anthropic":
         model = config.model or "claude-sonnet-4-20250514"
         return AnthropicSummaryProvider(api_key=config.api_key, model=model)
+    elif config.provider == "gemini":
+        model = config.model or "gemini-2.0-flash"
+        return GeminiSummaryProvider(api_key=config.api_key, model=model)
     else:
         raise ValueError(f"Unknown summary provider: {config.provider}")
 
@@ -183,6 +213,12 @@ def generate_summary(
         speaker = seg.speaker or "Unknown"
         transcript_lines.append(f"[{seg.start:.1f}s] {speaker}: {seg.text}")
     transcript_text = "\n".join(transcript_lines)
+
+    # Truncate if max_transcript_tokens is set
+    if config.max_transcript_tokens > 0:
+        max_chars = config.max_transcript_tokens * 4  # rough token estimate
+        if len(transcript_text) > max_chars:
+            transcript_text = transcript_text[:max_chars] + "\n[...transcript truncated...]"
 
     # Compute participant stats (deterministic)
     stats = compute_participant_stats(segments)

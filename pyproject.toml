@@ -46,6 +46,9 @@ summary-openai = [
 summary-anthropic = [
     "anthropic>=0.18",
 ]
+gemini = [
+    "google-genai>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.1",
@@ -54,6 +57,7 @@ e2e = [
     "sounddevice>=0.4",
     "soundfile>=0.12",
     "playwright>=1.40",
+    "pyttsx3>=2.90",
 ]
 
 [project.scripts]

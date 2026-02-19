@@ -13,6 +13,7 @@ from meeting_recorder.audio.process_finder import (
     _find_meeting_window_pid,
     _score_meeting_window,
     _get_audio_rendering_pids,
+    _get_descendant_pids,
     _AUDIO_SESSION_BONUS,
     MEETING_APPS,
     MeetingProcess,
@@ -137,6 +138,19 @@ class TestFindMeetingProcesses:
         result = find_meeting_processes()
         assert len(result) == 1
 
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_skips_processes_with_none_name(self, mock_psutil):
+        """Processes with None name (e.g. system idle) should be skipped."""
+        mock_psutil.process_iter.return_value = [
+            _make_mock_process(0, None),
+            _make_mock_process(4, None),
+            _make_mock_process(100, "zoom.exe"),
+        ]
+
+        result = find_meeting_processes()
+        assert len(result) == 1
+        assert result[0].pid == 100
+
 
 # ---------------------------------------------------------------------------
 # find_primary_meeting_process -- priority
@@ -163,8 +177,18 @@ class TestScoreMeetingWindow:
         assert _score_meeting_window("Chat | Microsoft Teams", "teams") == 5
 
     def test_teams_named_tab_window(self):
-        """Calendar, channels, etc. — might be meeting, might not."""
-        assert _score_meeting_window("Sprint Planning | Microsoft Teams", "teams") == 30
+        """Subject | Microsoft Teams windows score 35 — above calendar (5) but below pop-outs (50)."""
+        assert _score_meeting_window("Sprint Planning | Microsoft Teams", "teams") == 35
+        assert _score_meeting_window("Weekly Sync | Microsoft Teams", "teams") == 35
+
+    def test_teams_calendar_penalized(self):
+        """Calendar windows should score very low — never a meeting."""
+        assert _score_meeting_window("Calendar | Calendar | Microsoft Teams", "teams") == 5
+        assert _score_meeting_window("My Calendar | Microsoft Teams", "teams") == 5
+
+    def test_teams_activity_penalized(self):
+        """Activity feed should score very low."""
+        assert _score_meeting_window("Activity | Microsoft Teams", "teams") == 5
 
     def test_teams_meeting_popout(self):
         """Pop-out meeting windows don't have 'Microsoft Teams' in the title."""
@@ -176,6 +200,16 @@ class TestScoreMeetingWindow:
         popout = _score_meeting_window("Sprint Planning", "teams")
         generic = _score_meeting_window("Microsoft Teams", "teams")
         assert popout > generic
+
+    def test_teams_meeting_title_scores_high(self):
+        """'Meeting with ...' and 'Teams Meeting' titles should outscore calendar."""
+        assert _score_meeting_window("Meeting with Bobby Ni | Microsoft Teams", "teams") == 80
+        assert _score_meeting_window("Teams Meeting | Microsoft Teams", "teams") == 80
+
+    def test_teams_meeting_beats_calendar(self):
+        meeting = _score_meeting_window("Meeting with Bobby Ni | Microsoft Teams", "teams")
+        calendar = _score_meeting_window("Calendar | Calendar | Microsoft Teams", "teams")
+        assert meeting > calendar
 
     def test_empty_title_scores_zero(self):
         assert _score_meeting_window("", "zoom") == 0
@@ -358,6 +392,89 @@ class TestAudioSessionDetection:
         chat_score = _score_meeting_window("Chat | Microsoft Teams", "teams")
         popout_score = _score_meeting_window("Weekly Standup", "teams")
         assert chat_score + _AUDIO_SESSION_BONUS > popout_score
+
+
+# ---------------------------------------------------------------------------
+# Descendant PID detection (Teams WebView2 child processes)
+# ---------------------------------------------------------------------------
+
+class TestGetDescendantPids:
+    """Test _get_descendant_pids helper for finding child processes."""
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_finds_child_pids(self, mock_psutil):
+        """Should return PIDs of child processes."""
+        mock_child1 = mock.Mock()
+        mock_child1.pid = 501
+        mock_child2 = mock.Mock()
+        mock_child2.pid = 502
+
+        mock_parent = mock.Mock()
+        mock_parent.children.return_value = [mock_child1, mock_child2]
+        mock_psutil.Process.return_value = mock_parent
+
+        result = _get_descendant_pids({100})
+        assert result == {501, 502}
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_calls_children_recursively(self, mock_psutil):
+        """Should use recursive=True to find grandchildren (WebView2 nesting)."""
+        mock_parent = mock.Mock()
+        mock_parent.children.return_value = []
+        mock_psutil.Process.return_value = mock_parent
+
+        _get_descendant_pids({100})
+        mock_parent.children.assert_called_once_with(recursive=True)
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_handles_no_such_process(self, mock_psutil):
+        """Should gracefully handle NoSuchProcess (dead parent)."""
+        import psutil as real_psutil
+        mock_psutil.Process.side_effect = real_psutil.NoSuchProcess(pid=999)
+        mock_psutil.NoSuchProcess = real_psutil.NoSuchProcess
+        mock_psutil.AccessDenied = real_psutil.AccessDenied
+
+        result = _get_descendant_pids({999})
+        assert result == set()
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_handles_access_denied(self, mock_psutil):
+        """Should gracefully handle AccessDenied."""
+        import psutil as real_psutil
+        mock_psutil.Process.side_effect = real_psutil.AccessDenied(pid=999)
+        mock_psutil.NoSuchProcess = real_psutil.NoSuchProcess
+        mock_psutil.AccessDenied = real_psutil.AccessDenied
+
+        result = _get_descendant_pids({999})
+        assert result == set()
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_empty_input_returns_empty(self, mock_psutil):
+        """Empty parent set should return empty descendants."""
+        result = _get_descendant_pids(set())
+        assert result == set()
+        mock_psutil.Process.assert_not_called()
+
+    @mock.patch("meeting_recorder.audio.process_finder.psutil")
+    def test_multiple_parents(self, mock_psutil):
+        """Should collect children from all parent PIDs."""
+        mock_child_a = mock.Mock()
+        mock_child_a.pid = 501
+        mock_child_b = mock.Mock()
+        mock_child_b.pid = 601
+
+        parent_a = mock.Mock()
+        parent_a.children.return_value = [mock_child_a]
+        parent_b = mock.Mock()
+        parent_b.children.return_value = [mock_child_b]
+
+        def make_process(pid):
+            return {100: parent_a, 200: parent_b}[pid]
+
+        mock_psutil.Process.side_effect = make_process
+
+        result = _get_descendant_pids({100, 200})
+        assert result == {501, 601}
 
 
 # ---------------------------------------------------------------------------

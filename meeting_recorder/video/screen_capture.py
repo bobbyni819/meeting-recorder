@@ -199,12 +199,20 @@ class ScreenCapture:
 
             _, _, init_width, init_height = rect
 
-            # Initialize video writer
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(
-                self.output_path, fourcc, self.fps, (init_width, init_height)
-            )
-            if not writer.isOpened():
+            # Initialize video writer — try H.264 first (3-5x smaller), fall back to mp4v
+            writer = None
+            for codec in ("avc1", "mp4v"):
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                writer = cv2.VideoWriter(
+                    self.output_path, fourcc, self.fps, (init_width, init_height)
+                )
+                if writer.isOpened():
+                    logger.info("Screen recording codec: %s", codec)
+                    break
+                writer.release()
+                writer = None
+
+            if writer is None or not writer.isOpened():
                 logger.error("Failed to open video writer for %s", self.output_path)
                 return
 

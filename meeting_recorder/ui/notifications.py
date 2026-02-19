@@ -37,6 +37,11 @@ def notify_no_meeting_found() -> None:
     _show("No Meeting Found", "Could not find Zoom, Teams, or Webex running.")
 
 
+def notify_info(message: str) -> None:
+    """Show an informational notification."""
+    _show("Meeting Recorder", message)
+
+
 def _show(title: str, message: str) -> None:
     """Show a Windows toast notification."""
     try:

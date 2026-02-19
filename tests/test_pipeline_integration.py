@@ -346,3 +346,103 @@ class TestParallelPipeline:
                 )
                 pipeline.process(tmp_path, attendees=["Alice"])
                 mock_voice.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Gemini pipeline path tests (no API dependency)
+# ---------------------------------------------------------------------------
+
+class TestGeminiPipeline:
+    """Test the Gemini fast-path in TranscriptionPipeline."""
+
+    def test_gemini_uses_mixed_wav_when_available(self, tmp_path: Path):
+        """Gemini should prefer mixed.wav when it exists."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = "test-key"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+
+        expected = [TranscriptSegment(start=0.0, end=5.0, text="hello", speaker="Alice")]
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = expected
+        pipeline._transcriber = mock_transcriber
+
+        segments = pipeline.process(tmp_path)
+
+        mock_transcriber.transcribe.assert_called_once()
+        called_path = mock_transcriber.transcribe.call_args[0][0]
+        assert called_path.name == "mixed.wav"
+        assert segments == expected
+
+    def test_gemini_falls_back_to_app_audio(self, tmp_path: Path):
+        """When no mixed.wav exists, Gemini should use app_audio.wav."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = "test-key"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+
+        expected = [TranscriptSegment(start=0.0, end=5.0, text="test", speaker="Bob")]
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = expected
+        pipeline._transcriber = mock_transcriber
+
+        segments = pipeline.process(tmp_path)
+
+        called_path = mock_transcriber.transcribe.call_args[0][0]
+        assert called_path.name == "app_audio.wav"
+
+    def test_gemini_skips_diarization(self, tmp_path: Path):
+        """Gemini path should not call the diarizer."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = "test-key"
+        config.diarization.enabled = True
+        config.diarization.huggingface_token = "fake-token"
+
+        pipeline = TranscriptionPipeline(config)
+
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=5.0, text="hi", speaker="S1")
+        ]
+        pipeline._transcriber = mock_transcriber
+
+        mock_diarizer = MagicMock()
+        pipeline._diarizer = mock_diarizer
+
+        pipeline.process(tmp_path)
+
+        mock_diarizer.diarize.assert_not_called()
+
+    def test_gemini_raises_when_no_audio(self, tmp_path: Path):
+        """Gemini path should raise FileNotFoundError when no audio file exists."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = "test-key"
+
+        pipeline = TranscriptionPipeline(config)
+
+        mock_transcriber = MagicMock()
+        pipeline._transcriber = mock_transcriber
+
+        with pytest.raises(FileNotFoundError, match="No audio file found"):
+            pipeline.process(tmp_path)

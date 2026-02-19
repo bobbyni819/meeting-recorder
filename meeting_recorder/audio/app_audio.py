@@ -134,8 +134,8 @@ class AppAudioCapture:
                 try:
                     cap.stop()
                     cap.close()
-                except OSError:
-                    pass  # Expected device-release errors
+                except OSError as e:
+                    logger.debug("Device release during app audio cleanup: %s", e)
                 except Exception:
                     logger.warning("Unexpected error during app audio cleanup", exc_info=True)
             logger.info("App audio capture thread exiting.")

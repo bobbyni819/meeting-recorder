@@ -44,7 +44,19 @@ class TranscriptionPipeline:
             return self._transcriber
 
         tc = self.config.transcription
-        if tc.backend == "cloud":
+        if tc.backend == "gemini":
+            from meeting_recorder.transcription.gemini_transcriber import GeminiTranscriber
+            if not tc.gemini_api_key:
+                raise ValueError(
+                    "Gemini API key required for Gemini transcription. "
+                    "Set transcription.gemini_api_key in ~/.meeting_recorder/config.toml"
+                )
+            self._transcriber = GeminiTranscriber(
+                api_key=tc.gemini_api_key,
+                language=self.config.recording.language,
+                model=tc.gemini_model,
+            )
+        elif tc.backend == "cloud":
             if not tc.openai_api_key:
                 raise ValueError("OpenAI API key required for cloud transcription.")
             self._transcriber = CloudWhisperTranscriber(
@@ -102,8 +114,26 @@ class TranscriptionPipeline:
         mic_audio = recording_dir / "mic_audio.wav"
         mixed_audio = recording_dir / "mixed.wav"
 
-        transcriber = self._get_transcriber()
         user_name = self.config.recording.user_name
+
+        # Gemini fast path: send the mixed audio to the API in a single call.
+        # Gemini handles multi-speaker identification natively, so we skip
+        # pyannote diarization (which would be redundant and slower).
+        if self.config.transcription.backend == "gemini":
+            audio_path = mixed_audio if mixed_audio.exists() else app_audio
+            if not audio_path.exists():
+                raise FileNotFoundError(f"No audio file found in {recording_dir}")
+            transcriber = self._get_transcriber()
+            segments = transcriber.transcribe(audio_path)
+            # Still attempt calendar-based speaker name resolution on top of
+            # Gemini's generic "Speaker 1 / Speaker 2" labels.
+            self._resolve_speakers(
+                segments, attendees, organizer, user_name, audio_path=None,
+            )
+            logger.info("Gemini pipeline complete: %d segments", len(segments))
+            return segments
+
+        transcriber = self._get_transcriber()
 
         # Strategy: Transcribe both tracks separately for better speaker identification
         # If separate tracks exist, transcribe them independently

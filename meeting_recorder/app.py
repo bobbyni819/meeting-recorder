@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import subprocess
@@ -51,6 +52,12 @@ class MeetingRecorderApp:
         # Pre-loaded VAD model (loaded once in run(), reused across recordings)
         self._vad: Optional[VoiceActivityDetector] = None
 
+        # Snapshot of config at recording start (used for post-processing)
+        self._recording_config: Optional[Config] = None
+
+        # Post-processing thread (non-daemon, so quit() can wait for it)
+        self._post_thread: Optional[threading.Thread] = None
+
         # Prevents double-invocation of stop_recording() from concurrent callers
         # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
         self._stop_lock = threading.Lock()
@@ -93,7 +100,8 @@ class MeetingRecorderApp:
 
     def start_recording(self) -> None:
         """Start recording the active meeting."""
-        if self._capture_manager and self._capture_manager.is_recording:
+        cm = self._capture_manager
+        if cm and cm.is_recording:
             logger.warning("Already recording.")
             return
 
@@ -120,6 +128,9 @@ class MeetingRecorderApp:
 
     def _start_recording_for_process(self, process: MeetingProcess) -> None:
         """Inner method that performs all recording setup. Raises on failure."""
+        # Snapshot config so mid-recording settings changes don't affect post-processing
+        self._recording_config = copy.deepcopy(self.config)
+
         # Query Outlook calendar for meeting context
         calendar_event = None
         meeting_subject = ""
@@ -179,6 +190,8 @@ class MeetingRecorderApp:
             live_transcription_enabled=self.config.recording.live_transcription,
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
+            on_health_warning=self._on_health_warning,
+            on_capture_mode_changed=self._on_capture_mode_changed,
         )
         self._capture_mode_reported = False
         self._preview_frame_counter = 0
@@ -192,14 +205,9 @@ class MeetingRecorderApp:
                 on_toggle_mute=self._toggle_mute,
                 on_open_recordings=self._open_recordings_folder,
                 on_open_settings=self._open_settings,
-                on_list_windows=(
-                    self._capture_manager.list_capturable_windows
-                    if self.config.screen_recording.enabled else None
-                ),
-                on_pick_window=(
-                    self._on_pick_capture_window
-                    if self.config.screen_recording.enabled else None
-                ),
+                on_list_windows=self._capture_manager.list_capturable_windows,
+                on_pick_window=self._on_pick_capture_window,
+                on_toggle_audio_mode=self._toggle_audio_mode,
                 opacity=dash_cfg.opacity,
                 start_collapsed=dash_cfg.start_collapsed,
                 show_transcript=dash_cfg.show_transcript,
@@ -241,11 +249,13 @@ class MeetingRecorderApp:
             capture_manager = self._capture_manager
             recording_dir = self._current_recording_dir
             metadata = self._current_metadata
+            recording_config = self._recording_config
             elapsed = capture_manager.elapsed_seconds
             self._capture_manager = None
             self._current_recording_dir = None
             self._current_metadata = None
             self._current_process = None
+            self._recording_config = None
 
         capture_manager.stop()
 
@@ -256,24 +266,57 @@ class MeetingRecorderApp:
         notifications.notify_recording_stopped(duration_str)
         logger.info("Recording stopped. Duration: %s", duration_str)
 
-        threading.Thread(
+        self._post_thread = threading.Thread(
             target=self._post_process,
-            args=(recording_dir, metadata),
+            args=(recording_dir, metadata, recording_config),
             name="post-processing",
-            daemon=True,
-        ).start()
+            daemon=False,
+        )
+        self._post_thread.start()
 
     def quit(self) -> None:
         """Quit the application."""
         logger.info("Quitting Meeting Recorder...")
-        if self._capture_manager and self._capture_manager.is_recording:
-            self._capture_manager.stop()
+        cm = self._capture_manager
+        if cm and cm.is_recording:
+            # Use stop_recording() so post-processing (mix + transcribe) runs.
+            # Just calling _capture_manager.stop() would save audio but skip
+            # transcription, leaving the recording in "recording" status.
+            self.stop_recording()
         self._close_dashboard()
+        # Force-close dashboard on quit even if auto_hide is False.
+        # _close_dashboard() only closes when auto_hide=True, but on quit we
+        # always want to destroy the window to avoid a brief zombie overlay.
+        if self._dashboard:
+            self._dashboard.close()
+            self._dashboard = None
+
+        # Wait for post-processing to finish so transcriptions are not lost
+        if self._post_thread and self._post_thread.is_alive():
+            logger.info("Waiting for post-processing to complete...")
+            notifications.notify_info("Finishing transcription, please wait...")
+            self._post_thread.join(timeout=300)  # 5 min max
+            if self._post_thread.is_alive():
+                logger.warning("Post-processing still running after timeout.")
+
         self._unregister_hotkey()
         self._tray.stop()
 
-    def _post_process(self, recording_dir: Path, metadata: RecordingMetadata) -> None:
-        """Run post-recording pipeline: mix, transcribe, format."""
+    def _post_process(
+        self,
+        recording_dir: Path,
+        metadata: RecordingMetadata,
+        config: Optional[Config] = None,
+    ) -> None:
+        """Run post-recording pipeline: mix, transcribe, format.
+
+        Args:
+            recording_dir: Directory containing audio files.
+            metadata: Recording metadata.
+            config: Config snapshot from recording start.  Falls back to
+                self.config if None (for backwards compatibility).
+        """
+        cfg = config or self.config
         try:
             self._tray.set_state("processing", "Transcribing...")
             notifications.notify_transcription_started()
@@ -295,6 +338,11 @@ class MeetingRecorderApp:
                 organizer=metadata.meeting_organizer,
             )
 
+            # Clean up transient mixed.wav — it's large and only needed for transcription
+            if mixed_audio.exists():
+                mixed_audio.unlink()
+                logger.info("Cleaned up transient mixed.wav")
+
             # Store speaker mapping from pipeline
             mapping = self._pipeline.last_speaker_mapping
             if mapping is not None:
@@ -306,14 +354,19 @@ class MeetingRecorderApp:
             save_all_formats(
                 segments,
                 recording_dir,
-                formats=self.config.output.formats,
+                formats=cfg.output.formats,
             )
 
-            # Generate AI summary if enabled
-            if self.config.summary.enabled:
-                self._generate_summary(recording_dir, segments, metadata)
+            # Auto-share Gemini API key with summary provider if needed
+            summary_config = copy.deepcopy(cfg.summary)
+            if (
+                summary_config.provider == "gemini"
+                and not summary_config.api_key
+                and cfg.transcription.gemini_api_key
+            ):
+                summary_config.api_key = cfg.transcription.gemini_api_key
 
-            # Finalize metadata
+            # Finalize metadata before parallel tail tasks
             speakers = set(s.speaker for s in segments if s.speaker)
             metadata.finalize(
                 recording_dir,
@@ -321,12 +374,26 @@ class MeetingRecorderApp:
                 segment_count=len(segments),
             )
 
-            # Index recording for search
-            self._index_recording(recording_dir)
+            # Run summary, indexing, and Drive upload in parallel
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            # Upload to Google Drive if enabled
-            if self.config.google_drive.enabled:
-                self._upload_to_google_drive(recording_dir, metadata)
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix="post") as pool:
+                futures = []
+                if summary_config.enabled:
+                    futures.append(pool.submit(
+                        self._generate_summary, recording_dir, segments, metadata, summary_config,
+                    ))
+                futures.append(pool.submit(self._index_recording, recording_dir))
+                if cfg.google_drive.enabled:
+                    futures.append(pool.submit(
+                        self._upload_to_google_drive, recording_dir, metadata, cfg,
+                    ))
+                for f in as_completed(futures):
+                    f.result()  # propagate exceptions (each method catches its own)
+
+            # Final save: parallel tasks (summary, Drive upload) modify metadata
+            # fields that finalize() didn't know about. Persist them now.
+            metadata.save(recording_dir)
 
             self._tray.set_state("idle")
             notifications.notify_transcription_complete(str(recording_dir))
@@ -339,10 +406,16 @@ class MeetingRecorderApp:
             if metadata:
                 metadata.set_error(str(e), recording_dir)
 
-    def _upload_to_google_drive(self, recording_dir: Path, metadata: RecordingMetadata) -> None:
+    def _upload_to_google_drive(
+        self,
+        recording_dir: Path,
+        metadata: RecordingMetadata,
+        config: Optional[Config] = None,
+    ) -> None:
         """Upload recording to Google Drive."""
+        cfg = config or self.config
         try:
-            creds_path = Path(self.config.google_drive.credentials_path).expanduser()
+            creds_path = Path(cfg.google_drive.credentials_path).expanduser()
             if not is_google_drive_available(creds_path):
                 logger.info("Google Drive not available (missing credentials or libraries).")
                 return
@@ -350,7 +423,7 @@ class MeetingRecorderApp:
             self._tray.set_state("processing", "Uploading to Drive...")
             uploader = GoogleDriveUploader(
                 credentials_path=creds_path,
-                folder_id=self.config.google_drive.folder_id,
+                folder_id=cfg.google_drive.folder_id,
             )
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
@@ -363,7 +436,8 @@ class MeetingRecorderApp:
             logger.exception("Google Drive upload failed (non-fatal)")
 
     def _generate_summary(
-        self, recording_dir: Path, segments, metadata: RecordingMetadata
+        self, recording_dir: Path, segments, metadata: RecordingMetadata,
+        summary_config=None,
     ) -> None:
         """Generate AI meeting summary (non-fatal)."""
         try:
@@ -372,7 +446,7 @@ class MeetingRecorderApp:
             self._tray.set_state("processing", "Generating summary...")
             summary = generate_summary(
                 segments=segments,
-                config=self.config.summary,
+                config=summary_config or self.config.summary,
                 meeting_subject=metadata.meeting_subject,
                 attendees=metadata.meeting_attendees,
                 duration_seconds=metadata.duration_seconds,
@@ -407,11 +481,14 @@ class MeetingRecorderApp:
         self, app_rms: float, app_peak: float, mic_rms: float, mic_peak: float
     ) -> None:
         """Handle audio level updates from the capture manager."""
-        # Update tray tooltip with current audio levels during recording
-        if self._capture_manager and self._capture_manager.is_recording:
-            elapsed = self._capture_manager.elapsed_seconds
+        # Capture reference locally — stop_recording() on another thread could
+        # set self._capture_manager = None between the check and later accesses.
+        cm = self._capture_manager
+        if cm and cm.is_recording:
+            elapsed = cm.elapsed_seconds
             duration_str = _format_duration(elapsed)
-            app_name = self._current_process.display_name if self._current_process else "Meeting"
+            proc = self._current_process
+            app_name = proc.display_name if proc else "Meeting"
             self._tray.set_state(
                 "recording",
                 f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
@@ -419,7 +496,7 @@ class MeetingRecorderApp:
 
             # One-time check: detect capture mode and warn dashboard if system-wide
             if not self._capture_mode_reported:
-                mode = self._capture_manager.is_app_capture_process_specific
+                mode = cm.is_app_capture_process_specific
                 if mode is not None:
                     self._capture_mode_reported = True
                     if not mode and self._dashboard:
@@ -434,7 +511,7 @@ class MeetingRecorderApp:
                 self._preview_frame_counter += 1
                 if self._preview_frame_counter >= 5:
                     self._preview_frame_counter = 0
-                    frame = self._capture_manager.get_screen_frame()
+                    frame = cm.get_screen_frame()
                     if frame is not None:
                         self._dashboard.update_screen_preview(frame)
 
@@ -452,8 +529,28 @@ class MeetingRecorderApp:
 
     def _toggle_mute(self) -> None:
         """Toggle mic mute via the capture manager's MuteSync."""
-        if self._capture_manager and self._capture_manager.mute_sync:
-            self._capture_manager.mute_sync.toggle()
+        cm = self._capture_manager
+        if cm and cm.mute_sync:
+            cm.mute_sync.toggle()
+
+    def _toggle_audio_mode(self) -> None:
+        """Toggle between per-process and desktop-wide audio capture."""
+        cm = self._capture_manager
+        if cm is None:
+            return
+        if cm.is_desktop_audio:
+            # Switch back to per-process capture using the original meeting PID
+            pid = self._current_process.pid if self._current_process else cm.pid
+            cm.switch_to_app_audio(pid)
+        else:
+            cm.switch_to_desktop_audio()
+
+    def _on_capture_mode_changed(self, is_desktop: bool) -> None:
+        """Handle capture mode changes from CaptureManager."""
+        mode_str = "desktop (system-wide)" if is_desktop else "per-process"
+        logger.info("Audio capture mode changed to %s", mode_str)
+        if self._dashboard and self._dashboard.is_visible:
+            self._dashboard.update_audio_mode(is_desktop)
 
     def _toggle_dashboard(self) -> None:
         """Toggle dashboard visibility (hotkey handler)."""
@@ -485,6 +582,13 @@ class MeetingRecorderApp:
                 self._dashboard.close()
                 self._dashboard = None
 
+    def _on_health_warning(self, thread_name: str) -> None:
+        """Called when a capture thread hasn't produced data recently."""
+        logger.warning("Health warning: %s thread stalled (no data for >10s)", thread_name)
+        notifications.notify_error(f"Warning: {thread_name} may have stalled")
+        if self._dashboard and self._dashboard.is_visible:
+            self._dashboard.update_transcript(f"[Warning: {thread_name} stalled]")
+
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""
         logger.info("Capture auto-stopped (meeting app exited).")
@@ -511,9 +615,14 @@ class MeetingRecorderApp:
         os.startfile(str(output_dir))
 
     def _on_pick_capture_window(self, hwnd: int) -> None:
-        """Switch the screen capture to the window the user selected."""
-        if self._capture_manager is not None:
-            self._capture_manager.switch_screen_window(hwnd)
+        """Switch screen capture (if active) and app audio capture to the selected window."""
+        cm = self._capture_manager
+        if cm is None:
+            return
+        from meeting_recorder.video.window_finder import get_window_title
+        title = get_window_title(hwnd) or f"HWND {hwnd}"
+        logger.info("User picked window: '%s' — switching capture", title)
+        cm.switch_screen_window(hwnd)
 
     def _register_hotkey(self) -> None:
         """Register global hotkeys for toggling recording and dashboard."""
@@ -545,7 +654,8 @@ class MeetingRecorderApp:
 
     def _toggle_recording(self) -> None:
         """Toggle recording on/off (hotkey handler)."""
-        if self._capture_manager and self._capture_manager.is_recording:
+        cm = self._capture_manager
+        if cm and cm.is_recording:
             threading.Thread(target=self.stop_recording, daemon=True).start()
         else:
             threading.Thread(target=self.start_recording, daemon=True).start()
@@ -556,12 +666,13 @@ class MeetingRecorderApp:
             import pyaudiowpatch as pyaudio
 
             p = pyaudio.PyAudio()
-            for i in range(p.get_device_count()):
-                info = p.get_device_info_by_index(i)
-                if device_name.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
-                    p.terminate()
-                    return i
-            p.terminate()
+            try:
+                for i in range(p.get_device_count()):
+                    info = p.get_device_info_by_index(i)
+                    if device_name.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
+                        return i
+            finally:
+                p.terminate()
         except Exception:
             logger.exception("Failed to find mic device: %s", device_name)
         return None

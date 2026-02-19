@@ -26,6 +26,12 @@ def main() -> None:
     """Main entry point for Meeting Recorder."""
     _fix_stdio()
 
+    # Handle subcommands before full app startup
+    if len(sys.argv) > 1 and sys.argv[1] == "diagnose":
+        logging.basicConfig(level=logging.WARNING, format="%(message)s")
+        from meeting_recorder.diagnose import run_diagnostics
+        sys.exit(run_diagnostics())
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,

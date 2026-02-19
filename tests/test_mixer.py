@@ -349,3 +349,60 @@ class TestMixTracksStreaming:
 
         with pytest.raises(ValueError, match="Track format mismatch"):
             mix_tracks_streaming(app_path, mic_path, out_path)
+
+
+# ---------------------------------------------------------------------------
+# Streaming EOF edge cases
+# ---------------------------------------------------------------------------
+
+class TestStreamingEOFEdgeCases:
+    """Verify streaming mixer handles track exhaustion correctly."""
+
+    def test_streaming_one_track_much_shorter(self, tmp_path: Path):
+        """Mixing a 0.01s track with a 2s track should produce 2s output."""
+        app_path = generate_sine_wav(
+            tmp_path / "app.wav", frequency=440, duration=2.0, amplitude=0.3,
+        )
+        mic_path = generate_sine_wav(
+            tmp_path / "mic.wav", frequency=880, duration=0.01, amplitude=0.3,
+        )
+        out_path = tmp_path / "mixed.wav"
+
+        mix_tracks_streaming(app_path, mic_path, out_path, chunk_frames=256)
+
+        params, data = _read_wav(out_path)
+        assert len(data) == int(16000 * 2.0)
+
+    def test_streaming_both_empty(self, tmp_path: Path):
+        """Two effectively empty (0-duration) WAV files should produce 0-length output."""
+        for name in ("app.wav", "mic.wav"):
+            path = tmp_path / name
+            with wave.open(str(path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                # Write zero frames
+
+        out_path = tmp_path / "mixed.wav"
+        mix_tracks_streaming(tmp_path / "app.wav", tmp_path / "mic.wav", out_path)
+
+        params, data = _read_wav(out_path)
+        assert len(data) == 0
+
+    def test_streaming_one_empty_one_full(self, tmp_path: Path):
+        """Mixing an empty track with a full track should produce the full track."""
+        app_path = generate_sine_wav(
+            tmp_path / "app.wav", frequency=440, duration=1.0, amplitude=0.3,
+        )
+        mic_path = tmp_path / "mic.wav"
+        with wave.open(str(mic_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+
+        out_path = tmp_path / "mixed.wav"
+        mix_tracks_streaming(app_path, mic_path, out_path)
+
+        _, app_data = _read_wav(app_path)
+        _, mixed_data = _read_wav(out_path)
+        np.testing.assert_array_equal(mixed_data, app_data)

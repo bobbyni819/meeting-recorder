@@ -11,6 +11,7 @@ from meeting_recorder.audio.level_monitor import (
     MIN_DB,
     REFERENCE_AMPLITUDE,
     AudioLevelMonitor,
+    compute_levels_db,
     compute_peak_db,
     compute_rms_db,
 )
@@ -95,6 +96,38 @@ class TestComputePeakDb:
 
     def test_empty_bytes_returns_min_db(self):
         assert compute_peak_db(b"") == MIN_DB
+
+
+# ---------------------------------------------------------------------------
+# compute_levels_db (combined single-pass)
+# ---------------------------------------------------------------------------
+
+class TestComputeLevelsDb:
+    """Tests for the combined compute_levels_db function."""
+
+    def test_matches_separate_functions(self):
+        """Combined function should return same results as individual ones."""
+        audio = _make_const_audio(16384)
+        rms_db, peak_db = compute_levels_db(audio)
+        assert rms_db == pytest.approx(compute_rms_db(audio), abs=0.001)
+        assert peak_db == pytest.approx(compute_peak_db(audio), abs=0.001)
+
+    def test_silence_returns_min_db_pair(self):
+        audio = _make_silence()
+        rms_db, peak_db = compute_levels_db(audio)
+        assert rms_db == MIN_DB
+        assert peak_db == MIN_DB
+
+    def test_empty_returns_min_db_pair(self):
+        rms_db, peak_db = compute_levels_db(b"")
+        assert rms_db == MIN_DB
+        assert peak_db == MIN_DB
+
+    def test_mixed_signal_peak_exceeds_rms(self):
+        """For a non-constant signal, peak should be >= RMS."""
+        samples = np.array([0, 0, 0, 16384, 0, 0, 0], dtype=np.int16)
+        rms_db, peak_db = compute_levels_db(samples.tobytes())
+        assert peak_db >= rms_db
 
 
 # ---------------------------------------------------------------------------

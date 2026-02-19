@@ -151,10 +151,6 @@ class MicAudioCapture:
                     # If VAD fails (wrong size etc), just pass audio through
                     self.ring_buffer.put(chunk_bytes)
 
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-
         except ImportError:
             logger.error(
                 "PyAudioWPatch is not installed. Install with: pip install PyAudioWPatch"
@@ -166,15 +162,15 @@ class MicAudioCapture:
                 try:
                     stream.stop_stream()
                     stream.close()
-                except OSError:
-                    pass  # Expected device-release errors
+                except OSError as e:
+                    logger.debug("Device release during mic stream cleanup: %s", e)
                 except Exception:
                     logger.warning("Unexpected error during mic stream cleanup", exc_info=True)
             if p is not None:
                 try:
                     p.terminate()
-                except OSError:
-                    pass  # Expected device-release errors
+                except OSError as e:
+                    logger.debug("Device release during PyAudio cleanup: %s", e)
                 except Exception:
                     logger.warning("Unexpected error during PyAudio cleanup", exc_info=True)
             logger.info("Mic capture thread exiting.")

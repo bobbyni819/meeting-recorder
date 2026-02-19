@@ -12,6 +12,7 @@ from typing import Optional
 
 from meeting_recorder.audio.ring_buffer import RingBuffer
 from meeting_recorder.audio.app_audio import AppAudioCapture
+from meeting_recorder.audio.desktop_audio import DesktopAudioCapture
 from meeting_recorder.audio.mic_audio import MicAudioCapture
 from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mute_sync import (
@@ -56,13 +57,23 @@ class CaptureManager:
         live_transcription_enabled: bool = False,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
+        on_health_warning: Optional[callable] = None,
+        on_capture_mode_changed: Optional[callable] = None,
     ):
         self.pid = pid
         self.output_dir = output_dir
         self.sample_rate = sample_rate
         self.channels = channels
         self.chunk_duration_ms = chunk_duration_ms
+        self._app_key = app_key
         self._on_stopped = on_stopped
+        self._on_health_warning = on_health_warning
+        self._on_capture_mode_changed = on_capture_mode_changed
+        self._is_desktop_audio = False
+
+        # Thread heartbeats for health monitoring
+        self._thread_heartbeats: dict[str, float] = {}
+        self._last_health_check: float = 0.0
 
         # Ring buffers
         self._app_buffer = RingBuffer(max_chunks=2000)
@@ -134,6 +145,9 @@ class CaptureManager:
         self._monitor_thread: Optional[threading.Thread] = None
         self._is_recording = False
         self._start_time: Optional[float] = None
+        # Guards stop() against concurrent callers (e.g. user clicks Stop
+        # while process-exit auto-stop fires on a different thread).
+        self._stop_lock = threading.Lock()
 
     def start(self) -> None:
         """Start all capture and writer threads."""
@@ -155,6 +169,15 @@ class CaptureManager:
         # Start capture threads
         self._app_capture.start()
         self._mic_capture.start()
+
+        # Teams: ProcTap cannot capture audio from any Teams PID, so
+        # auto-switch to desktop (system-wide) loopback immediately.
+        if self._app_key == "teams":
+            logger.info(
+                "Teams detected — auto-switching to desktop audio "
+                "(ProcTap cannot capture Teams audio)"
+            )
+            self.switch_to_desktop_audio()
 
         # Start writer threads
         self._app_writer_thread = threading.Thread(
@@ -211,9 +234,16 @@ class CaptureManager:
         logger.info("Recording started. Output: %s", self.output_dir)
 
     def stop(self) -> None:
-        """Stop all capture and writer threads."""
-        if not self._is_recording:
-            return
+        """Stop all capture and writer threads.
+
+        Thread-safe: uses an internal lock to prevent concurrent callers
+        from double-stopping (e.g. user clicks Stop while process-exit
+        auto-stop fires simultaneously on another thread).
+        """
+        with self._stop_lock:
+            if not self._is_recording:
+                return
+            self._is_recording = False
 
         logger.info("Stopping recording...")
         self._stop_event.set()
@@ -226,35 +256,38 @@ class CaptureManager:
         if self._mute_sync is not None:
             self._mute_sync.stop()
 
-        # Stop live transcription
-        if self._live_transcriber is not None:
-            self._live_transcriber.stop()
-            self._live_transcriber = None
-
-        # Stop capture threads
+        # Stop capture threads (stops producing new chunks)
         self._app_capture.stop()
         self._mic_capture.stop()
         self._vad.reset()
 
-        # Wait for writers to flush and check for zombies
+        # Wait for writers to flush remaining chunks and exit.
+        # Writers must finish BEFORE stopping the live transcriber,
+        # because the app writer thread feeds the transcriber.
         threads_to_join = [
             (self._app_writer_thread, 10.0, "app WAV writer"),
             (self._mic_writer_thread, 10.0, "mic WAV writer"),
             (self._monitor_thread, 5.0, "process monitor"),
             (self._level_thread, 3.0, "audio level monitor"),
         ]
+        current = threading.current_thread()
         for thread, timeout, label in threads_to_join:
-            if thread is not None:
+            if thread is not None and thread is not current:
                 thread.join(timeout=timeout)
                 if thread.is_alive():
                     logger.warning("%s thread did not terminate (zombie).", label)
 
-        self._is_recording = False
+        # Stop live transcription after writers have drained
+        if self._live_transcriber is not None:
+            self._live_transcriber.stop()
+            self._live_transcriber = None
+
         duration = time.time() - self._start_time if self._start_time else 0
         logger.info("Recording stopped. Duration: %.1fs", duration)
 
     def _writer_loop(self, buffer: RingBuffer, wav_path: Path, label: str) -> None:
         """Write audio chunks from a ring buffer to a WAV file."""
+        wf = None
         try:
             wf = wave.open(str(wav_path), "wb")
             wf.setnchannels(self.channels)
@@ -263,49 +296,84 @@ class CaptureManager:
 
             logger.info("WAV writer started: %s", wav_path.name)
 
+            level_update = (
+                self._level_monitor.update_app_level if label == "app"
+                else self._level_monitor.update_mic_level
+            )
+            is_app = label == "app"
+
             while not self._stop_event.is_set():
                 chunks = buffer.get_all()
                 if chunks:
                     for chunk in chunks:
                         wf.writeframes(chunk)
-                        # Feed audio level monitor
-                        if label == "app":
-                            self._level_monitor.update_app_level(chunk)
-                        else:
-                            self._level_monitor.update_mic_level(chunk)
-                        # Feed live transcriber (app track only — feeding both
-                        # tracks interleaves chunks and corrupts the audio stream)
-                        if label == "app" and self._live_transcriber is not None:
+                        level_update(chunk)
+                        if is_app and self._live_transcriber is not None:
                             self._live_transcriber.feed_audio(chunk)
+                    self._thread_heartbeats[f"{label}_writer"] = time.time()
                 else:
-                    time.sleep(0.01)
+                    # Wait with event so stop() wakes us immediately
+                    self._stop_event.wait(0.01)
 
             # Flush remaining
             remaining = buffer.get_all()
             for chunk in remaining:
                 wf.writeframes(chunk)
 
-            wf.close()
             logger.info("WAV writer finished: %s", wav_path.name)
 
         except Exception:
             logger.exception("WAV writer error (%s)", label)
+        finally:
+            if wf is not None:
+                try:
+                    wf.close()
+                except Exception:
+                    logger.debug("Error closing WAV file (%s)", label, exc_info=True)
 
     def _monitor_process(self) -> None:
-        """Monitor the target process and auto-stop if it exits."""
+        """Monitor the target process and auto-stop if it exits.
+
+        When the process exits, fires _on_stopped so the app layer can
+        orchestrate a full stop (capture_manager.stop + post-processing).
+        Does NOT call self.stop() directly — doing so would set
+        _is_recording = False before the app gets a chance to run its
+        stop_recording, causing post-processing to be skipped.
+        """
         while not self._stop_event.is_set():
+            if self._is_desktop_audio:
+                # No single PID to monitor in desktop mode — skip auto-stop
+                self._stop_event.wait(2.0)
+                continue
             if not is_process_running(self.pid):
                 logger.info("Target process (PID %d) exited. Auto-stopping.", self.pid)
-                self.stop()
                 if self._on_stopped:
-                    self._on_stopped()
+                    try:
+                        self._on_stopped()
+                    except Exception:
+                        logger.exception("on_stopped callback error")
                 return
-            time.sleep(2.0)
+            self._stop_event.wait(2.0)
 
     def _level_monitor_loop(self) -> None:
-        """Periodically notify the audio level callback."""
+        """Periodically notify the audio level callback and check thread health."""
         while not self._stop_event.is_set():
-            self._level_monitor.notify()
+            try:
+                self._level_monitor.notify()
+            except Exception:
+                logger.exception("on_levels callback error")
+
+            # Check thread heartbeats every 5 seconds
+            now = time.time()
+            if now - self._last_health_check >= 5.0:
+                self._last_health_check = now
+                for name, last in self._thread_heartbeats.items():
+                    if now - last > 10.0 and self._on_health_warning:
+                        try:
+                            self._on_health_warning(name)
+                        except Exception:
+                            logger.exception("on_health_warning callback error")
+
             self._stop_event.wait(0.1)
 
     @property
@@ -319,8 +387,15 @@ class CaptureManager:
         return self._mute_sync
 
     @property
+    def is_desktop_audio(self) -> bool:
+        """Whether capture is in desktop (system-wide) mode."""
+        return self._is_desktop_audio
+
+    @property
     def is_app_capture_process_specific(self) -> Optional[bool]:
         """Whether app audio capture is using per-process or system-wide loopback."""
+        if self._is_desktop_audio:
+            return False
         if self._app_capture is None:
             return None
         return self._app_capture.is_process_specific
@@ -351,13 +426,100 @@ class CaptureManager:
         # Also switch audio to the process that owns the new window
         from meeting_recorder.video.window_finder import get_hwnd_pid
         new_pid = get_hwnd_pid(hwnd)
-        if new_pid and new_pid != self.pid:
+        if new_pid is None:
+            logger.warning("Could not resolve PID for HWND %d; audio not switched.", hwnd)
+            return
+        if new_pid == self.pid:
+            # The visible window is owned by the PID we're already capturing.
+            # For multi-process apps (Teams, Zoom) the audio subprocess may be
+            # a sibling with no visible window.  Try to find a better match.
+            better_pid = self._find_audio_sibling_pid(new_pid)
+            if better_pid is None or better_pid == self.pid:
+                logger.info(
+                    "Window picker: already capturing PID %d — audio unchanged. "
+                    "If the meeting is silent, check that participants are unmuted.",
+                    self.pid,
+                )
+                return
             logger.info(
-                "Window switch: also switching audio capture from PID %d to PID %d",
-                self.pid,
+                "Window picker: audio is on sibling PID %d (not the window PID %d) — switching.",
+                better_pid,
                 new_pid,
             )
-            self._switch_app_audio_pid(new_pid)
+            self._switch_app_audio_pid(better_pid)
+            return
+        logger.info(
+            "Window switch: also switching audio capture from PID %d to PID %d",
+            self.pid,
+            new_pid,
+        )
+        self._switch_app_audio_pid(new_pid)
+
+    def _find_audio_sibling_pid(self, window_pid: int) -> Optional[int]:
+        """For multi-process apps, return a related PID that has an active audio session.
+
+        Checks both siblings (same exe name) and child processes (e.g. Teams'
+        msedgewebview2.exe subprocesses) for active audio sessions.  Returns
+        None when pycaw is unavailable, no candidates exist, or no audio session
+        is found (e.g. the meeting is currently silent).
+        """
+        try:
+            import psutil
+        except ImportError:
+            return None
+
+        try:
+            proc_name = psutil.Process(window_pid).name().lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
+        # Collect all sibling PIDs (same executable name)
+        sibling_pids: set[int] = set()
+        try:
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    if p.info["name"] and p.info["name"].lower() == proc_name:
+                        sibling_pids.add(p.info["pid"])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            return None
+
+        # Also include child processes — Teams renders audio through
+        # msedgewebview2.exe children, not ms-teams.exe itself.
+        from meeting_recorder.audio.process_finder import (
+            _get_audio_rendering_pids,
+            _get_descendant_pids,
+        )
+        child_pids = _get_descendant_pids(sibling_pids)
+        all_candidate_pids = sibling_pids | child_pids
+
+        if len(all_candidate_pids) <= 1:
+            return None  # single-process app, nothing to resolve
+
+        # Check which candidates have active audio sessions (requires pycaw)
+        audio_pids = _get_audio_rendering_pids(all_candidate_pids)
+        if not audio_pids:
+            logger.debug(
+                "No active audio session found among %d candidates for %s — "
+                "meeting may be silent or pycaw cannot see this app's sessions.",
+                len(all_candidate_pids),
+                proc_name,
+            )
+            return None
+
+        # Prefer a candidate that IS audio-active and is NOT the current window PID
+        non_window_audio = audio_pids - {window_pid}
+        if non_window_audio:
+            chosen = next(iter(non_window_audio))
+            logger.info(
+                "Found audio-active related PID %d (window is on PID %d)",
+                chosen, window_pid,
+            )
+            return chosen
+
+        # Window PID itself has the audio session — already correct, nothing to do
+        return None
 
     def _switch_app_audio_pid(self, new_pid: int) -> None:
         """Hot-swap app audio capture to a different process PID.
@@ -365,6 +527,9 @@ class CaptureManager:
         Stops the current capture, creates a new AppAudioCapture on the same
         ring buffer (so the WAV writer continues uninterrupted), and starts it.
         """
+        if self._is_desktop_audio:
+            logger.info("Ignoring PID switch — currently in desktop audio mode.")
+            return
         old_capture = self._app_capture
         old_capture.stop()
         self._app_capture = AppAudioCapture(
@@ -377,6 +542,62 @@ class CaptureManager:
         self._app_capture.start()
         self.pid = new_pid
         logger.info("Audio capture hot-swapped to PID %d", new_pid)
+
+    def switch_to_desktop_audio(self) -> None:
+        """Switch from per-process capture to system-wide desktop loopback.
+
+        Stops the current AppAudioCapture, creates a DesktopAudioCapture on
+        the same ring buffer, and starts it. The WAV writer continues
+        uninterrupted because the ring buffer is shared.
+        """
+        if self._is_desktop_audio:
+            logger.info("Already in desktop audio mode.")
+            return
+        old_capture = self._app_capture
+        old_capture.stop()
+        self._app_capture = DesktopAudioCapture(
+            ring_buffer=self._app_buffer,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            chunk_duration_ms=self.chunk_duration_ms,
+        )
+        self._app_capture.start()
+        self._is_desktop_audio = True
+        logger.info("Switched to desktop audio (system-wide loopback).")
+        if self._on_capture_mode_changed:
+            try:
+                self._on_capture_mode_changed(True)
+            except Exception:
+                logger.exception("on_capture_mode_changed callback error")
+
+    def switch_to_app_audio(self, pid: int) -> None:
+        """Switch from desktop loopback back to per-process capture.
+
+        Stops the current capture (DesktopAudioCapture or AppAudioCapture),
+        creates a new AppAudioCapture for the given PID on the same ring
+        buffer, and starts it.
+        """
+        if not self._is_desktop_audio:
+            logger.info("Already in per-process audio mode.")
+            return
+        old_capture = self._app_capture
+        old_capture.stop()
+        self._app_capture = AppAudioCapture(
+            pid=pid,
+            ring_buffer=self._app_buffer,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            chunk_duration_ms=self.chunk_duration_ms,
+        )
+        self._app_capture.start()
+        self.pid = pid
+        self._is_desktop_audio = False
+        logger.info("Switched to per-process audio (PID %d).", pid)
+        if self._on_capture_mode_changed:
+            try:
+                self._on_capture_mode_changed(False)
+            except Exception:
+                logger.exception("on_capture_mode_changed callback error")
 
     @property
     def is_recording(self) -> bool:
