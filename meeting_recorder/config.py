@@ -98,7 +98,7 @@ class DashboardConfig:
 @dataclass
 class ScreenRecordingConfig:
     enabled: bool = True
-    fps: float = 5.0
+    fps: float = 30.0
 
 
 @dataclass
@@ -110,7 +110,7 @@ class OutlookConfig:
 @dataclass
 class GoogleDriveConfig:
     enabled: bool = False
-    credentials_path: str = "~/.meeting_recorder/google_credentials.json"
+    credentials_path: str = "~/.config/google/client_secret.json"
     folder_id: str = ""
 
 

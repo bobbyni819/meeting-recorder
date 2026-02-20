@@ -47,7 +47,7 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 ## Config defaults (current)
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
-- `screen_recording.enabled = true`, `fps = 15`
+- `screen_recording.enabled = true`, `fps = 30`
 - Output: `~/MeetingRecordings/`
 
 ## Development

@@ -83,7 +83,7 @@ class TestConfigDefaults:
     def test_default_screen_recording_config(self):
         cfg = ScreenRecordingConfig()
         assert cfg.enabled is True
-        assert cfg.fps == 5.0
+        assert cfg.fps == 30.0
 
     def test_full_default_config(self):
         cfg = Config()
@@ -120,7 +120,7 @@ class TestConfigFromDict:
         assert cfg.recording.language == "de"
         assert cfg.recording.user_name == "User"  # default preserved
         assert cfg.screen_recording.enabled is False
-        assert cfg.screen_recording.fps == 5.0  # default preserved
+        assert cfg.screen_recording.fps == 30.0  # default preserved
 
     def test_full_dict(self):
         data = {

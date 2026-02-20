@@ -16,11 +16,13 @@ min_speech_duration_ms = 250
 min_silence_duration_ms = 300
 
 [transcription]
-backend = "local"  # "local" or "cloud"
+backend = "local"  # "local", "cloud", or "gemini"
 model_size = "large-v3"
 device = "cuda"  # "cuda" or "cpu"
 compute_type = "float16"
 openai_api_key = ""
+gemini_api_key = ""
+gemini_model = ""  # empty = use default (gemini-2.5-flash)
 
 [diarization]
 enabled = true
@@ -38,7 +40,7 @@ toggle_dashboard = "ctrl+shift+d"  # show/hide recording dashboard
 
 [screen_recording]
 enabled = true
-fps = 5.0  # frames per second (2-10 recommended)
+fps = 30.0  # frames per second (15-30 recommended)
 
 [outlook]
 enabled = true         # auto-detect meeting name from Outlook calendar
@@ -51,7 +53,7 @@ folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
 
 [summary]
 enabled = false        # generate AI summary after transcription
-provider = "openai"    # "openai" or "anthropic"
+provider = "openai"    # "openai", "anthropic", or "gemini"
 api_key = ""
 model = ""             # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
 max_transcript_tokens = 0  # 0 = no limit

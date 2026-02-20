@@ -103,8 +103,11 @@ pip install -e ".[summary-openai]"
 # Optional: Google Drive upload
 pip install -e ".[gdrive]"
 
+# Optional: Gemini-powered transcription (Google AI)
+pip install -e ".[gemini]"
+
 # Optional: All of the above in one command
-pip install -e ".[local,outlook,summary-openai,gdrive]"
+pip install -e ".[local,outlook,summary-openai,gdrive,gemini]"
 ```
 
 The `[local]` extra installs:
@@ -173,11 +176,13 @@ min_speech_duration_ms = 250
 min_silence_duration_ms = 300
 
 [transcription]
-backend = "local"                   # "local" for on-device whisper, "cloud" for OpenAI API
+backend = "local"                   # "local", "cloud" (OpenAI API), or "gemini" (Google AI)
 model_size = "large-v3"             # Options: tiny, base, small, medium, large-v3
 device = "cuda"                     # "cuda" for GPU, "cpu" for CPU-only (much slower)
 compute_type = "float16"            # "float16" for GPU, "int8" for CPU
 openai_api_key = ""                 # Only needed if backend = "cloud"
+gemini_api_key = ""                 # Only needed if backend = "gemini"
+gemini_model = ""                   # Empty = default (gemini-2.5-flash)
 
 [diarization]
 enabled = true
@@ -208,7 +213,7 @@ folder_id = ""
 
 [summary]
 enabled = false                     # Set to true and provide API key for auto-summaries
-provider = "openai"
+provider = "openai"                 # "openai", "anthropic", or "gemini"
 api_key = ""                        # Your OpenAI API key (sk-...)
 model = "gpt-4o-mini"
 max_transcript_tokens = 0
@@ -223,6 +228,8 @@ start_collapsed = false
 show_transcript = true
 show_screen_preview = true          # Live thumbnail of captured window
 ```
+
+> **Tip**: The config file is auto-created on first run from bundled defaults if it doesn't already exist. You only need to create it manually if you want to customize settings before the first launch.
 
 ---
 
@@ -251,6 +258,8 @@ The app will:
 4. Begin scanning for Zoom, Teams, or Webex processes
 
 > **First-run tip**: Start a Zoom or Teams call before running, or the app will just wait in the tray until it detects a meeting process.
+
+> **Diagnostic check**: Run `python -m meeting_recorder diagnose` to verify your setup — it checks for GPU availability, model downloads, microphone access, and config validity.
 
 ---
 
@@ -281,7 +290,7 @@ The app will:
 python -m meeting_recorder
 
 # Background mode (no console window, runs silently in system tray)
-pythonw -m meeting_recorder
+pythonw launch.pyw
 ```
 
 ### Hotkeys (while recording)
@@ -299,6 +308,16 @@ The app detects when you mute/unmute in your meeting app:
 - **Teams**: Hooks `Ctrl+Shift+M` (Teams' mute shortcut)
 
 > **Note**: Mute sync only works via keyboard shortcuts, not by clicking the mute button with your mouse. This is a known limitation because Zoom uses custom rendering that's not accessible via Windows UI Automation.
+
+### Teams-Specific Behavior
+
+Teams meetings run inside WebView2 (`msedgewebview2.exe`) child processes, which don't expose per-process audio through the WASAPI loopback that `proc-tap` uses. The recorder **automatically switches to desktop audio capture** when it detects Teams:
+
+- **Desktop audio** captures all system sound via WASAPI loopback on the default output device. Your system volume must be **non-zero** (it doesn't need to be loud — even 2% works, but 0% = silence).
+- The dashboard shows **"Desktop Audio"** in amber text when desktop capture is active, so you can confirm it's working.
+- This happens automatically — no manual intervention needed.
+
+**Zoom** works differently: Zoom exposes per-process audio normally, so the recorder uses direct `proc-tap` capture. System volume doesn't matter for Zoom recordings.
 
 ---
 
@@ -322,6 +341,13 @@ The app detects when you mute/unmute in your meeting app:
   ```bash
   pip install "pyannote.audio>=3.1,<4.0"
   ```
+
+### No audio from Teams meetings
+
+- Teams uses desktop audio capture (not per-process) — your **system volume must be non-zero**
+- Check that the dashboard shows "Desktop Audio" in amber during a Teams recording
+- If it shows "App Audio", the recorder didn't detect Teams — restart the recorder after joining the meeting
+- Make sure your speakers/headphones are set as the default output device in Windows Sound settings
 
 ### No audio captured / empty WAV files
 
