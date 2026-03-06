@@ -610,6 +610,11 @@ class CaptureManager:
         new_pid = get_hwnd_pid(hwnd)
         if new_pid is None:
             logger.warning("Could not resolve PID for HWND %d; audio not switched.", hwnd)
+            if self._on_health_warning:
+                try:
+                    self._on_health_warning("window_pid_failed")
+                except Exception:
+                    pass
             return
         if new_pid == self.pid:
             # The visible window is owned by the PID we're already capturing.

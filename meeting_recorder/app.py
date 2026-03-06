@@ -62,6 +62,10 @@ class MeetingRecorderApp:
         # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
         self._stop_lock = threading.Lock()
 
+        # Serialises all metadata.save() calls across threads (mark processing,
+        # final save, summary callback, Drive upload callback) to avoid file corruption.
+        self._metadata_lock = threading.Lock()
+
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
         self._capture_mode_reported: bool = False
@@ -78,6 +82,11 @@ class MeetingRecorderApp:
             on_show_dashboard=self._show_dashboard,
             on_record_window=self._record_window,
         )
+
+    def _save_metadata(self, metadata: RecordingMetadata, recording_dir: Path) -> None:
+        """Thread-safe metadata save."""
+        with self._metadata_lock:
+            metadata.save(recording_dir)
 
     def run(self) -> None:
         """Start the application. Blocks until quit."""
@@ -308,7 +317,7 @@ class MeetingRecorderApp:
             self._current_metadata.meeting_organizer = calendar_event.organizer
             self._current_metadata.meeting_attendees = calendar_event.attendees
             self._current_metadata.meeting_location = calendar_event.location
-        self._current_metadata.save(self._current_recording_dir)
+        self._save_metadata(self._current_metadata, self._current_recording_dir)
 
         # Resolve mic device index
         mic_device = None
@@ -466,7 +475,18 @@ class MeetingRecorderApp:
             self._tray.set_state("processing", "Transcribing...")
             notifications.notify_transcription_started()
             metadata.status = "processing"
-            metadata.save(recording_dir)
+            self._save_metadata(metadata, recording_dir)
+
+            # Validate app audio before mixing / transcription
+            app_wav = recording_dir / "app_audio.wav"
+            if not _validate_wav(app_wav):
+                logger.warning("app_audio.wav is corrupt or empty — skipping transcription")
+                notifications.notify_error("App audio file is corrupt — transcription skipped")
+                metadata.status = "error"
+                metadata.error_message = "App audio file corrupt or empty"
+                self._save_metadata(metadata, recording_dir)
+                self._tray.set_state("idle")
+                return
 
             # Mix audio tracks
             app_audio = recording_dir / "app_audio.wav"
@@ -538,7 +558,7 @@ class MeetingRecorderApp:
 
             # Final save: parallel tasks (summary, Drive upload) modify metadata
             # fields that finalize() didn't know about. Persist them now.
-            metadata.save(recording_dir)
+            self._save_metadata(metadata, recording_dir)
 
             self._tray.set_state("idle")
             notifications.notify_transcription_complete(str(recording_dir))
@@ -573,7 +593,7 @@ class MeetingRecorderApp:
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
                 metadata.google_drive_folder_id = folder_id
-                metadata.save(recording_dir)
+                self._save_metadata(metadata, recording_dir)
                 logger.info("Google Drive upload complete: %s", folder_id)
             else:
                 logger.warning("Google Drive upload returned no folder ID.")
@@ -735,6 +755,7 @@ class MeetingRecorderApp:
             "silence_auto_switch": "No app audio detected \u2014 switched to desktop audio",
             "app_write_error": "Audio write error \u2014 recording may be incomplete",
             "mic_write_error": "Mic write error \u2014 recording may be incomplete",
+            "window_pid_failed": "Selected window is no longer available",
         }
         msg = messages.get(warning_key, f"Warning: {warning_key} may have stalled")
         logger.warning("Health warning: %s", msg)
@@ -829,6 +850,21 @@ class MeetingRecorderApp:
         except Exception:
             logger.exception("Failed to find mic device: %s", device_name)
         return None
+
+
+def _validate_wav(path: Path) -> bool:
+    """Check that a WAV file has a valid header and non-zero duration."""
+    try:
+        import wave
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if frames <= 0 or rate <= 0:
+                return False
+            duration = frames / rate
+            return duration > 0.1  # at least 100ms
+    except Exception:
+        return False
 
 
 def _format_duration(seconds: float) -> str:
