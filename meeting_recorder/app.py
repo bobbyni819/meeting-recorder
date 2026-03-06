@@ -94,10 +94,13 @@ class MeetingRecorderApp:
             on_show_dashboard=self._show_dashboard,
             on_record_window=self._record_window,
             on_toggle_auto_start=self._toggle_auto_start,
+            on_pause=self._toggle_pause,
+            on_open_last_recording=self._open_last_recording,
             auto_start=self.config.recording.auto_start,
             hotkey_recording=self.config.hotkey.toggle_recording,
             hotkey_mute=self.config.hotkey.toggle_mute,
             hotkey_dashboard=self.config.hotkey.toggle_dashboard,
+            hotkey_pause=self.config.hotkey.toggle_pause,
         )
 
     def _save_metadata(self, metadata: RecordingMetadata, recording_dir: Path) -> None:
@@ -395,6 +398,7 @@ class MeetingRecorderApp:
         if dash_cfg.enabled and dash_cfg.auto_show:
             self._dashboard = GameBarDashboard(
                 on_stop=lambda: threading.Thread(target=self.stop_recording, daemon=True).start(),
+                on_toggle_pause=self._toggle_pause,
                 on_toggle_mute=self._toggle_mute,
                 on_open_recordings=self._open_recordings_folder,
                 on_open_settings=self._open_settings,
@@ -512,7 +516,7 @@ class MeetingRecorderApp:
         """
         cfg = config or self.config
         try:
-            self._tray.set_state("processing", "Transcribing...")
+            self._tray.set_state("processing", "Processing: validating audio...")
             notifications.notify_transcription_started()
             metadata.status = "processing"
             self._save_metadata(metadata, recording_dir)
@@ -533,10 +537,12 @@ class MeetingRecorderApp:
             mic_audio = recording_dir / "mic_audio.wav"
             mixed_audio = recording_dir / "mixed.wav"
 
+            self._tray.set_state("processing", "Processing: mixing audio tracks...")
             if app_audio.exists() and mic_audio.exists():
                 mix_tracks_streaming(app_audio, mic_audio, mixed_audio)
 
             # Run transcription pipeline (with speaker resolution if attendees available)
+            self._tray.set_state("processing", "Processing: transcribing audio...")
             segments = self._pipeline.process(
                 recording_dir,
                 attendees=metadata.meeting_attendees,
@@ -580,6 +586,7 @@ class MeetingRecorderApp:
             )
 
             # Run summary, indexing, and Drive upload in parallel
+            self._tray.set_state("processing", "Processing: saving & indexing...")
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             with ThreadPoolExecutor(max_workers=3, thread_name_prefix="post") as pool:
@@ -731,6 +738,23 @@ class MeetingRecorderApp:
         """Handle mute state changes from MuteSync."""
         if self._dashboard and self._dashboard.is_visible:
             self._dashboard.update_mute_state(is_muted)
+
+    def _toggle_pause(self) -> None:
+        """Toggle recording pause state."""
+        cm = self._capture_manager
+        if cm and cm.is_recording:
+            cm.toggle_pause()
+            is_paused = cm.is_paused
+            proc = self._current_process
+            app_name = proc.display_name if proc else "Meeting"
+            if is_paused:
+                self._tray.set_state("recording", f"Paused — {app_name}")
+                notifications.notify_info("Recording paused")
+            else:
+                self._tray.set_state("recording", f"Recording {app_name}")
+                notifications.notify_info("Recording resumed")
+            if self._dashboard and self._dashboard.is_visible:
+                self._dashboard.update_paused(is_paused)
 
     def _toggle_mute(self) -> None:
         """Toggle mic mute via the capture manager's MuteSync."""
@@ -941,6 +965,14 @@ class MeetingRecorderApp:
         output_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(output_dir))
 
+    def _open_last_recording(self) -> None:
+        """Open the most recent recording folder in the file explorer."""
+        latest = self._recording_store.get_latest_recording()
+        if latest and latest.exists():
+            os.startfile(str(latest))
+        else:
+            notifications.notify_info("No recordings found.")
+
     def _on_pick_capture_window(self, hwnd: int) -> None:
         """Switch screen capture (if active) and app audio capture to the selected window."""
         cm = self._capture_manager
@@ -962,8 +994,11 @@ class MeetingRecorderApp:
             dash_hotkey = self.config.hotkey.toggle_dashboard
             keyboard.add_hotkey(dash_hotkey, self._toggle_dashboard)
 
+            pause_hotkey = self.config.hotkey.toggle_pause
+            keyboard.add_hotkey(pause_hotkey, self._toggle_pause)
+
             self._hotkey_registered = True
-            logger.info("Global hotkeys registered: %s, %s", hotkey, dash_hotkey)
+            logger.info("Global hotkeys registered: %s, %s, %s", hotkey, dash_hotkey, pause_hotkey)
         except ImportError:
             logger.warning("keyboard module not installed. Global hotkey disabled.")
         except Exception:

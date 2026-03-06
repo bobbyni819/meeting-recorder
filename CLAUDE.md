@@ -50,6 +50,16 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Ring buffer tracks overflow count, logs warning every 100 drops
 - Writer thread sets `_write_error` flag and fires health warning on exception
 
+## Pause/Resume
+- `Ctrl+Shift+P` (configurable) toggles pause during recording
+- Paused state: audio capture continues but data is discarded (not written to WAV)
+- Screen capture still grabs frames for live preview but doesn't write to video
+- `CaptureManager.pause()` / `resume()` / `toggle_pause()` / `is_paused`
+- `_pause_lock` in capture_manager.py protects pause state transitions
+- `elapsed_seconds` excludes paused duration via `_total_paused_seconds` tracking
+- Dashboard shows amber "⏸ PAUSED" indicator and pause button toggles play/pause icon
+- Tray menu "Pause / Resume" item, enabled only during recording
+
 ## Known pitfalls
 - `pythonw.exe` sets `sys.stdout/stderr = None` — redirect to devnull before `torch.hub.load`
 - `torch.hub.load` deadlocks in background threads when pystray + keyboard hooks are active;

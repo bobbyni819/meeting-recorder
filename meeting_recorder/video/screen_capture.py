@@ -70,6 +70,9 @@ class ScreenCapture:
         # Pending window switch: set by switch_window(), consumed by capture loop.
         # Python GIL makes int/None reference assignment atomic.
         self._override_hwnd: Optional[int] = None
+        # Pause flag: when True, frames are captured for preview but not written to video.
+        # Set externally by CaptureManager.
+        self.paused: bool = False
 
     def start(self) -> None:
         """Start the screen capture thread."""
@@ -287,12 +290,13 @@ class ScreenCapture:
                 if rect is None:
                     # Window minimized or transiently unavailable — repeat last
                     # good frame to avoid black-frame flicker.
-                    if last_good_frame is not None:
-                        writer.write(last_good_frame)
-                    else:
-                        black = np.zeros((init_height, init_width, 3), dtype=np.uint8)
-                        writer.write(black)
-                    frame_count += 1
+                    if not self.paused:
+                        if last_good_frame is not None:
+                            writer.write(last_good_frame)
+                        else:
+                            black = np.zeros((init_height, init_width, 3), dtype=np.uint8)
+                            writer.write(black)
+                        frame_count += 1
                     _sleep_remaining(frame_start, interval)
                     continue
 
@@ -323,10 +327,11 @@ class ScreenCapture:
                     if cur_w != init_width or cur_h != init_height:
                         frame = cv2.resize(frame, (init_width, init_height))
 
-                    writer.write(frame)
+                    if not self.paused:
+                        writer.write(frame)
+                        frame_count += 1
                     self._latest_frame = frame
                     last_good_frame = frame
-                    frame_count += 1
                 except Exception:
                     # Capture exception — repeat last good frame to avoid gap
                     if last_good_frame is not None:

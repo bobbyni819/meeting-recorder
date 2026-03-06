@@ -87,6 +87,7 @@ class GameBarDashboard:
     def __init__(
         self,
         on_stop: Optional[Callable[[], None]] = None,
+        on_toggle_pause: Optional[Callable[[], None]] = None,
         on_toggle_mute: Optional[Callable[[], None]] = None,
         on_open_recordings: Optional[Callable[[], None]] = None,
         on_open_settings: Optional[Callable[[], None]] = None,
@@ -101,6 +102,7 @@ class GameBarDashboard:
         position: str = "top-right",
     ):
         self._on_stop = on_stop
+        self._on_toggle_pause = on_toggle_pause
         self._on_toggle_mute = on_toggle_mute
         self._on_open_recordings = on_open_recordings
         self._on_open_settings = on_open_settings
@@ -128,6 +130,7 @@ class GameBarDashboard:
         self._app_db_label: Optional[tk.Label] = None
         self._mic_db_label: Optional[tk.Label] = None
         self._mute_btn: Optional[tk.Label] = None
+        self._pause_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
         self._capture_warning_label: Optional[tk.Label] = None
         self._audio_mode_btn: Optional[tk.Label] = None
@@ -141,6 +144,9 @@ class GameBarDashboard:
         # VU state
         self._app_vu_fraction = 0.0
         self._mic_vu_fraction = 0.0
+
+        # Pause state
+        self._is_paused = False
 
         # Pulsing red dot state
         self._dot_visible = True
@@ -265,6 +271,16 @@ class GameBarDashboard:
         text = _format_elapsed(elapsed_seconds)
         try:
             self._window.after(0, self._set_elapsed, text)
+        except tk.TclError:
+            pass
+
+    def update_paused(self, is_paused: bool) -> None:
+        """Update the paused state display (thread-safe)."""
+        if self._window is None or not self._is_visible:
+            return
+        self._is_paused = is_paused
+        try:
+            self._window.after(0, self._set_paused_display, is_paused)
         except tk.TclError:
             pass
 
@@ -480,10 +496,21 @@ class GameBarDashboard:
             ctrl_frame, text=" Stop ", font=("Segoe UI", 9, "bold"),
             fg="#ffffff", bg="#c0392b", cursor="hand2", padx=8, pady=4,
         )
-        stop_btn.pack(side=tk.LEFT, padx=(10, 6), pady=6)
+        stop_btn.pack(side=tk.LEFT, padx=(10, 2), pady=6)
         stop_btn.bind("<Button-1>", lambda e: self._handle_stop())
         stop_btn.bind("<Enter>", lambda e: stop_btn.configure(bg="#e74c3c"))
         stop_btn.bind("<Leave>", lambda e: stop_btn.configure(bg="#c0392b"))
+
+        self._pause_btn = tk.Label(
+            ctrl_frame, text=" \u23f8 ", font=("Segoe UI", 9),
+            fg="#ffffff", bg="#7f8c8d", cursor="hand2", padx=6, pady=4,
+        )
+        self._pause_btn.pack(side=tk.LEFT, padx=(0, 6), pady=6)
+        self._pause_btn.bind("<Button-1>", lambda e: self._handle_pause_toggle())
+        self._pause_btn.bind("<Enter>", lambda e: self._pause_btn.configure(
+            bg="#ffa500" if self._is_paused else "#95a5a6"))
+        self._pause_btn.bind("<Leave>", lambda e: self._pause_btn.configure(
+            bg="#e67e22" if self._is_paused else "#7f8c8d"))
 
         mute_text = "Muted" if (ctx.is_muted) else "Unmuted"
         mute_fg = MUTED_COLOR if ctx.is_muted else UNMUTED_COLOR
@@ -669,12 +696,29 @@ class GameBarDashboard:
 
     def _set_elapsed(self, text: str) -> None:
         """Set elapsed time on all relevant labels."""
+        if self._is_paused:
+            prefix = "\u23f8 PAUSED"
+            color = "#ffa500"  # amber
+        else:
+            prefix = "Recording"
+            color = "#a0a0a0"
         if self._elapsed_label:
-            self._elapsed_label.configure(text=f"Recording {text}")
+            self._elapsed_label.configure(text=f"{prefix} {text}", fg=color)
         if self._ctrl_elapsed_label:
             self._ctrl_elapsed_label.configure(text=text)
         if self._collapsed_elapsed:
             self._collapsed_elapsed.configure(text=text)
+
+    def _set_paused_display(self, is_paused: bool) -> None:
+        """Update visual indicators for paused state."""
+        self._is_paused = is_paused
+        if self._red_dot_label:
+            self._red_dot_label.configure(fg="#ffa500" if is_paused else "#ff3b3b")
+        if self._pause_btn:
+            if is_paused:
+                self._pause_btn.configure(text=" \u25b6 ", bg="#e67e22")  # play icon, amber
+            else:
+                self._pause_btn.configure(text=" \u23f8 ", bg="#7f8c8d")  # pause icon, grey
 
     def _set_capture_warning(self, is_process_specific: bool) -> None:
         """Show or hide the capture mode warning label."""
@@ -854,6 +898,11 @@ class GameBarDashboard:
         """Handle the Stop button click."""
         if self._on_stop:
             self._on_stop()
+
+    def _handle_pause_toggle(self) -> None:
+        """Handle the pause button click."""
+        if self._on_toggle_pause:
+            self._on_toggle_pause()
 
     def _handle_mute_toggle(self) -> None:
         """Handle the mute toggle click."""

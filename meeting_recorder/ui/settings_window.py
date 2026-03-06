@@ -97,9 +97,14 @@ class SettingsWindow:
         ttk.Entry(parent, textvariable=self._user_name_var, width=30).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
-        ttk.Label(parent, text="Hotkey:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(parent, text="Start/Stop Hotkey:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_recording)
         ttk.Entry(parent, textvariable=self._hotkey_var, width=20).grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
+        ttk.Label(parent, text="Pause Hotkey:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._pause_hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_pause)
+        ttk.Entry(parent, textvariable=self._pause_hotkey_var, width=20).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
         self._auto_start_var = tk.BooleanVar(value=self.config.recording.auto_start)
@@ -405,6 +410,7 @@ class SettingsWindow:
             self.config.recording.auto_start = self._auto_start_var.get()
             self.config.recording.live_transcription = self._live_transcription_var.get()
             self.config.hotkey.toggle_recording = self._hotkey_var.get()
+            self.config.hotkey.toggle_pause = self._pause_hotkey_var.get()
 
             self.config.vad.threshold = self._vad_threshold_var.get()
             self.config.vad.min_speech_duration_ms = self._min_speech_var.get()

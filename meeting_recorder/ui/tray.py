@@ -40,10 +40,13 @@ class TrayIcon:
         on_show_dashboard: Optional[Callable] = None,
         on_record_window: Optional[Callable] = None,
         on_toggle_auto_start: Optional[Callable] = None,
+        on_pause: Optional[Callable] = None,
+        on_open_last_recording: Optional[Callable] = None,
         auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
         hotkey_mute: str = "ctrl+shift+u",
         hotkey_dashboard: str = "ctrl+shift+d",
+        hotkey_pause: str = "ctrl+shift+p",
     ):
         self._on_start = on_start
         self._on_stop = on_stop
@@ -54,10 +57,13 @@ class TrayIcon:
         self._on_show_dashboard = on_show_dashboard
         self._on_record_window = on_record_window
         self._on_toggle_auto_start = on_toggle_auto_start
+        self._on_pause = on_pause
+        self._on_open_last_recording = on_open_last_recording
         self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
         self._hotkey_mute = hotkey_mute
         self._hotkey_dashboard = hotkey_dashboard
+        self._hotkey_pause = hotkey_pause
         self._state = "idle"
         self._status_text = "Idle"
         self._icon: Optional[pystray.Icon] = None
@@ -87,6 +93,11 @@ class TrayIcon:
                     enabled=lambda _: self._state in ("idle", "recording"),
                 ),
                 Item(
+                    "Pause / Resume",
+                    self._handle_pause,
+                    enabled=lambda _: self._state == "recording",
+                ),
+                Item(
                     "Record Window...",
                     self._handle_record_window,
                     enabled=lambda _: self._state == "idle",
@@ -99,6 +110,7 @@ class TrayIcon:
                 pystray.Menu.SEPARATOR,
                 Item("Hotkeys", pystray.Menu(
                     Item(f"{self._hotkey_recording}     Start/Stop Recording", None, enabled=False),
+                    Item(f"{self._hotkey_pause}     Pause/Resume", None, enabled=False),
                     Item(f"{self._hotkey_mute}     Manual Mic Mute Toggle", None, enabled=False),
                     Item(f"{self._hotkey_dashboard}     Show/Hide Dashboard", None, enabled=False),
                     pystray.Menu.SEPARATOR,
@@ -114,6 +126,7 @@ class TrayIcon:
                 ),
                 pystray.Menu.SEPARATOR,
                 Item("Open Recordings", self._handle_open_recordings),
+                Item("Open Last Recording", self._handle_open_last_recording),
                 Item("Search Recordings...", self._handle_search),
                 Item("Settings", self._handle_settings),
                 pystray.Menu.SEPARATOR,
@@ -162,6 +175,11 @@ class TrayIcon:
             if self._on_start:
                 threading.Thread(target=self._on_start, daemon=True).start()
 
+    def _handle_pause(self, icon, item) -> None:
+        """Handle 'Pause / Resume' menu click."""
+        if self._on_pause:
+            threading.Thread(target=self._on_pause, daemon=True).start()
+
     def _handle_record_window(self, icon, item) -> None:
         """Handle 'Record Window...' menu click."""
         if self._on_record_window:
@@ -182,6 +200,11 @@ class TrayIcon:
         """Handle open recordings folder click."""
         if self._on_open_recordings:
             threading.Thread(target=self._on_open_recordings, daemon=True).start()
+
+    def _handle_open_last_recording(self, icon, item) -> None:
+        """Handle 'Open Last Recording' menu click."""
+        if self._on_open_last_recording:
+            threading.Thread(target=self._on_open_last_recording, daemon=True).start()
 
     def _handle_search(self, icon, item) -> None:
         """Handle search recordings menu click."""

@@ -59,6 +59,16 @@ def main() -> None:
         logger.info("Transcription backend: %s", config.transcription.backend)
 
         app = MeetingRecorderApp(config)
+
+        # Handle Ctrl+C: gracefully stop recording + run post-processing
+        import signal
+
+        def _sigint_handler(signum, frame):
+            logger.info("Ctrl+C received — shutting down gracefully...")
+            app.quit()
+
+        signal.signal(signal.SIGINT, _sigint_handler)
+
         app.run()
 
     except KeyboardInterrupt:

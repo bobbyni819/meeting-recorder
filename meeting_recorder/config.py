@@ -80,6 +80,7 @@ class HotkeyConfig:
     toggle_recording: str = "ctrl+shift+r"
     toggle_mute: str = "ctrl+shift+u"
     toggle_dashboard: str = "ctrl+shift+d"
+    toggle_pause: str = "ctrl+shift+p"
 
 
 @dataclass

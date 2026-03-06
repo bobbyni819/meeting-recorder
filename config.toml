@@ -36,6 +36,7 @@ formats = ["json", "txt", "srt"]
 
 [hotkey]
 toggle_recording = "ctrl+shift+r"
+toggle_pause = "ctrl+shift+p"  # pause/resume recording
 toggle_mute = "ctrl+shift+u"  # manual mic mute toggle for recorder
 toggle_dashboard = "ctrl+shift+d"  # show/hide recording dashboard
 

@@ -199,6 +199,12 @@ class CaptureManager:
         # Guards _live_transcriber access across writer, start, and stop threads.
         self._transcriber_lock = threading.Lock()
 
+        # Pause/resume state
+        self._paused = False
+        self._pause_lock = threading.Lock()
+        self._total_paused_seconds: float = 0.0
+        self._pause_start_time: Optional[float] = None
+
     def start(self) -> None:
         """Start all capture and writer threads."""
         if self._is_recording:
@@ -382,15 +388,19 @@ class CaptureManager:
             while not self._stop_event.is_set():
                 chunks = buffer.get_all()
                 if chunks:
-                    for chunk in chunks:
-                        wf.writeframes(chunk)
-                        level_update(chunk)
-                        if is_app:
-                            with self._transcriber_lock:
-                                lt = self._live_transcriber
-                            if lt is not None:
-                                lt.feed_audio(chunk)
-                    self._thread_heartbeats[f"{label}_writer"] = time.time()
+                    # When paused, drain the buffer but don't write to disk
+                    if self._paused:
+                        self._thread_heartbeats[f"{label}_writer"] = time.time()
+                    else:
+                        for chunk in chunks:
+                            wf.writeframes(chunk)
+                            level_update(chunk)
+                            if is_app:
+                                with self._transcriber_lock:
+                                    lt = self._live_transcriber
+                                if lt is not None:
+                                    lt.feed_audio(chunk)
+                        self._thread_heartbeats[f"{label}_writer"] = time.time()
                 else:
                     # Wait with event so stop() wakes us immediately
                     self._stop_event.wait(0.01)
@@ -785,12 +795,52 @@ class CaptureManager:
             except Exception:
                 logger.exception("on_capture_mode_changed callback error")
 
+    def pause(self) -> None:
+        """Pause recording — audio capture continues but data is discarded."""
+        with self._pause_lock:
+            if self._paused or not self._is_recording:
+                return
+            self._paused = True
+            self._pause_start_time = time.time()
+            if self._screen_capture is not None:
+                self._screen_capture.paused = True
+            logger.info("Recording paused.")
+
+    def resume(self) -> None:
+        """Resume a paused recording."""
+        with self._pause_lock:
+            if not self._paused or not self._is_recording:
+                return
+            if self._pause_start_time is not None:
+                self._total_paused_seconds += time.time() - self._pause_start_time
+                self._pause_start_time = None
+            self._paused = False
+            if self._screen_capture is not None:
+                self._screen_capture.paused = False
+            logger.info("Recording resumed.")
+
+    def toggle_pause(self) -> None:
+        """Toggle between paused and recording states."""
+        if self._paused:
+            self.resume()
+        else:
+            self.pause()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
     @property
     def is_recording(self) -> bool:
         return self._is_recording
 
     @property
     def elapsed_seconds(self) -> float:
+        """Elapsed recording time, excluding paused duration."""
         if self._start_time is None:
             return 0.0
-        return time.time() - self._start_time
+        total = time.time() - self._start_time
+        paused = self._total_paused_seconds
+        if self._paused and self._pause_start_time is not None:
+            paused += time.time() - self._pause_start_time
+        return max(0.0, total - paused)
