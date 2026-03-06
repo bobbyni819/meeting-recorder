@@ -25,6 +25,30 @@ from meeting_recorder.audio.level_monitor import AudioLevelMonitor
 
 logger = logging.getLogger(__name__)
 
+# How long to wait after recording starts before deciding the app audio is silent.
+_SILENCE_CHECK_SECONDS = 3.0
+
+# RMS threshold for int16 PCM: anything below this is considered silent.
+_SILENCE_RMS_THRESHOLD = 10
+
+
+def _is_buffer_silent(data: bytes) -> bool:
+    """Check whether raw int16 PCM audio data is effectively silent.
+
+    Uses ``struct.unpack_from`` to decode samples and computes the RMS
+    amplitude.  Returns True when the RMS is below ``_SILENCE_RMS_THRESHOLD``.
+    """
+    if not data or len(data) < 2:
+        return True
+
+    num_samples = len(data) // 2
+    sum_sq = 0
+    for i in range(num_samples):
+        (sample,) = struct.unpack_from("<h", data, i * 2)
+        sum_sq += sample * sample
+    rms = (sum_sq / num_samples) ** 0.5
+    return rms < _SILENCE_RMS_THRESHOLD
+
 
 class CaptureManager:
     """Manages audio capture from app and mic, writing to WAV files.
@@ -145,6 +169,7 @@ class CaptureManager:
         self._monitor_thread: Optional[threading.Thread] = None
         self._is_recording = False
         self._start_time: Optional[float] = None
+        self._silence_thread: Optional[threading.Thread] = None
         # Guards stop() against concurrent callers (e.g. user clicks Stop
         # while process-exit auto-stop fires on a different thread).
         self._stop_lock = threading.Lock()
@@ -216,6 +241,17 @@ class CaptureManager:
         )
         self._level_thread.start()
 
+        # For non-Teams apps, monitor app audio for silence after start.
+        # If still silent after _SILENCE_CHECK_SECONDS, auto-switch to
+        # desktop audio so the user doesn't get a blank recording.
+        if self._app_key != "teams":
+            self._silence_thread = threading.Thread(
+                target=self._silence_auto_switch,
+                name="silence-detector",
+                daemon=True,
+            )
+            self._silence_thread.start()
+
         # Start live transcription if enabled
         if self._live_transcription_enabled:
             try:
@@ -269,6 +305,7 @@ class CaptureManager:
             (self._mic_writer_thread, 10.0, "mic WAV writer"),
             (self._monitor_thread, 5.0, "process monitor"),
             (self._level_thread, 3.0, "audio level monitor"),
+            (self._silence_thread, 1.0, "silence detector"),
         ]
         current = threading.current_thread()
         for thread, timeout, label in threads_to_join:
@@ -375,6 +412,64 @@ class CaptureManager:
                             logger.exception("on_health_warning callback error")
 
             self._stop_event.wait(0.1)
+
+    def _silence_auto_switch(self) -> None:
+        """Monitor app audio after start; switch to desktop if silent.
+
+        For non-Teams apps, per-process audio (ProcTap) may fail silently
+        (e.g. the app renders audio via a child process or a system bus).
+        This method polls the level monitor for ``_SILENCE_CHECK_SECONDS``
+        and auto-switches to desktop loopback if the app channel stays
+        silent the whole time.
+        """
+        if self._app_key == "teams" or self._is_desktop_audio:
+            return
+
+        from meeting_recorder.audio.level_monitor import MIN_DB
+
+        # A dB threshold just above pure silence.  -59 dB is almost
+        # inaudible and well below any real audio content.
+        silence_db_threshold = MIN_DB + 1.0  # -59.0 dB
+
+        elapsed = 0.0
+        poll_interval = 0.5
+
+        while elapsed < _SILENCE_CHECK_SECONDS:
+            if self._stop_event.is_set() or self._is_desktop_audio:
+                return
+            self._stop_event.wait(poll_interval)
+            elapsed += poll_interval
+
+            if self._stop_event.is_set() or self._is_desktop_audio:
+                return
+
+            # Check current app audio level (rms_db, peak_db)
+            rms_db, _peak_db = self._level_monitor.app_level
+            if rms_db > silence_db_threshold:
+                # Non-silent audio detected — per-process capture is working.
+                logger.debug(
+                    "Silence detector: app audio detected (%.1f dB) at %.1fs — "
+                    "per-process capture is working.",
+                    rms_db,
+                    elapsed,
+                )
+                return
+
+        # Still silent after the full check period — switch to desktop audio.
+        if self._is_desktop_audio:
+            return
+
+        logger.warning(
+            "App audio silent for %.1fs — auto-switching to desktop audio.",
+            _SILENCE_CHECK_SECONDS,
+        )
+        self.switch_to_desktop_audio()
+
+        if self._on_health_warning:
+            try:
+                self._on_health_warning("silence_auto_switch")
+            except Exception:
+                logger.exception("on_health_warning callback error")
 
     @property
     def level_monitor(self) -> AudioLevelMonitor:
