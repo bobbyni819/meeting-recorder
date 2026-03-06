@@ -151,6 +151,9 @@ def list_visible_windows(
     """
     import psutil
 
+    # Titles belonging to the recorder itself — exclude from picker
+    _OWN_TITLES = {"Recording Dashboard", "Record Window", "Pick Capture Window"}
+
     results: list[tuple[int, str, int]] = []
 
     def _cb(hwnd, _lparam):
@@ -162,7 +165,7 @@ def list_visible_windows(
         buf = ctypes.create_unicode_buffer(title_len + 1)
         user32.GetWindowTextW(hwnd, buf, title_len + 1)
         title = buf.value.strip()
-        if not title:
+        if not title or title in _OWN_TITLES:
             return True
         rect = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))

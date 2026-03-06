@@ -208,7 +208,7 @@ buffer_minutes = 10
 
 [google_drive]
 enabled = false
-credentials_path = "~/.meeting_recorder/google_credentials.json"
+credentials_path = "~/.config/google/client_secret.json"
 folder_id = ""
 
 [summary]
@@ -318,6 +318,15 @@ Teams meetings run inside WebView2 (`msedgewebview2.exe`) child processes, which
 - This happens automatically — no manual intervention needed.
 
 **Zoom** works differently: Zoom exposes per-process audio normally, so the recorder uses direct `proc-tap` capture. System volume doesn't matter for Zoom recordings.
+
+### Recording Any Window
+
+You can record any application — not just Zoom, Teams, or Webex:
+
+- **If no meeting app is running**, press `Ctrl+Shift+R` and a window picker dialog will appear. Select the window you want to record and click "Record".
+- **"Record Window..." tray menu item** — right-click the system tray icon and choose "Record Window..." to always open the picker, even if a meeting app is running. Useful for recording Discord calls, browser tabs, presentations, etc.
+- **Audio strategy**: The recorder tries per-process audio capture first. If the selected app produces no audio for 3 seconds, it automatically switches to desktop audio (same as Teams).
+- **Mute sync is disabled** for manually-selected windows since there's no standard mute shortcut to hook.
 
 ---
 

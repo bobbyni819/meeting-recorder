@@ -39,6 +39,9 @@ class TrayIcon:
         on_search: Optional[Callable] = None,
         on_show_dashboard: Optional[Callable] = None,
         on_record_window: Optional[Callable] = None,
+        hotkey_recording: str = "ctrl+shift+r",
+        hotkey_mute: str = "ctrl+shift+u",
+        hotkey_dashboard: str = "ctrl+shift+d",
     ):
         self._on_start = on_start
         self._on_stop = on_stop
@@ -48,6 +51,9 @@ class TrayIcon:
         self._on_search = on_search
         self._on_show_dashboard = on_show_dashboard
         self._on_record_window = on_record_window
+        self._hotkey_recording = hotkey_recording
+        self._hotkey_mute = hotkey_mute
+        self._hotkey_dashboard = hotkey_dashboard
         self._state = "idle"
         self._status_text = "Idle"
         self._icon: Optional[pystray.Icon] = None
@@ -83,8 +89,9 @@ class TrayIcon:
                 ),
                 pystray.Menu.SEPARATOR,
                 Item("Hotkeys", pystray.Menu(
-                    Item("Ctrl+Shift+R     Start/Stop Recording", None, enabled=False),
-                    Item("Ctrl+Shift+U     Manual Mic Mute Toggle", None, enabled=False),
+                    Item(f"{self._hotkey_recording}     Start/Stop Recording", None, enabled=False),
+                    Item(f"{self._hotkey_mute}     Manual Mic Mute Toggle", None, enabled=False),
+                    Item(f"{self._hotkey_dashboard}     Show/Hide Dashboard", None, enabled=False),
                     pystray.Menu.SEPARATOR,
                     Item("Zoom:  Alt+A     Mute Sync", None, enabled=False),
                     Item("Teams: Ctrl+Shift+M  Mute Sync", None, enabled=False),

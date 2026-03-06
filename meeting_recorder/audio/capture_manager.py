@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import struct
 import threading
 import time
 import wave
@@ -41,19 +40,19 @@ _DESKTOP_EXIT_GRACE_SECONDS = 5.0
 def _is_buffer_silent(data: bytes) -> bool:
     """Check whether raw int16 PCM audio data is effectively silent.
 
-    Uses ``struct.unpack_from`` to decode samples and computes the RMS
-    amplitude.  Returns True when the RMS is below ``_SILENCE_RMS_THRESHOLD``.
+    Decodes int16 samples via numpy and computes RMS amplitude.
+    Returns True when the RMS is below ``_SILENCE_RMS_THRESHOLD``.
     """
     if not data or len(data) < 2:
         return True
 
-    num_samples = len(data) // 2
-    sum_sq = 0
-    for i in range(num_samples):
-        (sample,) = struct.unpack_from("<h", data, i * 2)
-        sum_sq += sample * sample
-    rms = (sum_sq / num_samples) ** 0.5
-    return rms < _SILENCE_RMS_THRESHOLD
+    import numpy as np
+
+    # Trim to even length (int16 = 2 bytes per sample)
+    usable = len(data) & ~1
+    samples = np.frombuffer(data[:usable], dtype=np.int16)
+    rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
+    return bool(rms < _SILENCE_RMS_THRESHOLD)
 
 
 def _check_system_volume() -> Optional[float]:
@@ -592,7 +591,7 @@ class CaptureManager:
         """
         from meeting_recorder.video.window_finder import list_visible_windows
         return [
-            (hwnd, f"{title} \u2014 {proc_name}")
+            (hwnd, f"{title} \u2014 {proc_name}" if proc_name != "unknown" else title)
             for hwnd, title, _pid, proc_name in list_visible_windows()
         ]
 

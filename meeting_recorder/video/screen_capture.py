@@ -56,7 +56,7 @@ class ScreenCapture:
         pid: int,
         process_name: str,
         output_path: Path,
-        fps: float = 5.0,
+        fps: float = 30.0,
     ):
         self.pid = pid
         self.process_name = process_name

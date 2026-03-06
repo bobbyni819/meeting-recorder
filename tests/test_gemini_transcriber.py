@@ -133,16 +133,21 @@ class TestGeminiTranscribe:
         mock_client.files.get.return_value = mock_file_active
         mock_client.models.generate_content.return_value = mock_response
 
-        # Also mock _compress_to_flac to skip compression
+        # Mock the google.genai imports that happen inside transcribe()
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_types = MagicMock()
+
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
             return_value=(wav, "audio/wav", None),
         ):
-            with patch("meeting_recorder.transcription.gemini_transcriber.genai", create=True):
-                with patch(
-                    "google.genai.Client", return_value=mock_client,
-                ):
-                    segments = transcriber.transcribe(wav)
+            with patch.dict("sys.modules", {
+                "google": MagicMock(genai=mock_genai),
+                "google.genai": mock_genai,
+                "google.genai.types": mock_types,
+            }):
+                segments = transcriber.transcribe(wav)
 
         assert len(segments) == 2
         assert segments[0].speaker == "Speaker 1"
@@ -176,12 +181,19 @@ class TestGeminiTranscribe:
         mock_client.files.get.return_value = mock_file_active
         mock_client.models.generate_content.return_value = mock_response
 
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value = mock_client
+
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
             return_value=(wav, "audio/wav", None),
         ):
-            with patch("google.genai.Client", return_value=mock_client):
-                with patch("time.sleep"):  # Skip actual sleep
+            with patch.dict("sys.modules", {
+                "google": MagicMock(genai=mock_genai),
+                "google.genai": mock_genai,
+                "google.genai.types": MagicMock(),
+            }):
+                with patch("time.sleep"):
                     segments = transcriber.transcribe(wav)
 
         assert len(segments) == 1
@@ -203,11 +215,18 @@ class TestGeminiTranscribe:
         mock_client.files.upload.return_value = mock_file
         mock_client.files.get.return_value = mock_file  # Always PROCESSING
 
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value = mock_client
+
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
             return_value=(wav, "audio/wav", None),
         ):
-            with patch("google.genai.Client", return_value=mock_client):
+            with patch.dict("sys.modules", {
+                "google": MagicMock(genai=mock_genai),
+                "google.genai": mock_genai,
+                "google.genai.types": MagicMock(),
+            }):
                 with patch("time.sleep"):
                     with pytest.raises(RuntimeError, match="did not complete"):
                         transcriber.transcribe(wav)
@@ -230,11 +249,18 @@ class TestGeminiTranscribe:
         mock_client.files.upload.return_value = mock_file
         mock_client.models.generate_content.return_value = mock_response
 
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value = mock_client
+
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
             return_value=(wav, "audio/wav", None),
         ):
-            with patch("google.genai.Client", return_value=mock_client):
+            with patch.dict("sys.modules", {
+                "google": MagicMock(genai=mock_genai),
+                "google.genai": mock_genai,
+                "google.genai.types": MagicMock(),
+            }):
                 segments = transcriber.transcribe(wav)
 
         assert segments == []

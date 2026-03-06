@@ -36,6 +36,20 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   to switch both screen and audio capture to the correct window mid-recording
 - `switch_screen_window(hwnd)` hot-swaps both screen capture AND audio PID atomically
 
+## Record Anything mode
+- If no meeting app (Zoom/Teams/Webex) is detected, `start_recording()` opens a window picker
+- "Record Window..." tray menu item always opens the picker regardless of meeting app state
+- Selected window uses `app_key="manual"` — disables mute sync, skips Outlook calendar
+- Audio: tries ProcTap per-process first, auto-switches to desktop audio if silent for 3 seconds
+- `_silence_auto_switch()` thread in capture_manager.py handles the detection
+- Health warnings (silence, volume, write errors) surfaced via `_on_health_warning(key)` callback
+
+## Thread safety
+- `_transcriber_lock` in capture_manager.py protects `_live_transcriber` (writer loop + stop)
+- `_metadata_lock` in app.py protects all `metadata.save()` calls
+- Ring buffer tracks overflow count, logs warning every 100 drops
+- Writer thread sets `_write_error` flag and fires health warning on exception
+
 ## Known pitfalls
 - `pythonw.exe` sets `sys.stdout/stderr = None` — redirect to devnull before `torch.hub.load`
 - `torch.hub.load` deadlocks in background threads when pystray + keyboard hooks are active;

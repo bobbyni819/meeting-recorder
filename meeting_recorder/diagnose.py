@@ -52,19 +52,25 @@ def run_diagnostics() -> int:
     # 1. Config
     failures += _check_config()
 
-    # 2. Meeting process scan
+    # 2. GPU / CUDA
+    failures += _check_gpu()
+
+    # 3. VAD model
+    failures += _check_vad()
+
+    # 4. Meeting process scan
     failures += _check_meeting_processes()
 
-    # 3. App audio probe
+    # 5. App audio probe
     failures += _check_app_audio()
 
-    # 4. Mic probe
+    # 6. Mic probe
     failures += _check_mic()
 
-    # 5. API connectivity
+    # 7. API connectivity
     failures += _check_api()
 
-    # 6. Screen capture probe
+    # 8. Screen capture probe
     failures += _check_screen_capture()
 
     print()
@@ -80,10 +86,10 @@ def _check_config() -> int:
     print(_header("Configuration"))
     failures = 0
     try:
-        from meeting_recorder.config import Config
+        from meeting_recorder.config import Config, CONFIG_FILE
 
         config = Config.load()
-        print(_ok(f"Config loaded from {Config.CONFIG_FILE if Config.CONFIG_FILE.exists() else 'defaults'}"))
+        print(_ok(f"Config loaded from {CONFIG_FILE if CONFIG_FILE.exists() else 'defaults'}"))
 
         # Output dir writable
         output_dir = config.output_dir
@@ -125,6 +131,48 @@ def _check_config() -> int:
         print(_fail(f"Config load failed: {e}"))
         failures += 1
 
+    return failures
+
+
+def _check_gpu() -> int:
+    """Check GPU availability and CUDA support."""
+    print(_header("GPU / CUDA"))
+    failures = 0
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            vram = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            print(_ok(f"CUDA available: {name} ({vram:.1f} GB VRAM)"))
+        else:
+            print(_warn(
+                "CUDA not available — transcription will use CPU (much slower). "
+                "Install PyTorch with CUDA: pip install torch --index-url "
+                "https://download.pytorch.org/whl/cu121"
+            ))
+    except ImportError:
+        print(_fail("PyTorch not installed"))
+        failures += 1
+    except Exception as e:
+        print(_fail(f"GPU check failed: {e}"))
+        failures += 1
+    return failures
+
+
+def _check_vad() -> int:
+    """Check that the Silero VAD model can load."""
+    print(_header("Voice Activity Detection"))
+    failures = 0
+    try:
+        from meeting_recorder.audio.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector(threshold=0.5)
+        vad.load()
+        print(_ok("Silero VAD model loaded"))
+    except Exception as e:
+        print(_fail(f"VAD model failed to load: {e}"))
+        failures += 1
     return failures
 
 
@@ -308,22 +356,34 @@ def _check_api() -> int:
 
 
 def _check_screen_capture() -> int:
-    """Probe screen capture from the best meeting window."""
+    """Probe screen capture from the best meeting window, or any visible window."""
     print(_header("Screen Capture"))
     failures = 0
     try:
         from meeting_recorder.audio.process_finder import find_primary_meeting_process
-        from meeting_recorder.video.window_finder import find_window_by_pid, get_window_rect
+        from meeting_recorder.video.window_finder import (
+            find_window_by_pid,
+            get_window_rect,
+            list_visible_windows,
+        )
         from meeting_recorder.video.screen_capture import ScreenCapture
 
+        # Try meeting window first, then fall back to any visible window
+        hwnd = None
+        source = ""
         process = find_primary_meeting_process()
-        if process is None:
-            print(_warn("No meeting process for screen capture test (skipped)"))
-            return 0
+        if process is not None:
+            hwnd = find_window_by_pid(process.pid)
+            source = f"meeting ({process.display_name})"
 
-        hwnd = find_window_by_pid(process.pid)
         if hwnd is None:
-            print(_warn(f"No window found for PID {process.pid} (skipped)"))
+            windows = list_visible_windows()
+            if windows:
+                hwnd = windows[0][0]
+                source = f"window: {windows[0][1][:40]}"
+
+        if hwnd is None:
+            print(_warn("No visible window found for screen capture test (skipped)"))
             return 0
 
         rect = get_window_rect(hwnd)
@@ -336,7 +396,7 @@ def _check_screen_capture() -> int:
         if frame is not None:
             import numpy as np
             if np.max(frame) >= 5:
-                print(_ok(f"Screen capture OK: {width}x{height} (PrintWindow)"))
+                print(_ok(f"Screen capture OK: {width}x{height} from {source} (PrintWindow)"))
             else:
                 print(_warn(f"PrintWindow returned blank ({width}x{height}) — will fall back to mss"))
         else:

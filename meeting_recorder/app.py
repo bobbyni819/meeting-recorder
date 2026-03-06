@@ -81,6 +81,9 @@ class MeetingRecorderApp:
             on_search=self._open_search,
             on_show_dashboard=self._show_dashboard,
             on_record_window=self._record_window,
+            hotkey_recording=self.config.hotkey.toggle_recording,
+            hotkey_mute=self.config.hotkey.toggle_mute,
+            hotkey_dashboard=self.config.hotkey.toggle_dashboard,
         )
 
     def _save_metadata(self, metadata: RecordingMetadata, recording_dir: Path) -> None:
@@ -198,7 +201,8 @@ class MeetingRecorderApp:
         scrollbar.configure(command=listbox.yview)
 
         for _hwnd, title, _pid, proc_name in windows:
-            listbox.insert(tk.END, f"  {title} \u2014 {proc_name}")
+            label = f"  {title} \u2014 {proc_name}" if proc_name != "unknown" else f"  {title}"
+            listbox.insert(tk.END, label)
 
         def _confirm():
             sel = listbox.curselection()

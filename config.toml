@@ -48,7 +48,7 @@ buffer_minutes = 10    # search window: current time ± N minutes
 
 [google_drive]
 enabled = false        # upload recordings to Google Drive after transcription
-credentials_path = "~/.meeting_recorder/google_credentials.json"
+credentials_path = "~/.config/google/client_secret.json"
 folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
 
 [summary]
@@ -68,3 +68,4 @@ position_x = -1        # -1 = use position preset
 position_y = -1
 start_collapsed = false
 show_transcript = true
+show_screen_preview = true  # show live screen capture thumbnail in dashboard
