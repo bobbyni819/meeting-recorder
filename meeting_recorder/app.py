@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Optional
 
 from meeting_recorder.config import Config
-from meeting_recorder.audio.process_finder import find_primary_meeting_process, MeetingProcess
+from meeting_recorder.audio.process_finder import (
+    find_primary_meeting_process,
+    find_meeting_processes,
+    _find_meeting_window_pid,
+    MeetingProcess,
+)
 from meeting_recorder.audio.capture_manager import CaptureManager
 from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mixer import mix_tracks_streaming
@@ -71,6 +76,13 @@ class MeetingRecorderApp:
         self._capture_mode_reported: bool = False
         self._preview_frame_counter: int = 0
 
+        # Meeting auto-detection scanner
+        self._scanner_thread: Optional[threading.Thread] = None
+        self._scanner_stop = threading.Event()
+        # Minimum window score for auto-start (50 = likely meeting in Teams,
+        # 100 = definite meeting in Zoom, avoids idle lobby windows)
+        self._auto_start_min_score = 50
+
         # System tray
         self._tray = TrayIcon(
             on_start=self.start_recording,
@@ -81,6 +93,8 @@ class MeetingRecorderApp:
             on_search=self._open_search,
             on_show_dashboard=self._show_dashboard,
             on_record_window=self._record_window,
+            on_toggle_auto_start=self._toggle_auto_start,
+            auto_start=self.config.recording.auto_start,
             hotkey_recording=self.config.hotkey.toggle_recording,
             hotkey_mute=self.config.hotkey.toggle_mute,
             hotkey_dashboard=self.config.hotkey.toggle_dashboard,
@@ -108,6 +122,12 @@ class MeetingRecorderApp:
             self._vad = None
 
         self._register_hotkey()
+
+        # Start meeting auto-detection scanner
+        if self.config.recording.auto_start:
+            self._start_meeting_scanner()
+            logger.info("Meeting auto-detection enabled.")
+
         # Tray icon runs on the main thread (blocks)
         self._tray.run()
 
@@ -286,6 +306,21 @@ class MeetingRecorderApp:
 
     def _start_recording_for_process(self, process: MeetingProcess) -> None:
         """Inner method that performs all recording setup. Raises on failure."""
+        # Check disk space before starting
+        import shutil
+        output_dir = self.config.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        free_bytes = shutil.disk_usage(output_dir).free
+        free_gb = free_bytes / (1024 ** 3)
+        if free_gb < 0.1:  # < 100 MB
+            msg = f"Not enough disk space ({free_gb:.1f} GB free). Recording aborted."
+            logger.error(msg)
+            notifications.notify_error(msg)
+            return
+        if free_gb < 1.0:
+            logger.warning("Low disk space: %.1f GB free", free_gb)
+            notifications.notify_info(f"Low disk space: {free_gb:.1f} GB free")
+
         # Snapshot config so mid-recording settings changes don't affect post-processing
         self._recording_config = copy.deepcopy(self.config)
 
@@ -435,6 +470,7 @@ class MeetingRecorderApp:
     def quit(self) -> None:
         """Quit the application."""
         logger.info("Quitting Meeting Recorder...")
+        self._stop_meeting_scanner()
         cm = self._capture_manager
         if cm and cm.is_recording:
             # Use stop_recording() so post-processing (mix + transcribe) runs.
@@ -771,6 +807,119 @@ class MeetingRecorderApp:
         """Called when capture stops automatically (e.g., meeting app exits)."""
         logger.info("Capture auto-stopped (meeting app exited).")
         self.stop_recording()
+
+    # ------------------------------------------------------------------
+    # Meeting auto-detection scanner
+    # ------------------------------------------------------------------
+
+    def _start_meeting_scanner(self) -> None:
+        """Start the background thread that polls for meeting processes."""
+        self._scanner_stop.clear()
+        self._scanner_thread = threading.Thread(
+            target=self._meeting_scanner_loop,
+            name="meeting-scanner",
+            daemon=True,
+        )
+        self._scanner_thread.start()
+
+    def _stop_meeting_scanner(self) -> None:
+        """Signal the meeting scanner to stop."""
+        self._scanner_stop.set()
+
+    def _meeting_scanner_loop(self) -> None:
+        """Poll for meeting processes every 5 seconds while idle.
+
+        When a meeting app is found with a window score above the threshold
+        (indicating an active meeting, not just the idle app lobby), auto-start
+        recording and pause scanning. Scanning resumes when the recording
+        stops.
+        """
+        poll_interval = 5.0
+        # After auto-start, wait this many seconds before scanning again
+        # (gives time for recording to fully stop + post-process).
+        cooldown_after_recording = 10.0
+
+        logger.info("Meeting scanner started (polling every %.0fs).", poll_interval)
+
+        while not self._scanner_stop.is_set():
+            self._scanner_stop.wait(poll_interval)
+            if self._scanner_stop.is_set():
+                break
+
+            # Skip if already recording or processing
+            cm = self._capture_manager
+            if cm and cm.is_recording:
+                continue
+
+            # Scan for meeting processes with high-scoring windows
+            try:
+                processes = find_meeting_processes()
+                if not processes:
+                    continue
+
+                # Check each app for an active meeting window
+                checked_apps: set[str] = set()
+                for proc in processes:
+                    if proc.app_key in checked_apps:
+                        continue
+                    checked_apps.add(proc.app_key)
+
+                    pid, score = _find_meeting_window_pid(proc.app_key)
+                    if pid is not None and score >= self._auto_start_min_score:
+                        logger.info(
+                            "Auto-detected %s meeting (PID %d, score %d). "
+                            "Starting recording...",
+                            proc.display_name, pid, score,
+                        )
+                        # Build a MeetingProcess for the best window PID
+                        auto_proc = MeetingProcess(
+                            pid=pid,
+                            name=proc.name,
+                            app_key=proc.app_key,
+                            display_name=proc.display_name,
+                        )
+                        try:
+                            self._current_process = auto_proc
+                            self._start_recording_for_process(auto_proc)
+                            notifications.notify_info(
+                                f"Auto-recording: {auto_proc.display_name}"
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Auto-start failed for %s",
+                                proc.display_name,
+                            )
+                            self._capture_manager = None
+                            self._current_recording_dir = None
+                            self._current_metadata = None
+                            self._current_process = None
+                            self._tray.set_state("idle")
+                        break  # Only start one recording at a time
+
+            except Exception:
+                logger.exception("Meeting scanner error")
+
+            # If a recording just finished, cool down before scanning again
+            if self._post_thread and self._post_thread.is_alive():
+                self._scanner_stop.wait(cooldown_after_recording)
+
+        logger.info("Meeting scanner stopped.")
+
+    def _toggle_auto_start(self, enabled: bool) -> None:
+        """Toggle meeting auto-detection on/off (tray menu handler)."""
+        self.config.recording.auto_start = enabled
+        try:
+            self.config.save()
+        except Exception:
+            logger.debug("Failed to persist auto_start setting", exc_info=True)
+
+        if enabled:
+            if self._scanner_thread is None or not self._scanner_thread.is_alive():
+                self._start_meeting_scanner()
+            logger.info("Meeting auto-detection enabled.")
+        else:
+            self._stop_meeting_scanner()
+            logger.info("Meeting auto-detection disabled.")
 
     def _open_settings(self) -> None:
         """Open the settings dialog."""

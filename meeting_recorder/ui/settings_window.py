@@ -102,6 +102,18 @@ class SettingsWindow:
         ttk.Entry(parent, textvariable=self._hotkey_var, width=20).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
+        self._auto_start_var = tk.BooleanVar(value=self.config.recording.auto_start)
+        ttk.Checkbutton(parent, text="Auto-detect meetings and start recording", variable=self._auto_start_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        self._live_transcription_var = tk.BooleanVar(value=self.config.recording.live_transcription)
+        ttk.Checkbutton(parent, text="Live transcription preview (uses CPU, may increase latency)", variable=self._live_transcription_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=5
+        )
+
+        row += 1
         self._screen_rec_var = tk.BooleanVar(value=self.config.screen_recording.enabled)
         ttk.Checkbutton(parent, text="Record Meeting Window (screen capture)", variable=self._screen_rec_var).grid(
             row=row, column=0, columnspan=2, sticky=tk.W, pady=5
@@ -110,7 +122,7 @@ class SettingsWindow:
         row += 1
         ttk.Label(parent, text="Screen FPS:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._screen_fps_var = tk.DoubleVar(value=self.config.screen_recording.fps)
-        ttk.Spinbox(parent, from_=1, to=15, textvariable=self._screen_fps_var, width=5).grid(row=row, column=1, sticky=tk.W, pady=5)
+        ttk.Spinbox(parent, from_=1, to=60, textvariable=self._screen_fps_var, width=5).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         parent.columnconfigure(1, weight=1)
 
@@ -143,7 +155,7 @@ class SettingsWindow:
         self._backend_var = tk.StringVar(value=self.config.transcription.backend)
         ttk.Combobox(
             parent, textvariable=self._backend_var, width=10,
-            values=["local", "cloud"], state="readonly",
+            values=["local", "cloud", "gemini"], state="readonly",
         ).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
@@ -166,6 +178,16 @@ class SettingsWindow:
         ttk.Label(parent, text="OpenAI API Key:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._api_key_var = tk.StringVar(value=self.config.transcription.openai_api_key)
         ttk.Entry(parent, textvariable=self._api_key_var, width=40, show="*").grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
+        ttk.Label(parent, text="Gemini API Key:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._gemini_key_var = tk.StringVar(value=self.config.transcription.gemini_api_key)
+        ttk.Entry(parent, textvariable=self._gemini_key_var, width=40, show="*").grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
+        ttk.Label(parent, text="Gemini Model:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._gemini_model_var = tk.StringVar(value=self.config.transcription.gemini_model)
+        ttk.Entry(parent, textvariable=self._gemini_model_var, width=25).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
         self._diarization_var = tk.BooleanVar(value=self.config.diarization.enabled)
@@ -333,7 +355,7 @@ class SettingsWindow:
         self._summary_provider_var = tk.StringVar(value=self.config.summary.provider)
         ttk.Combobox(
             parent, textvariable=self._summary_provider_var, width=12,
-            values=["openai", "anthropic"], state="readonly",
+            values=["openai", "anthropic", "gemini"], state="readonly",
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
 
         row += 1
@@ -380,6 +402,8 @@ class SettingsWindow:
             self.config.recording.output_dir = self._output_dir_var.get()
             self.config.recording.language = self._language_var.get()
             self.config.recording.user_name = self._user_name_var.get()
+            self.config.recording.auto_start = self._auto_start_var.get()
+            self.config.recording.live_transcription = self._live_transcription_var.get()
             self.config.hotkey.toggle_recording = self._hotkey_var.get()
 
             self.config.vad.threshold = self._vad_threshold_var.get()
@@ -390,6 +414,8 @@ class SettingsWindow:
             self.config.transcription.model_size = self._model_size_var.get()
             self.config.transcription.device = self._device_var.get()
             self.config.transcription.openai_api_key = self._api_key_var.get()
+            self.config.transcription.gemini_api_key = self._gemini_key_var.get()
+            self.config.transcription.gemini_model = self._gemini_model_var.get()
 
             self.config.diarization.enabled = self._diarization_var.get()
             self.config.diarization.huggingface_token = self._hf_token_var.get()

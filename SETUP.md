@@ -255,9 +255,9 @@ The app will:
 1. Load config
 2. Download/cache models (first run only, may take 5-10 minutes)
 3. Show a system tray icon (a small icon near the clock)
-4. Begin scanning for Zoom, Teams, or Webex processes
+4. Begin scanning for Zoom, Teams, or Webex meetings (if `auto_start = true`)
 
-> **First-run tip**: Start a Zoom or Teams call before running, or the app will just wait in the tray until it detects a meeting process.
+> **Auto-recording**: With `auto_start = true` (the default), the app scans for meeting processes every 5 seconds and starts recording automatically when an active meeting is detected. You can toggle this from the tray menu ("Auto-Record Meetings") or in Settings. You can also always start manually with `Ctrl+Shift+R`.
 
 > **Diagnostic check**: Run `python -m meeting_recorder diagnose` to verify your setup — it checks for GPU availability, model downloads, microphone access, and config validity.
 

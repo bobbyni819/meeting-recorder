@@ -3,6 +3,7 @@ output_dir = "~/MeetingRecordings"
 language = "en"
 user_name = "User"
 live_transcription = false  # real-time transcription preview during recording (uses tiny model on CPU)
+auto_start = true  # auto-detect Zoom/Teams/Webex meetings and start recording
 
 [audio]
 sample_rate = 16000

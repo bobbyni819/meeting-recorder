@@ -39,6 +39,8 @@ class TrayIcon:
         on_search: Optional[Callable] = None,
         on_show_dashboard: Optional[Callable] = None,
         on_record_window: Optional[Callable] = None,
+        on_toggle_auto_start: Optional[Callable] = None,
+        auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
         hotkey_mute: str = "ctrl+shift+u",
         hotkey_dashboard: str = "ctrl+shift+d",
@@ -51,6 +53,8 @@ class TrayIcon:
         self._on_search = on_search
         self._on_show_dashboard = on_show_dashboard
         self._on_record_window = on_record_window
+        self._on_toggle_auto_start = on_toggle_auto_start
+        self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
         self._hotkey_mute = hotkey_mute
         self._hotkey_dashboard = hotkey_dashboard
@@ -86,6 +90,11 @@ class TrayIcon:
                     "Record Window...",
                     self._handle_record_window,
                     enabled=lambda _: self._state == "idle",
+                ),
+                Item(
+                    "Auto-Record Meetings",
+                    self._handle_toggle_auto_start,
+                    checked=lambda _: self._auto_start,
                 ),
                 pystray.Menu.SEPARATOR,
                 Item("Hotkeys", pystray.Menu(
@@ -157,6 +166,12 @@ class TrayIcon:
         """Handle 'Record Window...' menu click."""
         if self._on_record_window:
             threading.Thread(target=self._on_record_window, daemon=True).start()
+
+    def _handle_toggle_auto_start(self, icon, item) -> None:
+        """Handle 'Auto-Record Meetings' toggle."""
+        self._auto_start = not self._auto_start
+        if self._on_toggle_auto_start:
+            self._on_toggle_auto_start(self._auto_start)
 
     def _handle_settings(self, icon, item) -> None:
         """Handle settings menu click."""

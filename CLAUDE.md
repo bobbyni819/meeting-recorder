@@ -58,7 +58,16 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   callers (Stop button + process-exit auto-stop); do not remove this lock
 - Teams calendar window (main PID) produces no audio — always use the meeting window PID
 
+## Meeting auto-detection
+- `recording.auto_start = true` enables background scanner thread
+- `_meeting_scanner_loop()` polls every 5 seconds when idle
+- Auto-starts recording when window score >= 50 (active meeting, not idle lobby)
+- Toggleable from tray menu ("Auto-Record Meetings") — persists to config on toggle
+- Scanner pauses during recording and resumes after post-processing completes
+- Disk space check before recording: refuses at < 100 MB, warns at < 1 GB
+
 ## Config defaults (current)
+- `recording.auto_start = true` (auto-detect meetings)
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
 - `screen_recording.enabled = true`, `fps = 30`

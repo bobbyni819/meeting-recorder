@@ -33,6 +33,7 @@ class RecordingConfig:
     language: str = "en"
     user_name: str = "User"
     live_transcription: bool = False
+    auto_start: bool = True  # auto-detect meetings and start recording
 
 
 @dataclass
