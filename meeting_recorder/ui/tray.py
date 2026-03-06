@@ -38,6 +38,7 @@ class TrayIcon:
         on_open_recordings: Optional[Callable] = None,
         on_search: Optional[Callable] = None,
         on_show_dashboard: Optional[Callable] = None,
+        on_record_window: Optional[Callable] = None,
     ):
         self._on_start = on_start
         self._on_stop = on_stop
@@ -46,6 +47,7 @@ class TrayIcon:
         self._on_open_recordings = on_open_recordings
         self._on_search = on_search
         self._on_show_dashboard = on_show_dashboard
+        self._on_record_window = on_record_window
         self._state = "idle"
         self._status_text = "Idle"
         self._icon: Optional[pystray.Icon] = None
@@ -73,6 +75,11 @@ class TrayIcon:
                     lambda _: "Stop Recording" if self._state == "recording" else "Start Recording",
                     self._on_toggle_recording,
                     enabled=lambda _: self._state in ("idle", "recording"),
+                ),
+                Item(
+                    "Record Window...",
+                    self._handle_record_window,
+                    enabled=lambda _: self._state == "idle",
                 ),
                 pystray.Menu.SEPARATOR,
                 Item("Hotkeys", pystray.Menu(
@@ -138,6 +145,11 @@ class TrayIcon:
         elif self._state == "idle":
             if self._on_start:
                 threading.Thread(target=self._on_start, daemon=True).start()
+
+    def _handle_record_window(self, icon, item) -> None:
+        """Handle 'Record Window...' menu click."""
+        if self._on_record_window:
+            threading.Thread(target=self._on_record_window, daemon=True).start()
 
     def _handle_settings(self, icon, item) -> None:
         """Handle settings menu click."""

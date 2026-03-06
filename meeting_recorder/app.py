@@ -76,6 +76,7 @@ class MeetingRecorderApp:
             on_open_recordings=self._open_recordings_folder,
             on_search=self._open_search,
             on_show_dashboard=self._show_dashboard,
+            on_record_window=self._record_window,
         )
 
     def run(self) -> None:
@@ -99,7 +100,11 @@ class MeetingRecorderApp:
         self._tray.run()
 
     def start_recording(self) -> None:
-        """Start recording the active meeting."""
+        """Start recording the active meeting.
+
+        If no known meeting app is detected, opens a window picker so the
+        user can manually select any window to record.
+        """
         cm = self._capture_manager
         if cm and cm.is_recording:
             logger.warning("Already recording.")
@@ -108,9 +113,11 @@ class MeetingRecorderApp:
         # Find meeting process
         process = find_primary_meeting_process()
         if process is None:
-            logger.warning("No meeting application found.")
-            notifications.notify_no_meeting_found()
-            return
+            logger.info("No meeting application found. Opening window picker...")
+            process = self._pick_window_for_recording()
+            if process is None:
+                logger.info("Window picker cancelled by user.")
+                return
 
         self._current_process = process
         logger.info("Found %s (PID %d)", process.display_name, process.pid)
@@ -120,6 +127,144 @@ class MeetingRecorderApp:
         except Exception:
             logger.exception("Failed to start recording for %s", process.display_name)
             notifications.notify_error(f"Failed to start recording: see log for details")
+            self._capture_manager = None
+            self._current_recording_dir = None
+            self._current_metadata = None
+            self._current_process = None
+            self._tray.set_state("idle")
+
+    def _pick_window_for_recording(self) -> Optional[MeetingProcess]:
+        """Show a standalone window picker dialog and return a MeetingProcess.
+
+        Creates a blocking tkinter Tk() window (not Toplevel) so it works
+        even when no other tkinter root exists. Returns None if the user
+        cancels or no windows are available.
+        """
+        import tkinter as tk
+        from meeting_recorder.video.window_finder import list_visible_windows
+
+        windows = list_visible_windows()
+        if not windows:
+            logger.warning("No visible windows found for picker.")
+            return None
+
+        result: list[Optional[MeetingProcess]] = [None]
+
+        root = tk.Tk()
+        root.title("Record Window")
+        root.configure(bg="#1a1a2e")
+        root.attributes("-topmost", True)
+        root.geometry("500x400")
+        root.resizable(False, False)
+
+        tk.Label(
+            root,
+            text="No meeting app detected. Select a window to record:",
+            font=("Segoe UI", 9),
+            fg="#e0e0e0",
+            bg="#1a1a2e",
+        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
+
+        # Listbox + scrollbar
+        list_frame = tk.Frame(root, bg="#1a1a2e")
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12)
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            bg="#0d0d1a",
+            fg="#e0e0e0",
+            selectbackground="#0f3460",
+            selectforeground="#e0e0e0",
+            activestyle="none",
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=1,
+            highlightcolor="#0f3460",
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=listbox.yview)
+
+        for _hwnd, title, _pid, proc_name in windows:
+            listbox.insert(tk.END, f"  {title} \u2014 {proc_name}")
+
+        def _confirm():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            hwnd, title, pid, proc_name = windows[sel[0]]
+            result[0] = MeetingProcess(
+                pid=pid,
+                name=proc_name,
+                app_key="manual",
+                display_name=title,
+            )
+            root.destroy()
+
+        listbox.bind("<Double-Button-1>", lambda e: _confirm())
+
+        # Buttons
+        btn_frame = tk.Frame(root, bg="#1a1a2e")
+        btn_frame.pack(fill=tk.X, padx=12, pady=10)
+
+        sel_btn = tk.Label(
+            btn_frame,
+            text=" Record This Window ",
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg="#0f3460",
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        )
+        sel_btn.pack(side=tk.LEFT)
+        sel_btn.bind("<Button-1>", lambda e: _confirm())
+        sel_btn.bind("<Enter>", lambda e: sel_btn.configure(bg="#1a5276"))
+        sel_btn.bind("<Leave>", lambda e: sel_btn.configure(bg="#0f3460"))
+
+        cancel_btn = tk.Label(
+            btn_frame,
+            text=" Cancel ",
+            font=("Segoe UI", 9),
+            fg="#888888",
+            bg="#0f3460",
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=8)
+        cancel_btn.bind("<Button-1>", lambda e: root.destroy())
+
+        root.mainloop()
+        return result[0]
+
+    def _record_window(self) -> None:
+        """Tray menu handler: open a window picker then start recording.
+
+        Always shows the picker regardless of whether a meeting app is
+        detected. If the user cancels, returns silently.
+        """
+        cm = self._capture_manager
+        if cm and cm.is_recording:
+            logger.warning("Already recording.")
+            return
+
+        process = self._pick_window_for_recording()
+        if process is None:
+            logger.info("Record Window cancelled by user.")
+            return
+
+        self._current_process = process
+        logger.info("Recording window: %s (PID %d)", process.display_name, process.pid)
+
+        try:
+            self._start_recording_for_process(process)
+        except Exception:
+            logger.exception("Failed to start recording for %s", process.display_name)
+            notifications.notify_error("Failed to start recording: see log for details")
             self._capture_manager = None
             self._current_recording_dir = None
             self._current_metadata = None

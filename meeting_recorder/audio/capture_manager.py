@@ -407,12 +407,18 @@ class CaptureManager:
         return None
 
     def list_capturable_windows(self) -> list[tuple[int, str]]:
-        """Return (hwnd, title) pairs for all visible top-level windows.
+        """Return (hwnd, display_title) pairs for all visible top-level windows.
+
+        Display titles are formatted as ``"title -- process_name"`` so the user
+        can distinguish windows from different applications.
 
         Used to populate the window picker in the recording dashboard.
         """
         from meeting_recorder.video.window_finder import list_visible_windows
-        return [(hwnd, title) for hwnd, title, _pid in list_visible_windows()]
+        return [
+            (hwnd, f"{title} \u2014 {proc_name}")
+            for hwnd, title, _pid, proc_name in list_visible_windows()
+        ]
 
     def switch_screen_window(self, hwnd: int) -> None:
         """Switch screen capture AND audio capture to the window's owning process.
