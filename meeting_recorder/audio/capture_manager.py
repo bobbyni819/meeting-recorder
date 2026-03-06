@@ -31,6 +31,12 @@ _SILENCE_CHECK_SECONDS = 3.0
 # RMS threshold for int16 PCM: anything below this is considered silent.
 _SILENCE_RMS_THRESHOLD = 10
 
+# How long continuous silence on the app audio channel before warning the user.
+_SILENCE_WARNING_SECONDS = 10.0
+
+# Grace period after PID exits in desktop mode before auto-stopping.
+_DESKTOP_EXIT_GRACE_SECONDS = 5.0
+
 
 def _is_buffer_silent(data: bytes) -> bool:
     """Check whether raw int16 PCM audio data is effectively silent.
@@ -48,6 +54,21 @@ def _is_buffer_silent(data: bytes) -> bool:
         sum_sq += sample * sample
     rms = (sum_sq / num_samples) ** 0.5
     return rms < _SILENCE_RMS_THRESHOLD
+
+
+def _check_system_volume() -> Optional[float]:
+    """Return the system master volume (0.0 - 1.0), or None if unavailable."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        if volume.GetMute():
+            return 0.0
+        return volume.GetMasterVolumeLevelScalar()
+    except Exception:
+        return None
 
 
 class CaptureManager:
@@ -98,6 +119,8 @@ class CaptureManager:
         # Thread heartbeats for health monitoring
         self._thread_heartbeats: dict[str, float] = {}
         self._last_health_check: float = 0.0
+        # Ongoing silence detection (Task 7)
+        self._app_silence_start: Optional[float] = None
 
         # Ring buffers
         self._app_buffer = RingBuffer(max_chunks=2000)
@@ -252,6 +275,17 @@ class CaptureManager:
             )
             self._silence_thread.start()
 
+        # Check system volume when using desktop audio
+        if self._is_desktop_audio:
+            vol = _check_system_volume()
+            if vol is not None and vol < 0.01:
+                logger.warning("System volume is muted/zero — desktop audio will be silent!")
+                if self._on_health_warning:
+                    try:
+                        self._on_health_warning("system_volume_muted")
+                    except Exception:
+                        logger.exception("on_health_warning callback error")
+
         # Start live transcription if enabled
         if self._live_transcription_enabled:
             try:
@@ -376,13 +410,21 @@ class CaptureManager:
         Does NOT call self.stop() directly — doing so would set
         _is_recording = False before the app gets a chance to run its
         stop_recording, causing post-processing to be skipped.
+
+        In desktop audio mode, PID exit is still detected but a grace period
+        of _DESKTOP_EXIT_GRACE_SECONDS is applied before auto-stopping,
+        in case the meeting app restarts or the user switches windows.
         """
         while not self._stop_event.is_set():
-            if self._is_desktop_audio:
-                # No single PID to monitor in desktop mode — skip auto-stop
-                self._stop_event.wait(2.0)
-                continue
             if not is_process_running(self.pid):
+                if self._is_desktop_audio:
+                    logger.info(
+                        "Target PID %d exited (desktop mode) — waiting %.0fs grace.",
+                        self.pid, _DESKTOP_EXIT_GRACE_SECONDS,
+                    )
+                    self._stop_event.wait(_DESKTOP_EXIT_GRACE_SECONDS)
+                    if self._stop_event.is_set():
+                        return
                 logger.info("Target process (PID %d) exited. Auto-stopping.", self.pid)
                 if self._on_stopped:
                     try:
@@ -394,6 +436,11 @@ class CaptureManager:
 
     def _level_monitor_loop(self) -> None:
         """Periodically notify the audio level callback and check thread health."""
+        from meeting_recorder.audio.level_monitor import MIN_DB
+
+        # A dB threshold just above pure silence.
+        silence_db_threshold = MIN_DB + 1.0  # -59.0 dB
+
         while not self._stop_event.is_set():
             try:
                 self._level_monitor.notify()
@@ -410,6 +457,24 @@ class CaptureManager:
                             self._on_health_warning(name)
                         except Exception:
                             logger.exception("on_health_warning callback error")
+
+            # Check for prolonged app audio silence
+            try:
+                app_rms_db, _app_peak_db = self._level_monitor.app_level
+            except (TypeError, ValueError):
+                app_rms_db = MIN_DB
+            if app_rms_db <= silence_db_threshold:
+                if self._app_silence_start is None:
+                    self._app_silence_start = now
+                elif (now - self._app_silence_start >= _SILENCE_WARNING_SECONDS
+                      and self._on_health_warning):
+                    try:
+                        self._on_health_warning("app_audio_silent")
+                    except Exception:
+                        logger.exception("on_health_warning callback error")
+                    self._app_silence_start = now  # reset to avoid spamming
+            else:
+                self._app_silence_start = None
 
             self._stop_event.wait(0.1)
 

@@ -727,12 +727,18 @@ class MeetingRecorderApp:
                 self._dashboard.close()
                 self._dashboard = None
 
-    def _on_health_warning(self, thread_name: str) -> None:
-        """Called when a capture thread hasn't produced data recently."""
-        logger.warning("Health warning: %s thread stalled (no data for >10s)", thread_name)
-        notifications.notify_error(f"Warning: {thread_name} may have stalled")
+    def _on_health_warning(self, warning_key: str) -> None:
+        """Called when a capture issue is detected."""
+        messages = {
+            "system_volume_muted": "System volume is muted \u2014 desktop audio will be silent!",
+            "app_audio_silent": "No audio detected for 10s \u2014 check volume or switch audio mode",
+            "silence_auto_switch": "No app audio detected \u2014 switched to desktop audio",
+        }
+        msg = messages.get(warning_key, f"Warning: {warning_key} may have stalled")
+        logger.warning("Health warning: %s", msg)
+        notifications.notify_info(msg)
         if self._dashboard and self._dashboard.is_visible:
-            self._dashboard.update_transcript(f"[Warning: {thread_name} stalled]")
+            self._dashboard.update_transcript(f"[\u26a0 {msg}]")
 
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""
