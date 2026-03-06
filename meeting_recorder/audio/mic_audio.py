@@ -68,7 +68,11 @@ class MicAudioCapture:
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
-                logger.warning("Mic capture thread did not terminate (zombie).")
+                logger.error(
+                    "Mic capture thread did not terminate within 5s "
+                    "(zombie thread — audio device may be held). Thread: %s",
+                    self._thread.name,
+                )
             self._thread = None
         logger.info("Mic audio capture stopped.")
 

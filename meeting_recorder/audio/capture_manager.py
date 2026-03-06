@@ -25,6 +25,51 @@ from meeting_recorder.audio.level_monitor import AudioLevelMonitor
 
 logger = logging.getLogger(__name__)
 
+# How long to wait after recording starts before deciding the app audio is silent.
+_SILENCE_CHECK_SECONDS = 3.0
+
+# RMS threshold for int16 PCM: anything below this is considered silent.
+_SILENCE_RMS_THRESHOLD = 10
+
+# How long continuous silence on the app audio channel before warning the user.
+_SILENCE_WARNING_SECONDS = 10.0
+
+# Grace period after PID exits in desktop mode before auto-stopping.
+_DESKTOP_EXIT_GRACE_SECONDS = 5.0
+
+
+def _is_buffer_silent(data: bytes) -> bool:
+    """Check whether raw int16 PCM audio data is effectively silent.
+
+    Uses ``struct.unpack_from`` to decode samples and computes the RMS
+    amplitude.  Returns True when the RMS is below ``_SILENCE_RMS_THRESHOLD``.
+    """
+    if not data or len(data) < 2:
+        return True
+
+    num_samples = len(data) // 2
+    sum_sq = 0
+    for i in range(num_samples):
+        (sample,) = struct.unpack_from("<h", data, i * 2)
+        sum_sq += sample * sample
+    rms = (sum_sq / num_samples) ** 0.5
+    return rms < _SILENCE_RMS_THRESHOLD
+
+
+def _check_system_volume() -> Optional[float]:
+    """Return the system master volume (0.0 - 1.0), or None if unavailable."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        if volume.GetMute():
+            return 0.0
+        return volume.GetMasterVolumeLevelScalar()
+    except Exception:
+        return None
+
 
 class CaptureManager:
     """Manages audio capture from app and mic, writing to WAV files.
@@ -74,6 +119,8 @@ class CaptureManager:
         # Thread heartbeats for health monitoring
         self._thread_heartbeats: dict[str, float] = {}
         self._last_health_check: float = 0.0
+        # Ongoing silence detection (Task 7)
+        self._app_silence_start: Optional[float] = None
 
         # Ring buffers
         self._app_buffer = RingBuffer(max_chunks=2000)
@@ -139,15 +186,19 @@ class CaptureManager:
                 logger.warning("Screen capture dependencies not available.")
 
         # Writer state
+        self._write_error = False
         self._stop_event = threading.Event()
         self._app_writer_thread: Optional[threading.Thread] = None
         self._mic_writer_thread: Optional[threading.Thread] = None
         self._monitor_thread: Optional[threading.Thread] = None
         self._is_recording = False
         self._start_time: Optional[float] = None
+        self._silence_thread: Optional[threading.Thread] = None
         # Guards stop() against concurrent callers (e.g. user clicks Stop
         # while process-exit auto-stop fires on a different thread).
         self._stop_lock = threading.Lock()
+        # Guards _live_transcriber access across writer, start, and stop threads.
+        self._transcriber_lock = threading.Lock()
 
     def start(self) -> None:
         """Start all capture and writer threads."""
@@ -216,15 +267,39 @@ class CaptureManager:
         )
         self._level_thread.start()
 
+        # For non-Teams apps, monitor app audio for silence after start.
+        # If still silent after _SILENCE_CHECK_SECONDS, auto-switch to
+        # desktop audio so the user doesn't get a blank recording.
+        if self._app_key != "teams":
+            self._silence_thread = threading.Thread(
+                target=self._silence_auto_switch,
+                name="silence-detector",
+                daemon=True,
+            )
+            self._silence_thread.start()
+
+        # Check system volume when using desktop audio
+        if self._is_desktop_audio:
+            vol = _check_system_volume()
+            if vol is not None and vol < 0.01:
+                logger.warning("System volume is muted/zero — desktop audio will be silent!")
+                if self._on_health_warning:
+                    try:
+                        self._on_health_warning("system_volume_muted")
+                    except Exception:
+                        logger.exception("on_health_warning callback error")
+
         # Start live transcription if enabled
         if self._live_transcription_enabled:
             try:
                 from meeting_recorder.transcription.live_transcriber import LiveTranscriber
 
-                self._live_transcriber = LiveTranscriber(
+                lt = LiveTranscriber(
                     on_transcript=self._on_live_transcript,
                 )
-                self._live_transcriber.start()
+                lt.start()
+                with self._transcriber_lock:
+                    self._live_transcriber = lt
             except ImportError:
                 logger.warning("Live transcription dependencies not available.")
             except Exception:
@@ -269,6 +344,7 @@ class CaptureManager:
             (self._mic_writer_thread, 10.0, "mic WAV writer"),
             (self._monitor_thread, 5.0, "process monitor"),
             (self._level_thread, 3.0, "audio level monitor"),
+            (self._silence_thread, 1.0, "silence detector"),
         ]
         current = threading.current_thread()
         for thread, timeout, label in threads_to_join:
@@ -278,9 +354,11 @@ class CaptureManager:
                     logger.warning("%s thread did not terminate (zombie).", label)
 
         # Stop live transcription after writers have drained
-        if self._live_transcriber is not None:
-            self._live_transcriber.stop()
+        with self._transcriber_lock:
+            lt = self._live_transcriber
             self._live_transcriber = None
+        if lt is not None:
+            lt.stop()
 
         duration = time.time() - self._start_time if self._start_time else 0
         logger.info("Recording stopped. Duration: %.1fs", duration)
@@ -308,8 +386,11 @@ class CaptureManager:
                     for chunk in chunks:
                         wf.writeframes(chunk)
                         level_update(chunk)
-                        if is_app and self._live_transcriber is not None:
-                            self._live_transcriber.feed_audio(chunk)
+                        if is_app:
+                            with self._transcriber_lock:
+                                lt = self._live_transcriber
+                            if lt is not None:
+                                lt.feed_audio(chunk)
                     self._thread_heartbeats[f"{label}_writer"] = time.time()
                 else:
                     # Wait with event so stop() wakes us immediately
@@ -324,6 +405,12 @@ class CaptureManager:
 
         except Exception:
             logger.exception("WAV writer error (%s)", label)
+            self._write_error = True
+            if self._on_health_warning:
+                try:
+                    self._on_health_warning(f"{label}_write_error")
+                except Exception:
+                    pass
         finally:
             if wf is not None:
                 try:
@@ -339,13 +426,21 @@ class CaptureManager:
         Does NOT call self.stop() directly — doing so would set
         _is_recording = False before the app gets a chance to run its
         stop_recording, causing post-processing to be skipped.
+
+        In desktop audio mode, PID exit is still detected but a grace period
+        of _DESKTOP_EXIT_GRACE_SECONDS is applied before auto-stopping,
+        in case the meeting app restarts or the user switches windows.
         """
         while not self._stop_event.is_set():
-            if self._is_desktop_audio:
-                # No single PID to monitor in desktop mode — skip auto-stop
-                self._stop_event.wait(2.0)
-                continue
             if not is_process_running(self.pid):
+                if self._is_desktop_audio:
+                    logger.info(
+                        "Target PID %d exited (desktop mode) — waiting %.0fs grace.",
+                        self.pid, _DESKTOP_EXIT_GRACE_SECONDS,
+                    )
+                    self._stop_event.wait(_DESKTOP_EXIT_GRACE_SECONDS)
+                    if self._stop_event.is_set():
+                        return
                 logger.info("Target process (PID %d) exited. Auto-stopping.", self.pid)
                 if self._on_stopped:
                     try:
@@ -357,6 +452,11 @@ class CaptureManager:
 
     def _level_monitor_loop(self) -> None:
         """Periodically notify the audio level callback and check thread health."""
+        from meeting_recorder.audio.level_monitor import MIN_DB
+
+        # A dB threshold just above pure silence.
+        silence_db_threshold = MIN_DB + 1.0  # -59.0 dB
+
         while not self._stop_event.is_set():
             try:
                 self._level_monitor.notify()
@@ -374,7 +474,83 @@ class CaptureManager:
                         except Exception:
                             logger.exception("on_health_warning callback error")
 
+            # Check for prolonged app audio silence
+            try:
+                app_rms_db, _app_peak_db = self._level_monitor.app_level
+            except (TypeError, ValueError):
+                app_rms_db = MIN_DB
+            if app_rms_db <= silence_db_threshold:
+                if self._app_silence_start is None:
+                    self._app_silence_start = now
+                elif (now - self._app_silence_start >= _SILENCE_WARNING_SECONDS
+                      and self._on_health_warning):
+                    try:
+                        self._on_health_warning("app_audio_silent")
+                    except Exception:
+                        logger.exception("on_health_warning callback error")
+                    self._app_silence_start = now  # reset to avoid spamming
+            else:
+                self._app_silence_start = None
+
             self._stop_event.wait(0.1)
+
+    def _silence_auto_switch(self) -> None:
+        """Monitor app audio after start; switch to desktop if silent.
+
+        For non-Teams apps, per-process audio (ProcTap) may fail silently
+        (e.g. the app renders audio via a child process or a system bus).
+        This method polls the level monitor for ``_SILENCE_CHECK_SECONDS``
+        and auto-switches to desktop loopback if the app channel stays
+        silent the whole time.
+        """
+        if self._app_key == "teams" or self._is_desktop_audio:
+            return
+
+        from meeting_recorder.audio.level_monitor import MIN_DB
+
+        # A dB threshold just above pure silence.  -59 dB is almost
+        # inaudible and well below any real audio content.
+        silence_db_threshold = MIN_DB + 1.0  # -59.0 dB
+
+        elapsed = 0.0
+        poll_interval = 0.5
+
+        while elapsed < _SILENCE_CHECK_SECONDS:
+            if self._stop_event.is_set() or self._is_desktop_audio:
+                return
+            self._stop_event.wait(poll_interval)
+            elapsed += poll_interval
+
+            if self._stop_event.is_set() or self._is_desktop_audio:
+                return
+
+            # Check current app audio level (rms_db, peak_db)
+            rms_db, _peak_db = self._level_monitor.app_level
+            if rms_db > silence_db_threshold:
+                # Non-silent audio detected — per-process capture is working.
+                logger.debug(
+                    "Silence detector: app audio detected (%.1f dB) at %.1fs — "
+                    "per-process capture is working.",
+                    rms_db,
+                    elapsed,
+                )
+                return
+
+        # Still silent after the full check period — switch to desktop audio.
+        if self._is_desktop_audio:
+            return
+
+        logger.warning(
+            "App audio silent for %.1fs — auto-switching to desktop audio.",
+            _SILENCE_CHECK_SECONDS,
+        )
+        self.switch_to_desktop_audio()
+
+        if self._on_health_warning:
+            try:
+                self._on_health_warning("silence_auto_switch")
+            except Exception:
+                logger.exception("on_health_warning callback error")
 
     @property
     def level_monitor(self) -> AudioLevelMonitor:
@@ -407,12 +583,18 @@ class CaptureManager:
         return None
 
     def list_capturable_windows(self) -> list[tuple[int, str]]:
-        """Return (hwnd, title) pairs for all visible top-level windows.
+        """Return (hwnd, display_title) pairs for all visible top-level windows.
+
+        Display titles are formatted as ``"title -- process_name"`` so the user
+        can distinguish windows from different applications.
 
         Used to populate the window picker in the recording dashboard.
         """
         from meeting_recorder.video.window_finder import list_visible_windows
-        return [(hwnd, title) for hwnd, title, _pid in list_visible_windows()]
+        return [
+            (hwnd, f"{title} \u2014 {proc_name}")
+            for hwnd, title, _pid, proc_name in list_visible_windows()
+        ]
 
     def switch_screen_window(self, hwnd: int) -> None:
         """Switch screen capture AND audio capture to the window's owning process.
@@ -428,6 +610,11 @@ class CaptureManager:
         new_pid = get_hwnd_pid(hwnd)
         if new_pid is None:
             logger.warning("Could not resolve PID for HWND %d; audio not switched.", hwnd)
+            if self._on_health_warning:
+                try:
+                    self._on_health_warning("window_pid_failed")
+                except Exception:
+                    pass
             return
         if new_pid == self.pid:
             # The visible window is owned by the PID we're already capturing.

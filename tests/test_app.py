@@ -35,6 +35,17 @@ import meeting_recorder.app as _app_mod  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _make_dummy_wav(path: Path, duration_s: float = 0.5, rate: int = 16000) -> None:
+    """Create a minimal valid WAV file (mono 16-bit silence)."""
+    import wave
+    n_frames = int(rate * duration_s)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(b"\x00\x00" * n_frames)
+
+
 def _make_app(config: Config | None = None):
     """Create a MeetingRecorderApp with heavy deps stubbed out."""
     cfg = config or Config()
@@ -379,9 +390,10 @@ class TestPostProcessMetadata:
         )
         rec_dir = tmp_path / "rec"
         rec_dir.mkdir()
-        # Create dummy audio files (pipeline expects them)
-        (rec_dir / "app_audio.wav").touch()
-        (rec_dir / "mic_audio.wav").touch()
+        # Create valid dummy audio files (pipeline expects them, WAV validation
+        # requires a proper header with non-zero duration)
+        _make_dummy_wav(rec_dir / "app_audio.wav")
+        _make_dummy_wav(rec_dir / "mic_audio.wav")
 
         # Configure the pipeline mock — last_speaker_mapping must be None
         # (not a truthy MagicMock) to avoid setting mock objects on metadata.

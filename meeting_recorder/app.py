@@ -62,6 +62,10 @@ class MeetingRecorderApp:
         # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
         self._stop_lock = threading.Lock()
 
+        # Serialises all metadata.save() calls across threads (mark processing,
+        # final save, summary callback, Drive upload callback) to avoid file corruption.
+        self._metadata_lock = threading.Lock()
+
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
         self._capture_mode_reported: bool = False
@@ -76,7 +80,13 @@ class MeetingRecorderApp:
             on_open_recordings=self._open_recordings_folder,
             on_search=self._open_search,
             on_show_dashboard=self._show_dashboard,
+            on_record_window=self._record_window,
         )
+
+    def _save_metadata(self, metadata: RecordingMetadata, recording_dir: Path) -> None:
+        """Thread-safe metadata save."""
+        with self._metadata_lock:
+            metadata.save(recording_dir)
 
     def run(self) -> None:
         """Start the application. Blocks until quit."""
@@ -99,7 +109,11 @@ class MeetingRecorderApp:
         self._tray.run()
 
     def start_recording(self) -> None:
-        """Start recording the active meeting."""
+        """Start recording the active meeting.
+
+        If no known meeting app is detected, opens a window picker so the
+        user can manually select any window to record.
+        """
         cm = self._capture_manager
         if cm and cm.is_recording:
             logger.warning("Already recording.")
@@ -108,9 +122,11 @@ class MeetingRecorderApp:
         # Find meeting process
         process = find_primary_meeting_process()
         if process is None:
-            logger.warning("No meeting application found.")
-            notifications.notify_no_meeting_found()
-            return
+            logger.info("No meeting application found. Opening window picker...")
+            process = self._pick_window_for_recording()
+            if process is None:
+                logger.info("Window picker cancelled by user.")
+                return
 
         self._current_process = process
         logger.info("Found %s (PID %d)", process.display_name, process.pid)
@@ -120,6 +136,144 @@ class MeetingRecorderApp:
         except Exception:
             logger.exception("Failed to start recording for %s", process.display_name)
             notifications.notify_error(f"Failed to start recording: see log for details")
+            self._capture_manager = None
+            self._current_recording_dir = None
+            self._current_metadata = None
+            self._current_process = None
+            self._tray.set_state("idle")
+
+    def _pick_window_for_recording(self) -> Optional[MeetingProcess]:
+        """Show a standalone window picker dialog and return a MeetingProcess.
+
+        Creates a blocking tkinter Tk() window (not Toplevel) so it works
+        even when no other tkinter root exists. Returns None if the user
+        cancels or no windows are available.
+        """
+        import tkinter as tk
+        from meeting_recorder.video.window_finder import list_visible_windows
+
+        windows = list_visible_windows()
+        if not windows:
+            logger.warning("No visible windows found for picker.")
+            return None
+
+        result: list[Optional[MeetingProcess]] = [None]
+
+        root = tk.Tk()
+        root.title("Record Window")
+        root.configure(bg="#1a1a2e")
+        root.attributes("-topmost", True)
+        root.geometry("500x400")
+        root.resizable(False, False)
+
+        tk.Label(
+            root,
+            text="No meeting app detected. Select a window to record:",
+            font=("Segoe UI", 9),
+            fg="#e0e0e0",
+            bg="#1a1a2e",
+        ).pack(padx=12, pady=(10, 4), anchor=tk.W)
+
+        # Listbox + scrollbar
+        list_frame = tk.Frame(root, bg="#1a1a2e")
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12)
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            bg="#0d0d1a",
+            fg="#e0e0e0",
+            selectbackground="#0f3460",
+            selectforeground="#e0e0e0",
+            activestyle="none",
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=1,
+            highlightcolor="#0f3460",
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=listbox.yview)
+
+        for _hwnd, title, _pid, proc_name in windows:
+            listbox.insert(tk.END, f"  {title} \u2014 {proc_name}")
+
+        def _confirm():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            hwnd, title, pid, proc_name = windows[sel[0]]
+            result[0] = MeetingProcess(
+                pid=pid,
+                name=proc_name,
+                app_key="manual",
+                display_name=title,
+            )
+            root.destroy()
+
+        listbox.bind("<Double-Button-1>", lambda e: _confirm())
+
+        # Buttons
+        btn_frame = tk.Frame(root, bg="#1a1a2e")
+        btn_frame.pack(fill=tk.X, padx=12, pady=10)
+
+        sel_btn = tk.Label(
+            btn_frame,
+            text=" Record This Window ",
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg="#0f3460",
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        )
+        sel_btn.pack(side=tk.LEFT)
+        sel_btn.bind("<Button-1>", lambda e: _confirm())
+        sel_btn.bind("<Enter>", lambda e: sel_btn.configure(bg="#1a5276"))
+        sel_btn.bind("<Leave>", lambda e: sel_btn.configure(bg="#0f3460"))
+
+        cancel_btn = tk.Label(
+            btn_frame,
+            text=" Cancel ",
+            font=("Segoe UI", 9),
+            fg="#888888",
+            bg="#0f3460",
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=8)
+        cancel_btn.bind("<Button-1>", lambda e: root.destroy())
+
+        root.mainloop()
+        return result[0]
+
+    def _record_window(self) -> None:
+        """Tray menu handler: open a window picker then start recording.
+
+        Always shows the picker regardless of whether a meeting app is
+        detected. If the user cancels, returns silently.
+        """
+        cm = self._capture_manager
+        if cm and cm.is_recording:
+            logger.warning("Already recording.")
+            return
+
+        process = self._pick_window_for_recording()
+        if process is None:
+            logger.info("Record Window cancelled by user.")
+            return
+
+        self._current_process = process
+        logger.info("Recording window: %s (PID %d)", process.display_name, process.pid)
+
+        try:
+            self._start_recording_for_process(process)
+        except Exception:
+            logger.exception("Failed to start recording for %s", process.display_name)
+            notifications.notify_error("Failed to start recording: see log for details")
             self._capture_manager = None
             self._current_recording_dir = None
             self._current_metadata = None
@@ -163,7 +317,7 @@ class MeetingRecorderApp:
             self._current_metadata.meeting_organizer = calendar_event.organizer
             self._current_metadata.meeting_attendees = calendar_event.attendees
             self._current_metadata.meeting_location = calendar_event.location
-        self._current_metadata.save(self._current_recording_dir)
+        self._save_metadata(self._current_metadata, self._current_recording_dir)
 
         # Resolve mic device index
         mic_device = None
@@ -321,7 +475,18 @@ class MeetingRecorderApp:
             self._tray.set_state("processing", "Transcribing...")
             notifications.notify_transcription_started()
             metadata.status = "processing"
-            metadata.save(recording_dir)
+            self._save_metadata(metadata, recording_dir)
+
+            # Validate app audio before mixing / transcription
+            app_wav = recording_dir / "app_audio.wav"
+            if not _validate_wav(app_wav):
+                logger.warning("app_audio.wav is corrupt or empty — skipping transcription")
+                notifications.notify_error("App audio file is corrupt — transcription skipped")
+                metadata.status = "error"
+                metadata.error_message = "App audio file corrupt or empty"
+                self._save_metadata(metadata, recording_dir)
+                self._tray.set_state("idle")
+                return
 
             # Mix audio tracks
             app_audio = recording_dir / "app_audio.wav"
@@ -393,7 +558,7 @@ class MeetingRecorderApp:
 
             # Final save: parallel tasks (summary, Drive upload) modify metadata
             # fields that finalize() didn't know about. Persist them now.
-            metadata.save(recording_dir)
+            self._save_metadata(metadata, recording_dir)
 
             self._tray.set_state("idle")
             notifications.notify_transcription_complete(str(recording_dir))
@@ -428,7 +593,7 @@ class MeetingRecorderApp:
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
                 metadata.google_drive_folder_id = folder_id
-                metadata.save(recording_dir)
+                self._save_metadata(metadata, recording_dir)
                 logger.info("Google Drive upload complete: %s", folder_id)
             else:
                 logger.warning("Google Drive upload returned no folder ID.")
@@ -582,12 +747,21 @@ class MeetingRecorderApp:
                 self._dashboard.close()
                 self._dashboard = None
 
-    def _on_health_warning(self, thread_name: str) -> None:
-        """Called when a capture thread hasn't produced data recently."""
-        logger.warning("Health warning: %s thread stalled (no data for >10s)", thread_name)
-        notifications.notify_error(f"Warning: {thread_name} may have stalled")
+    def _on_health_warning(self, warning_key: str) -> None:
+        """Called when a capture issue is detected."""
+        messages = {
+            "system_volume_muted": "System volume is muted \u2014 desktop audio will be silent!",
+            "app_audio_silent": "No audio detected for 10s \u2014 check volume or switch audio mode",
+            "silence_auto_switch": "No app audio detected \u2014 switched to desktop audio",
+            "app_write_error": "Audio write error \u2014 recording may be incomplete",
+            "mic_write_error": "Mic write error \u2014 recording may be incomplete",
+            "window_pid_failed": "Selected window is no longer available",
+        }
+        msg = messages.get(warning_key, f"Warning: {warning_key} may have stalled")
+        logger.warning("Health warning: %s", msg)
+        notifications.notify_info(msg)
         if self._dashboard and self._dashboard.is_visible:
-            self._dashboard.update_transcript(f"[Warning: {thread_name} stalled]")
+            self._dashboard.update_transcript(f"[\u26a0 {msg}]")
 
     def _on_capture_auto_stopped(self) -> None:
         """Called when capture stops automatically (e.g., meeting app exits)."""
@@ -676,6 +850,21 @@ class MeetingRecorderApp:
         except Exception:
             logger.exception("Failed to find mic device: %s", device_name)
         return None
+
+
+def _validate_wav(path: Path) -> bool:
+    """Check that a WAV file has a valid header and non-zero duration."""
+    try:
+        import wave
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if frames <= 0 or rate <= 0:
+                return False
+            duration = frames / rate
+            return duration > 0.1  # at least 100ms
+    except Exception:
+        return False
 
 
 def _format_duration(seconds: float) -> str:

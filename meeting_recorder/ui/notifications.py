@@ -34,7 +34,10 @@ def notify_error(message: str) -> None:
 
 def notify_no_meeting_found() -> None:
     """Show notification when no meeting app is detected."""
-    _show("No Meeting Found", "Could not find Zoom, Teams, or Webex running.")
+    _show(
+        "No Meeting Found",
+        "No Zoom, Teams, or Webex detected. Use the tray menu to record any window.",
+    )
 
 
 def notify_info(message: str) -> None:

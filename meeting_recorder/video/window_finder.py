@@ -135,13 +135,23 @@ def get_hwnd_pid(hwnd: int) -> Optional[int]:
     return pid.value if pid.value else None
 
 
-def list_visible_windows() -> list[tuple[int, str, int]]:
+def list_visible_windows(
+    min_width: int = 200,
+    min_height: int = 150,
+) -> list[tuple[int, str, int, str]]:
     """Enumerate all visible top-level windows with non-empty titles.
 
-    Returns a list of (hwnd, title, pid) tuples, sorted alphabetically
-    by title. Excludes zero-area and untitled windows.
+    Returns a list of (hwnd, title, pid, process_name) tuples, sorted
+    alphabetically by title. Excludes untitled windows and windows
+    smaller than the minimum size thresholds.
+
+    Args:
+        min_width: Minimum window width in pixels (default 200).
+        min_height: Minimum window height in pixels (default 150).
     """
-    results = []
+    import psutil
+
+    results: list[tuple[int, str, int]] = []
 
     def _cb(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
@@ -156,7 +166,9 @@ def list_visible_windows() -> list[tuple[int, str, int]]:
             return True
         rect = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        if (rect.right - rect.left) <= 0 or (rect.bottom - rect.top) <= 0:
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w < min_width or h < min_height:
             return True
         pid = ctypes.wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -164,5 +176,19 @@ def list_visible_windows() -> list[tuple[int, str, int]]:
         return True
 
     user32.EnumWindows(WNDENUMPROC(_cb), 0)
-    results.sort(key=lambda x: x[1].lower())
-    return results
+
+    # Resolve process names via psutil (batch lookup)
+    pid_to_name: dict[int, str] = {}
+    unique_pids = {pid for _, _, pid in results}
+    for pid in unique_pids:
+        try:
+            pid_to_name[pid] = psutil.Process(pid).name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pid_to_name[pid] = "unknown"
+
+    enriched = [
+        (hwnd, title, pid, pid_to_name.get(pid, "unknown"))
+        for hwnd, title, pid in results
+    ]
+    enriched.sort(key=lambda x: x[1].lower())
+    return enriched
