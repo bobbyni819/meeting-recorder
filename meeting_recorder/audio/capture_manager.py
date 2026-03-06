@@ -186,6 +186,7 @@ class CaptureManager:
                 logger.warning("Screen capture dependencies not available.")
 
         # Writer state
+        self._write_error = False
         self._stop_event = threading.Event()
         self._app_writer_thread: Optional[threading.Thread] = None
         self._mic_writer_thread: Optional[threading.Thread] = None
@@ -196,6 +197,8 @@ class CaptureManager:
         # Guards stop() against concurrent callers (e.g. user clicks Stop
         # while process-exit auto-stop fires on a different thread).
         self._stop_lock = threading.Lock()
+        # Guards _live_transcriber access across writer, start, and stop threads.
+        self._transcriber_lock = threading.Lock()
 
     def start(self) -> None:
         """Start all capture and writer threads."""
@@ -291,10 +294,12 @@ class CaptureManager:
             try:
                 from meeting_recorder.transcription.live_transcriber import LiveTranscriber
 
-                self._live_transcriber = LiveTranscriber(
+                lt = LiveTranscriber(
                     on_transcript=self._on_live_transcript,
                 )
-                self._live_transcriber.start()
+                lt.start()
+                with self._transcriber_lock:
+                    self._live_transcriber = lt
             except ImportError:
                 logger.warning("Live transcription dependencies not available.")
             except Exception:
@@ -349,9 +354,11 @@ class CaptureManager:
                     logger.warning("%s thread did not terminate (zombie).", label)
 
         # Stop live transcription after writers have drained
-        if self._live_transcriber is not None:
-            self._live_transcriber.stop()
+        with self._transcriber_lock:
+            lt = self._live_transcriber
             self._live_transcriber = None
+        if lt is not None:
+            lt.stop()
 
         duration = time.time() - self._start_time if self._start_time else 0
         logger.info("Recording stopped. Duration: %.1fs", duration)
@@ -379,8 +386,11 @@ class CaptureManager:
                     for chunk in chunks:
                         wf.writeframes(chunk)
                         level_update(chunk)
-                        if is_app and self._live_transcriber is not None:
-                            self._live_transcriber.feed_audio(chunk)
+                        if is_app:
+                            with self._transcriber_lock:
+                                lt = self._live_transcriber
+                            if lt is not None:
+                                lt.feed_audio(chunk)
                     self._thread_heartbeats[f"{label}_writer"] = time.time()
                 else:
                     # Wait with event so stop() wakes us immediately
@@ -395,6 +405,12 @@ class CaptureManager:
 
         except Exception:
             logger.exception("WAV writer error (%s)", label)
+            self._write_error = True
+            if self._on_health_warning:
+                try:
+                    self._on_health_warning(f"{label}_write_error")
+                except Exception:
+                    pass
         finally:
             if wf is not None:
                 try:
