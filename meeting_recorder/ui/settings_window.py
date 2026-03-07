@@ -222,8 +222,12 @@ class SettingsWindow:
 
         row += 1
         ttk.Label(parent, text="Gemini API Key:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        gemini_frame = ttk.Frame(parent)
+        gemini_frame.grid(row=row, column=1, sticky=tk.W, pady=5)
         self._gemini_key_var = tk.StringVar(value=self.config.transcription.gemini_api_key)
-        ttk.Entry(parent, textvariable=self._gemini_key_var, width=40, show="*").grid(row=row, column=1, sticky=tk.W, pady=5)
+        ttk.Entry(gemini_frame, textvariable=self._gemini_key_var, width=32, show="*").pack(side=tk.LEFT)
+        self._gemini_test_btn = ttk.Button(gemini_frame, text="Test", width=5, command=self._test_gemini_key)
+        self._gemini_test_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         row += 1
         ttk.Label(parent, text="Gemini Model:").grid(row=row, column=0, sticky=tk.W, pady=5)
@@ -240,6 +244,20 @@ class SettingsWindow:
         ttk.Label(parent, text="HuggingFace Token:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._hf_token_var = tk.StringVar(value=self.config.diarization.huggingface_token)
         ttk.Entry(parent, textvariable=self._hf_token_var, width=40, show="*").grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
+        ttk.Label(parent, text="Min Speakers:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._min_speakers_var = tk.IntVar(value=self.config.diarization.min_speakers)
+        ttk.Spinbox(parent, from_=1, to=10, textvariable=self._min_speakers_var, width=5).grid(
+            row=row, column=1, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        ttk.Label(parent, text="Max Speakers:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._max_speakers_var = tk.IntVar(value=self.config.diarization.max_speakers)
+        ttk.Spinbox(parent, from_=2, to=20, textvariable=self._max_speakers_var, width=5).grid(
+            row=row, column=1, sticky=tk.W, pady=5
+        )
 
         row += 1
         ttk.Label(parent, text="Output Formats:").grid(row=row, column=0, sticky=tk.W, pady=5)
@@ -525,6 +543,37 @@ class SettingsWindow:
         if path:
             self._output_dir_var.set(path)
 
+    def _test_gemini_key(self) -> None:
+        """Test the Gemini API key with a minimal request."""
+        key = self._gemini_key_var.get().strip()
+        if not key:
+            self._gemini_test_btn.configure(text="No key")
+            self._window.after(2000, lambda: self._gemini_test_btn.configure(text="Test"))
+            return
+
+        self._gemini_test_btn.configure(text="...", state="disabled")
+
+        def _do_test():
+            try:
+                from google import genai
+                client = genai.Client(api_key=key)
+                model = self._gemini_model_var.get().strip() or "gemini-2.0-flash"
+                response = client.models.generate_content(
+                    model=model, contents="Reply with just the word OK",
+                )
+                if response and response.text:
+                    self._window.after(0, lambda: self._gemini_test_btn.configure(text="OK!", state="normal"))
+                else:
+                    self._window.after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
+            except Exception as e:
+                err = str(e)[:30]
+                self._window.after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
+                logger.warning("Gemini API key test failed: %s", e)
+            self._window.after(3000, lambda: self._gemini_test_btn.configure(text="Test"))
+
+        import threading
+        threading.Thread(target=_do_test, daemon=True).start()
+
     def _save(self) -> None:
         """Save settings and close."""
         try:
@@ -549,6 +598,8 @@ class SettingsWindow:
 
             self.config.diarization.enabled = self._diarization_var.get()
             self.config.diarization.huggingface_token = self._hf_token_var.get()
+            self.config.diarization.min_speakers = self._min_speakers_var.get()
+            self.config.diarization.max_speakers = self._max_speakers_var.get()
 
             self.config.screen_recording.enabled = self._screen_rec_var.get()
             self.config.screen_recording.fps = self._screen_fps_var.get()

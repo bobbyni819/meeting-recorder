@@ -608,10 +608,20 @@ class MeetingRecorderApp:
                 self.config if None (for backwards compatibility).
             elapsed_seconds: Pause-adjusted recording duration from CaptureManager.
         """
+        import time as _time
+        _pp_start = _time.monotonic()
+
+        def _update_progress(stage: str) -> None:
+            elapsed = _time.monotonic() - _pp_start
+            mins, secs = divmod(int(elapsed), 60)
+            time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+            msg = f"Processing ({time_str}): {stage}"
+            self._tray.set_state("processing", msg)
+            self._main_window.update_status_bar(msg)
+
         cfg = config or self.config
         try:
-            self._tray.set_state("processing", "Processing: validating audio...")
-            self._main_window.update_status_bar("Processing: validating audio...")
+            _update_progress("validating audio...")
             notifications.notify_transcription_started()
             metadata.status = "processing"
             self._save_metadata(metadata, recording_dir)
@@ -632,24 +642,24 @@ class MeetingRecorderApp:
             mic_audio = recording_dir / "mic_audio.wav"
             mixed_audio = recording_dir / "mixed.wav"
 
-            self._tray.set_state("processing", "Processing: mixing audio tracks...")
-            self._main_window.update_status_bar("Processing: mixing audio tracks...")
+            _update_progress("mixing audio tracks...")
             if app_audio.exists() and mic_audio.exists():
                 mix_tracks_streaming(app_audio, mic_audio, mixed_audio)
 
             # Run transcription pipeline (with speaker resolution if attendees available)
-            self._tray.set_state("processing", "Processing: transcribing audio...")
-            self._main_window.update_status_bar("Processing: transcribing audio...")
-            segments = self._pipeline.process(
-                recording_dir,
-                attendees=metadata.meeting_attendees,
-                organizer=metadata.meeting_organizer,
-            )
-
-            # Clean up transient mixed.wav — it's large and only needed for transcription
-            if mixed_audio.exists():
-                mixed_audio.unlink()
-                logger.info("Cleaned up transient mixed.wav")
+            _update_progress("transcribing audio...")
+            try:
+                segments = self._pipeline.process(
+                    recording_dir,
+                    attendees=metadata.meeting_attendees,
+                    organizer=metadata.meeting_organizer,
+                )
+            finally:
+                # Clean up transient mixed.wav — it's large and only needed for transcription.
+                # Must run even if pipeline.process() fails, to avoid ~90 MB leaked per recording.
+                if mixed_audio.exists():
+                    mixed_audio.unlink()
+                    logger.info("Cleaned up transient mixed.wav")
 
             # Store speaker mapping from pipeline
             mapping = self._pipeline.last_speaker_mapping
@@ -684,8 +694,7 @@ class MeetingRecorderApp:
             )
 
             # Run summary, indexing, and Drive upload in parallel
-            self._tray.set_state("processing", "Processing: saving & indexing...")
-            self._main_window.update_status_bar("Processing: saving & indexing...")
+            _update_progress("saving & indexing...")
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             with ThreadPoolExecutor(max_workers=3, thread_name_prefix="post") as pool:

@@ -35,11 +35,10 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 UPLOAD_EXTENSIONS = {
     ".json", ".txt", ".srt",  # Transcripts
     ".mp4",                   # Screen recording
-    ".wav",                   # Audio (mixed only)
 }
 
-# Files to always upload by name
-UPLOAD_FILENAMES = {"metadata.json", "mixed.wav", "transcript.json", "transcript.txt", "transcript.srt", "screen.mp4", "summary.json", "summary.md"}
+# Files to always upload by name (mixed.wav is transient and deleted after transcription)
+UPLOAD_FILENAMES = {"metadata.json", "transcript.json", "transcript.txt", "transcript.srt", "transcript_raw.txt", "screen.mp4", "summary.json", "summary.md"}
 
 
 class GoogleDriveUploader:
