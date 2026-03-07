@@ -76,11 +76,19 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Scanner pauses during recording and resumes after post-processing completes
 - Disk space check before recording: refuses at < 100 MB, warns at < 1 GB
 
+## Recording retention
+- `[retention]` config section: `enabled`, `max_age_days` (default 90), `max_total_gb` (default 0)
+- `RecordingStore.cleanup()` deletes by age and/or total size, oldest-first
+- Runs at app startup and after each post-processing completes
+- Never deletes the active recording directory (`exclude` parameter)
+- Disabled by default — user must set `retention.enabled = true`
+
 ## Config defaults (current)
 - `recording.auto_start = true` (auto-detect meetings)
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
 - `screen_recording.enabled = true`, `fps = 30`
+- `retention.enabled = false`, `max_age_days = 90`, `max_total_gb = 0`
 - Output: `~/MeetingRecordings/`
 
 ## Development

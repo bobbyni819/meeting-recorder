@@ -92,7 +92,7 @@ class CaptureManager:
         mic_device_index: Optional[int] = None,
         on_stopped: Optional[callable] = None,
         screen_recording_enabled: bool = False,
-        screen_recording_fps: float = 5.0,
+        screen_recording_fps: float = 30.0,
         process_name: str = "",
         app_key: str = "",
         mute_toggle_hotkey: str = "ctrl+shift+u",

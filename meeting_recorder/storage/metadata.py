@@ -102,10 +102,18 @@ class RecordingMetadata:
         recording_dir: Path,
         speaker_count: int = 0,
         segment_count: int = 0,
+        elapsed_seconds: float = 0.0,
     ) -> None:
-        """Mark recording as completed and update final metadata."""
+        """Mark recording as completed and update final metadata.
+
+        Args:
+            elapsed_seconds: Pause-adjusted recording duration. If > 0, used
+                instead of wall-clock difference (which includes paused time).
+        """
         self.end_time = datetime.now().isoformat()
-        if self.start_time:
+        if elapsed_seconds > 0:
+            self.duration_seconds = elapsed_seconds
+        elif self.start_time:
             start = datetime.fromisoformat(self.start_time)
             end = datetime.fromisoformat(self.end_time)
             self.duration_seconds = (end - start).total_seconds()

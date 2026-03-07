@@ -60,6 +60,11 @@ api_key = ""
 model = ""             # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
 max_transcript_tokens = 0  # 0 = no limit
 
+[retention]
+enabled = false        # auto-delete old recordings based on age/size
+max_age_days = 90      # delete recordings older than N days (0 = no age limit)
+max_total_gb = 0.0     # delete oldest when total exceeds N GB (0 = no size limit)
+
 [dashboard]
 enabled = true
 auto_show = true       # auto-show dashboard when recording starts

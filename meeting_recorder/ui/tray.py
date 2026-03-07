@@ -42,6 +42,9 @@ class TrayIcon:
         on_toggle_auto_start: Optional[Callable] = None,
         on_pause: Optional[Callable] = None,
         on_open_last_recording: Optional[Callable] = None,
+        on_list_recent: Optional[Callable] = None,
+        on_open_recording: Optional[Callable] = None,
+        on_show_main_window: Optional[Callable] = None,
         auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
         hotkey_mute: str = "ctrl+shift+u",
@@ -59,6 +62,9 @@ class TrayIcon:
         self._on_toggle_auto_start = on_toggle_auto_start
         self._on_pause = on_pause
         self._on_open_last_recording = on_open_last_recording
+        self._on_list_recent = on_list_recent
+        self._on_open_recording = on_open_recording
+        self._on_show_main_window = on_show_main_window
         self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
         self._hotkey_mute = hotkey_mute
@@ -85,6 +91,12 @@ class TrayIcon:
                     lambda _: self._status_text,
                     None,
                     enabled=False,
+                ),
+                pystray.Menu.SEPARATOR,
+                Item(
+                    "Show Window",
+                    self._handle_show_main_window,
+                    default=True,
                 ),
                 pystray.Menu.SEPARATOR,
                 Item(
@@ -127,6 +139,7 @@ class TrayIcon:
                 pystray.Menu.SEPARATOR,
                 Item("Open Recordings", self._handle_open_recordings),
                 Item("Open Last Recording", self._handle_open_last_recording),
+                Item("Recent Recordings", pystray.Menu(self._build_recent_items)),
                 Item("Search Recordings...", self._handle_search),
                 Item("Settings", self._handle_settings),
                 pystray.Menu.SEPARATOR,
@@ -210,6 +223,41 @@ class TrayIcon:
         """Handle search recordings menu click."""
         if self._on_search:
             threading.Thread(target=self._on_search, daemon=True).start()
+
+    def _build_recent_items(self) -> list:
+        """Dynamically build recent recordings submenu items."""
+        if not self._on_list_recent:
+            return [Item("(no recordings)", None, enabled=False)]
+        try:
+            recent = self._on_list_recent()
+            if not recent:
+                return [Item("(no recordings)", None, enabled=False)]
+            items = []
+            for path in recent[:5]:
+                name = path.name
+                # Shorten long names for menu readability
+                if len(name) > 50:
+                    name = name[:47] + "..."
+                # Capture path in closure
+                items.append(Item(name, self._make_open_recording_handler(path)))
+            return items
+        except Exception:
+            logger.exception("Failed to list recent recordings")
+            return [Item("(error loading)", None, enabled=False)]
+
+    def _make_open_recording_handler(self, path):
+        """Create a menu click handler that opens a specific recording directory."""
+        def handler(icon, item):
+            if self._on_open_recording:
+                threading.Thread(
+                    target=self._on_open_recording, args=(path,), daemon=True,
+                ).start()
+        return handler
+
+    def _handle_show_main_window(self, icon, item) -> None:
+        """Handle 'Show Window' menu click."""
+        if self._on_show_main_window:
+            threading.Thread(target=self._on_show_main_window, daemon=True).start()
 
     def _handle_show_dashboard(self, icon, item) -> None:
         """Handle show dashboard menu click."""

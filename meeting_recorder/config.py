@@ -126,6 +126,13 @@ class SummaryConfig:
 
 
 @dataclass
+class RetentionConfig:
+    enabled: bool = False
+    max_age_days: int = 90       # delete recordings older than N days (0 = no age limit)
+    max_total_gb: float = 0.0    # delete oldest recordings when total exceeds N GB (0 = no size limit)
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -139,6 +146,7 @@ class Config:
     google_drive: GoogleDriveConfig = field(default_factory=GoogleDriveConfig)
     summary: SummaryConfig = field(default_factory=SummaryConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -176,6 +184,7 @@ class Config:
             google_drive=_safe_init(GoogleDriveConfig, data, "google_drive"),
             summary=_safe_init(SummaryConfig, data, "summary"),
             dashboard=_safe_init(DashboardConfig, data, "dashboard"),
+            retention=_safe_init(RetentionConfig, data, "retention"),
         )
 
     def save(self) -> None:

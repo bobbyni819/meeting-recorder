@@ -12,9 +12,13 @@ def notify_recording_started(app_name: str) -> None:
     _show("Recording Started", f"Now recording audio from {app_name}.")
 
 
-def notify_recording_stopped(duration_str: str) -> None:
-    """Show notification when recording stops."""
-    _show("Recording Stopped", f"Recording saved. Duration: {duration_str}")
+def notify_recording_stopped(duration_str: str, output_dir: str = "") -> None:
+    """Show notification when recording stops. Clicking opens the folder."""
+    _show(
+        "Recording Stopped",
+        f"Recording saved. Duration: {duration_str}",
+        launch=output_dir,
+    )
 
 
 def notify_transcription_started() -> None:
@@ -23,8 +27,12 @@ def notify_transcription_started() -> None:
 
 
 def notify_transcription_complete(output_dir: str) -> None:
-    """Show notification when transcription is done."""
-    _show("Transcription Complete", f"Transcript saved to:\n{output_dir}")
+    """Show notification when transcription is done. Clicking opens the folder."""
+    _show(
+        "Transcription Complete",
+        f"Click to open: {output_dir}",
+        launch=output_dir,
+    )
 
 
 def notify_error(message: str) -> None:
@@ -45,8 +53,14 @@ def notify_info(message: str) -> None:
     _show("Meeting Recorder", message)
 
 
-def _show(title: str, message: str) -> None:
-    """Show a Windows toast notification."""
+def _show(title: str, message: str, launch: str = "") -> None:
+    """Show a Windows toast notification.
+
+    Args:
+        title: Notification title.
+        message: Notification body.
+        launch: Optional path or URL to open when the notification is clicked.
+    """
     try:
         from winotify import Notification
 
@@ -55,6 +69,7 @@ def _show(title: str, message: str) -> None:
             title=title,
             msg=message,
             duration="short",
+            launch=launch,
         )
         toast.show()
     except ImportError:

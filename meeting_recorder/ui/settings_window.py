@@ -34,6 +34,9 @@ class SettingsWindow:
         self._window.geometry("500x600")
         self._window.resizable(False, False)
 
+        # Apply dark theme
+        self._apply_dark_theme()
+
         # Create notebook (tabs)
         notebook = ttk.Notebook(self._window)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -58,6 +61,11 @@ class SettingsWindow:
         notebook.add(dash_frame, text="Dashboard")
         self._build_dashboard_tab(dash_frame)
 
+        # Storage tab
+        storage_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(storage_frame, text="Storage")
+        self._build_storage_tab(storage_frame)
+
         # Integrations tab
         integ_frame = ttk.Frame(notebook, padding=10)
         notebook.add(integ_frame, text="Integrations")
@@ -71,6 +79,34 @@ class SettingsWindow:
 
         self._window.protocol("WM_DELETE_WINDOW", self._close)
         self._window.mainloop()
+
+    def _apply_dark_theme(self) -> None:
+        """Apply dark theme to ttk widgets."""
+        bg = "#1a1a2e"
+        fg = "#e0e0e0"
+        field_bg = "#0f1a2e"
+        select_bg = "#0f3460"
+        self._window.configure(bg=bg)
+
+        style = ttk.Style(self._window)
+        style.theme_use("clam")
+        style.configure(".", background=bg, foreground=fg, fieldbackground=field_bg)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.configure("TCheckbutton", background=bg, foreground=fg)
+        style.configure("TRadiobutton", background=bg, foreground=fg)
+        style.configure("TNotebook", background=bg)
+        style.configure("TNotebook.Tab", background="#16213e", foreground=fg, padding=(10, 4))
+        style.map("TNotebook.Tab",
+                   background=[("selected", select_bg)],
+                   foreground=[("selected", "#ffffff")])
+        style.configure("TButton", background="#0f3460", foreground=fg)
+        style.map("TButton", background=[("active", "#1a5276")])
+        style.configure("TEntry", fieldbackground=field_bg, foreground=fg)
+        style.configure("TCombobox", fieldbackground=field_bg, foreground=fg)
+        style.configure("TSpinbox", fieldbackground=field_bg, foreground=fg)
+        style.configure("TLabelframe", background=bg, foreground=fg)
+        style.configure("TLabelframe.Label", background=bg, foreground=fg)
 
     def _build_recording_tab(self, parent: ttk.Frame) -> None:
         """Build the recording settings tab."""
@@ -252,6 +288,12 @@ class SettingsWindow:
         )
 
         row += 1
+        self._dash_preview_var = tk.BooleanVar(value=self.config.dashboard.show_screen_preview)
+        ttk.Checkbutton(parent, text="Show screen capture preview", variable=self._dash_preview_var).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
+        row += 1
         ttk.Label(parent, text="Opacity:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._dash_opacity_var = tk.DoubleVar(value=self.config.dashboard.opacity)
         ttk.Scale(parent, from_=0.3, to=1.0, variable=self._dash_opacity_var, orient=tk.HORIZONTAL).grid(
@@ -275,6 +317,88 @@ class SettingsWindow:
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(10, 2))
 
         parent.columnconfigure(1, weight=1)
+
+    def _build_storage_tab(self, parent: ttk.Frame) -> None:
+        """Build the storage & retention settings tab."""
+        row = 0
+
+        # Recording stats
+        ttk.Label(parent, text="Recording Statistics", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        stats_text = self._get_recording_stats()
+        ttk.Label(parent, text=stats_text, foreground="gray").grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 5)
+        )
+
+        row += 1
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=10
+        )
+
+        # Retention policy
+        row += 1
+        ttk.Label(parent, text="Retention Policy", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        self._retention_enabled_var = tk.BooleanVar(value=self.config.retention.enabled)
+        ttk.Checkbutton(
+            parent, text="Auto-delete old recordings",
+            variable=self._retention_enabled_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        row += 1
+        ttk.Label(parent, text="Max Age (days):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._retention_age_var = tk.IntVar(value=self.config.retention.max_age_days)
+        ttk.Spinbox(parent, from_=0, to=3650, textvariable=self._retention_age_var, width=8).grid(
+            row=row, column=1, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        ttk.Label(parent, text="Max Total Size (GB):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._retention_size_var = tk.DoubleVar(value=self.config.retention.max_total_gb)
+        ttk.Spinbox(parent, from_=0, to=10000, increment=10, textvariable=self._retention_size_var, width=8).grid(
+            row=row, column=1, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Set 0 for no limit. Age and size limits work together.\n"
+                 "Cleanup runs at startup and after each recording.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(2, 10))
+
+        parent.columnconfigure(1, weight=1)
+
+    def _get_recording_stats(self) -> str:
+        """Calculate recording directory statistics."""
+        try:
+            from meeting_recorder.storage.recording_store import RecordingStore
+            store = RecordingStore(self.config.output_dir)
+            recordings = store.list_recordings()
+            count = len(recordings)
+            if count == 0:
+                return "No recordings yet."
+
+            total_bytes = sum(store._dir_size(d) for d in recordings)
+            total_gb = total_bytes / (1024 ** 3)
+
+            oldest = recordings[-1].name[:10] if recordings else "?"
+            newest = recordings[0].name[:10] if recordings else "?"
+
+            if total_gb >= 1.0:
+                size_str = f"{total_gb:.1f} GB"
+            else:
+                size_str = f"{total_bytes / (1024 ** 2):.0f} MB"
+
+            return f"{count} recording(s)  |  {size_str}  |  {oldest} to {newest}"
+        except Exception:
+            return "Unable to calculate stats."
 
     def _build_integrations_tab(self, parent: ttk.Frame) -> None:
         """Build the integrations settings tab."""
@@ -441,11 +565,16 @@ class SettingsWindow:
             self.config.summary.api_key = self._summary_api_key_var.get()
             self.config.summary.model = self._summary_model_var.get()
 
+            self.config.retention.enabled = self._retention_enabled_var.get()
+            self.config.retention.max_age_days = self._retention_age_var.get()
+            self.config.retention.max_total_gb = self._retention_size_var.get()
+
             self.config.dashboard.enabled = self._dash_enabled_var.get()
             self.config.dashboard.auto_show = self._dash_auto_show_var.get()
             self.config.dashboard.auto_hide = self._dash_auto_hide_var.get()
             self.config.dashboard.start_collapsed = self._dash_collapsed_var.get()
             self.config.dashboard.show_transcript = self._dash_transcript_var.get()
+            self.config.dashboard.show_screen_preview = self._dash_preview_var.get()
             self.config.dashboard.opacity = self._dash_opacity_var.get()
             self.config.dashboard.position = self._dash_position_var.get()
 

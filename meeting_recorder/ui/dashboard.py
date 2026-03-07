@@ -8,7 +8,14 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from meeting_recorder.audio.level_monitor import MIN_DB
+from meeting_recorder.ui.theme import (
+    BG_COLOR, BG_HEADER, BG_CONTROLS,
+    TEXT_COLOR, TEXT_DIM,
+    RED_DOT, RED_DOT_OFF, AMBER,
+    GREEN_VU, YELLOW_VU, RED_VU, VU_BG,
+    BUTTON_BG, BUTTON_HOVER, MUTED_COLOR, UNMUTED_COLOR,
+    db_to_fraction, vu_color, format_elapsed as _format_elapsed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,23 +26,8 @@ COLLAPSED_WIDTH = 380
 COLLAPSED_HEIGHT = 44
 PREVIEW_HEIGHT = 115  # 101px thumbnail + 14px padding
 
-# Colors
-BG_COLOR = "#1a1a2e"
-BG_HEADER = "#16213e"
-BG_CONTROLS = "#0f3460"
-TEXT_COLOR = "#e0e0e0"
-TEXT_DIM = "#888888"
-RED_DOT = "#e74c3c"
-RED_DOT_OFF = "#5a2020"
-GREEN_VU = "#2ecc71"
-YELLOW_VU = "#f1c40f"
-RED_VU = "#e74c3c"
-VU_BG = "#2c2c3e"
-BUTTON_BG = "#0f3460"
-BUTTON_HOVER = "#1a5276"
-MUTED_COLOR = "#e74c3c"
-UNMUTED_COLOR = "#2ecc71"
-AMBER_WARNING = "#f39c12"
+# Dashboard uses AMBER as warning color
+AMBER_WARNING = AMBER
 
 
 @dataclass
@@ -46,34 +38,6 @@ class DashboardContext:
     is_muted: bool = True
     is_process_specific: bool = True
     show_screen_preview: bool = False
-
-
-def db_to_fraction(db: float) -> float:
-    """Convert dB value to 0.0-1.0 fraction for VU meter display.
-
-    Maps MIN_DB..0 dB range to 0.0..1.0.
-    """
-    if db <= MIN_DB:
-        return 0.0
-    if db >= 0.0:
-        return 1.0
-    return (db - MIN_DB) / (0.0 - MIN_DB)
-
-
-def vu_color(fraction: float) -> str:
-    """Return VU meter color based on signal level fraction (0.0 to 1.0)."""
-    if fraction > 0.80:
-        return RED_VU
-    if fraction > 0.50:
-        return YELLOW_VU
-    return GREEN_VU
-
-
-def _format_elapsed(seconds: float) -> str:
-    """Format seconds as HH:MM:SS."""
-    h, remainder = divmod(int(seconds), 3600)
-    m, s = divmod(remainder, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 class GameBarDashboard:
@@ -140,6 +104,7 @@ class GameBarDashboard:
         self._show_screen_preview: bool = False
         self._ctrl_elapsed_label: Optional[tk.Label] = None
         self._collapsed_dot: Optional[tk.Label] = None
+        self._collapsed_status_label: Optional[tk.Label] = None
 
         # VU state
         self._app_vu_fraction = 0.0
@@ -633,10 +598,11 @@ class GameBarDashboard:
         dot.pack(side=tk.LEFT, padx=(8, 4))
         self._collapsed_dot = dot
 
-        tk.Label(
+        self._collapsed_status_label = tk.Label(
             inner, text="Recording", font=("Segoe UI", 9, "bold"),
             fg=TEXT_COLOR, bg=BG_HEADER,
-        ).pack(side=tk.LEFT)
+        )
+        self._collapsed_status_label.pack(side=tk.LEFT)
 
         self._collapsed_elapsed = tk.Label(
             inner, text="00:00:00", font=("Segoe UI", 9),
@@ -719,6 +685,14 @@ class GameBarDashboard:
                 self._pause_btn.configure(text=" \u25b6 ", bg="#e67e22")  # play icon, amber
             else:
                 self._pause_btn.configure(text=" \u23f8 ", bg="#7f8c8d")  # pause icon, grey
+        # Update collapsed view
+        if self._collapsed_dot:
+            self._collapsed_dot.configure(fg="#ffa500" if is_paused else RED_DOT)
+        if self._collapsed_status_label:
+            if is_paused:
+                self._collapsed_status_label.configure(text="\u23f8 Paused", fg="#ffa500")
+            else:
+                self._collapsed_status_label.configure(text="Recording", fg=TEXT_COLOR)
 
     def _set_capture_warning(self, is_process_specific: bool) -> None:
         """Show or hide the capture mode warning label."""
@@ -769,11 +743,17 @@ class GameBarDashboard:
             self._pulse_after_id = None
 
     def _pulse_tick(self) -> None:
-        """Toggle the red dot visibility every 500ms."""
+        """Toggle the recording dot visibility every 500ms.
+
+        Pulses red when recording, amber when paused.
+        """
         if not self._is_visible or self._window is None:
             return
         self._dot_visible = not self._dot_visible
-        color = RED_DOT if self._dot_visible else RED_DOT_OFF
+        if self._is_paused:
+            color = "#ffa500" if self._dot_visible else "#5a3500"  # amber / dark amber
+        else:
+            color = RED_DOT if self._dot_visible else RED_DOT_OFF
         try:
             if self._red_dot_label:
                 self._red_dot_label.configure(fg=color)
