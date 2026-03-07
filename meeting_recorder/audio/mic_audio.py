@@ -82,8 +82,10 @@ class MicAudioCapture:
         p = None
         try:
             import pyaudiowpatch as pyaudio
+            from meeting_recorder.audio._pyaudio_lock import pyaudio_init_lock
 
-            p = pyaudio.PyAudio()
+            with pyaudio_init_lock:
+                p = pyaudio.PyAudio()
 
             # Find mic device and its native sample rate
             if self.device_index is not None:

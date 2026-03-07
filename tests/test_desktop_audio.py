@@ -71,6 +71,71 @@ class TestDesktopAudioCaptureLifecycle:
         cap.stop()
 
 
+class TestFindLoopbackDevice:
+    """Tests for _find_loopback_device fallback when default fails."""
+
+    def test_uses_default_when_available(self):
+        """Should use default loopback device when it works."""
+        mock_pa = mock.Mock()
+        expected = {"name": "Speakers [Loopback]", "index": 1}
+        mock_pa.get_default_wasapi_loopback.return_value = expected
+
+        result = DesktopAudioCapture._find_loopback_device(mock_pa)
+        assert result == expected
+
+    def test_fallback_when_default_fails(self):
+        """Should enumerate devices when default loopback raises LookupError."""
+        mock_pa = mock.Mock()
+        mock_pa.get_default_wasapi_loopback.side_effect = LookupError("No analogue")
+        mock_pa.get_device_count.return_value = 3
+        mock_pa.get_device_info_by_index.side_effect = [
+            {"name": "Microphone", "maxInputChannels": 1},  # not loopback
+            {"name": "NVIDIA HDMI [Loopback]", "maxInputChannels": 2},
+            {"name": "Realtek Speakers [Loopback]", "maxInputChannels": 2},
+        ]
+
+        result = DesktopAudioCapture._find_loopback_device(mock_pa)
+        assert result["name"] == "Realtek Speakers [Loopback]"
+
+    def test_fallback_prefers_non_hdmi(self):
+        """Should prefer non-NVIDIA/non-HDMI loopback devices."""
+        mock_pa = mock.Mock()
+        mock_pa.get_default_wasapi_loopback.side_effect = LookupError("No analogue")
+        mock_pa.get_device_count.return_value = 2
+        mock_pa.get_device_info_by_index.side_effect = [
+            {"name": "Acer HDMI [Loopback]", "maxInputChannels": 2},
+            {"name": "USB Audio [Loopback]", "maxInputChannels": 2},
+        ]
+
+        result = DesktopAudioCapture._find_loopback_device(mock_pa)
+        assert result["name"] == "USB Audio [Loopback]"
+
+    def test_uses_hdmi_if_only_option(self):
+        """Should fall back to HDMI loopback if it's the only one."""
+        mock_pa = mock.Mock()
+        mock_pa.get_default_wasapi_loopback.side_effect = LookupError("No analogue")
+        mock_pa.get_device_count.return_value = 1
+        mock_pa.get_device_info_by_index.side_effect = [
+            {"name": "NVIDIA HDMI Output [Loopback]", "maxInputChannels": 2},
+        ]
+
+        result = DesktopAudioCapture._find_loopback_device(mock_pa)
+        assert "NVIDIA" in result["name"]
+
+    def test_raises_when_no_loopback_devices(self):
+        """Should raise LookupError when no loopback devices exist at all."""
+        mock_pa = mock.Mock()
+        mock_pa.get_default_wasapi_loopback.side_effect = LookupError("No analogue")
+        mock_pa.get_device_count.return_value = 2
+        mock_pa.get_device_info_by_index.side_effect = [
+            {"name": "Microphone", "maxInputChannels": 1},
+            {"name": "Speakers", "maxInputChannels": 0},
+        ]
+
+        with pytest.raises(LookupError, match="No WASAPI loopback"):
+            DesktopAudioCapture._find_loopback_device(mock_pa)
+
+
 class TestDesktopAudioCaptureLoop:
     def test_capture_loop_writes_resampled_audio_to_buffer(self):
         """Capture loop should resample audio and write to the ring buffer."""

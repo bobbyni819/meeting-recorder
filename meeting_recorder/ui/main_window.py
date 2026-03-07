@@ -379,6 +379,13 @@ class MainWindow:
         self._window.configure(bg=BG_COLOR)
         self._window.protocol("WM_DELETE_WINDOW", self.hide)
 
+        # Log Tk callback exceptions instead of silently printing to stderr
+        def _tk_error(exc_type, exc_value, exc_tb):
+            logger.error(
+                "Tkinter callback error", exc_info=(exc_type, exc_value, exc_tb)
+            )
+        self._window.report_callback_exception = _tk_error
+
         # Try to set window icon
         try:
             from meeting_recorder.ui.icons import create_idle_icon
@@ -1625,8 +1632,103 @@ class MainWindow:
         return ""
 
     # ------------------------------------------------------------------
-    # Window picker (reused from dashboard)
+    # Window picker
     # ------------------------------------------------------------------
+
+    def pick_window_for_recording(self, windows: list) -> tuple | None:
+        """Show a window picker dialog and return the chosen entry.
+
+        Called from a background thread (e.g. _record_window). Schedules the
+        dialog on the Tk thread and blocks until the user picks or cancels.
+
+        Args:
+            windows: list of (hwnd, title, pid, proc_name) tuples from
+                     list_visible_windows().
+
+        Returns:
+            (hwnd, title, pid, proc_name) or None if cancelled.
+        """
+        if not self._window or not windows:
+            return None
+
+        result: list = [None]
+        done = threading.Event()
+
+        def _show():
+            picker = tk.Toplevel(self._window)
+            picker.title("Record Window")
+            picker.configure(bg=BG_COLOR)
+            picker.attributes("-topmost", True)
+            picker.geometry("500x400")
+            picker.resizable(False, False)
+            picker.grab_set()  # Modal
+
+            tk.Label(
+                picker, text="Select a window to record:",
+                font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+            ).pack(padx=12, pady=(10, 4), anchor=tk.W)
+
+            list_frame = tk.Frame(picker, bg=BG_COLOR)
+            list_frame.pack(fill=tk.BOTH, expand=True, padx=12)
+
+            scrollbar = tk.Scrollbar(list_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            listbox = tk.Listbox(
+                list_frame, yscrollcommand=scrollbar.set,
+                bg="#0d0d1a", fg=TEXT_COLOR, selectbackground=BG_CONTROLS,
+                selectforeground=TEXT_COLOR, activestyle="none",
+                font=("Segoe UI", 9), bd=0,
+                highlightthickness=1, highlightcolor=BG_CONTROLS,
+            )
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.configure(command=listbox.yview)
+
+            for _hwnd, title, _pid, proc_name in windows:
+                label = f"  {title} \u2014 {proc_name}" if proc_name != "unknown" else f"  {title}"
+                listbox.insert(tk.END, label)
+
+            def _confirm():
+                sel = listbox.curselection()
+                if not sel:
+                    return
+                result[0] = windows[sel[0]]
+                picker.destroy()
+                done.set()
+
+            def _cancel():
+                picker.destroy()
+                done.set()
+
+            listbox.bind("<Double-Button-1>", lambda e: _confirm())
+            picker.protocol("WM_DELETE_WINDOW", _cancel)
+
+            btn_frame = tk.Frame(picker, bg=BG_COLOR)
+            btn_frame.pack(fill=tk.X, padx=12, pady=10)
+
+            sel_btn = tk.Label(
+                btn_frame, text=" Record This Window ",
+                font=("Segoe UI", 9, "bold"), fg=TEXT_BRIGHT, bg=BG_CONTROLS,
+                cursor="hand2", padx=8, pady=4,
+            )
+            sel_btn.pack(side=tk.LEFT)
+            sel_btn.bind("<Button-1>", lambda e: _confirm())
+
+            cancel_btn = tk.Label(
+                btn_frame, text=" Cancel ",
+                font=("Segoe UI", 9), fg=TEXT_DIM, bg=BUTTON_BG,
+                cursor="hand2", padx=8, pady=4,
+            )
+            cancel_btn.pack(side=tk.LEFT, padx=8)
+            cancel_btn.bind("<Button-1>", lambda e: _cancel())
+
+        try:
+            self._window.after(0, _show)
+        except tk.TclError:
+            return None
+
+        done.wait()  # Block the calling thread until picker closes
+        return result[0]
 
     def _open_window_picker(self) -> None:
         if not self._on_list_windows or not self._on_pick_window or not self._window:

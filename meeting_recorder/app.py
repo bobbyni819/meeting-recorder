@@ -76,6 +76,7 @@ class MeetingRecorderApp:
         self._dashboard: Optional[GameBarDashboard] = None
         self._capture_mode_reported: bool = False
         self._preview_frame_counter: int = 0
+        self._tray_update_counter: int = 0
 
         # Meeting auto-detection scanner
         self._scanner_thread: Optional[threading.Thread] = None
@@ -172,7 +173,12 @@ class MeetingRecorderApp:
         self._main_window.show()
 
         # Tray icon runs on the main thread (blocks)
-        self._tray.run()
+        logger.info("Starting tray icon event loop on main thread...")
+        try:
+            self._tray.run()
+        except Exception:
+            logger.exception("Tray icon event loop crashed!")
+        logger.info("Tray icon event loop exited.")
 
     def start_recording(self) -> None:
         """Start recording the active meeting.
@@ -189,7 +195,24 @@ class MeetingRecorderApp:
         process = find_primary_meeting_process()
         if process is None:
             logger.info("No meeting application found. Opening window picker...")
-            process = self._pick_window_for_recording()
+            # Use the main window's picker when available (avoids Tk conflicts)
+            if self._main_window and self._main_window._window:
+                from meeting_recorder.video.window_finder import list_visible_windows
+                windows = list_visible_windows()
+                if not windows:
+                    logger.warning("No visible windows found for picker.")
+                    return
+                chosen = self._main_window.pick_window_for_recording(windows)
+                if chosen is not None:
+                    hwnd, title, pid, proc_name = chosen
+                    process = MeetingProcess(
+                        pid=pid,
+                        name=proc_name,
+                        app_key="manual",
+                        display_name=title,
+                    )
+            else:
+                process = self._pick_window_for_recording()
             if process is None:
                 logger.info("Window picker cancelled by user.")
                 return
@@ -318,17 +341,39 @@ class MeetingRecorderApp:
         return result[0]
 
     def _record_window(self) -> None:
-        """Tray menu handler: open a window picker then start recording.
+        """Open a window picker then start recording.
 
         Always shows the picker regardless of whether a meeting app is
-        detected. If the user cancels, returns silently.
+        detected. Uses the MainWindow's Tk thread when available to avoid
+        creating a conflicting Tk root. Falls back to standalone Tk() for
+        the tray-only path.
         """
         cm = self._capture_manager
         if cm and cm.is_recording:
             logger.warning("Already recording.")
             return
 
-        process = self._pick_window_for_recording()
+        # Try the main window's picker first (runs on its Tk thread)
+        process = None
+        if self._main_window and self._main_window._window:
+            from meeting_recorder.video.window_finder import list_visible_windows
+            windows = list_visible_windows()
+            if not windows:
+                logger.warning("No visible windows found for picker.")
+                return
+            chosen = self._main_window.pick_window_for_recording(windows)
+            if chosen is not None:
+                hwnd, title, pid, proc_name = chosen
+                process = MeetingProcess(
+                    pid=pid,
+                    name=proc_name,
+                    app_key="manual",
+                    display_name=title,
+                )
+        else:
+            # Fallback: standalone Tk picker (tray-only mode)
+            process = self._pick_window_for_recording()
+
         if process is None:
             logger.info("Record Window cancelled by user.")
             return
@@ -433,9 +478,11 @@ class MeetingRecorderApp:
         self._preview_frame_counter = 0
         self._capture_manager.start()
 
-        # Show dashboard overlay
+        # Show dashboard overlay (skip when main window is active — two Tk roots
+        # on separate threads corrupt each other and cause windows to vanish)
         dash_cfg = self.config.dashboard
-        if dash_cfg.enabled and dash_cfg.auto_show:
+        main_window_active = self._main_window and self._main_window._window is not None
+        if dash_cfg.enabled and dash_cfg.auto_show and not main_window_active:
             self._dashboard = GameBarDashboard(
                 on_stop=lambda: threading.Thread(target=self.stop_recording, daemon=True).start(),
                 on_toggle_pause=self._toggle_pause,
@@ -772,6 +819,14 @@ class MeetingRecorderApp:
         self, app_rms: float, app_peak: float, mic_rms: float, mic_peak: float
     ) -> None:
         """Handle audio level updates from the capture manager."""
+        try:
+            self._on_audio_levels_inner(app_rms, app_peak, mic_rms, mic_peak)
+        except Exception:
+            logger.exception("Error in _on_audio_levels callback")
+
+    def _on_audio_levels_inner(
+        self, app_rms: float, app_peak: float, mic_rms: float, mic_peak: float
+    ) -> None:
         # Capture reference locally — stop_recording() on another thread could
         # set self._capture_manager = None between the check and later accesses.
         cm = self._capture_manager
@@ -780,10 +835,16 @@ class MeetingRecorderApp:
             duration_str = _format_duration(elapsed)
             proc = self._current_process
             app_name = proc.display_name if proc else "Meeting"
-            self._tray.set_state(
-                "recording",
-                f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
-            )
+
+            # Rate-limit tray icon updates to ~1 Hz (every 10th call at 10 Hz)
+            # to avoid pystray threading issues from frequent background updates
+            self._tray_update_counter += 1
+            if self._tray_update_counter >= 10:
+                self._tray_update_counter = 0
+                self._tray.set_state(
+                    "recording",
+                    f"Recording {app_name} ({duration_str}) | App: {app_rms:.0f}dB Mic: {mic_rms:.0f}dB",
+                )
 
             # One-time check: detect capture mode and warn dashboard if system-wide
             if not self._capture_mode_reported:
@@ -1145,8 +1206,10 @@ class MeetingRecorderApp:
         """Find microphone device index by name."""
         try:
             import pyaudiowpatch as pyaudio
+            from meeting_recorder.audio._pyaudio_lock import pyaudio_init_lock
 
-            p = pyaudio.PyAudio()
+            with pyaudio_init_lock:
+                p = pyaudio.PyAudio()
             try:
                 for i in range(p.get_device_count()):
                     info = p.get_device_info_by_index(i)

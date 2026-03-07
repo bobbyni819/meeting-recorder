@@ -58,14 +58,16 @@ def _is_buffer_silent(data: bytes) -> bool:
 def _check_system_volume() -> Optional[float]:
     """Return the system master volume (0.0 - 1.0), or None if unavailable."""
     try:
+        from meeting_recorder.audio._pyaudio_lock import pyaudio_init_lock
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         from comtypes import CLSCTX_ALL
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = interface.QueryInterface(IAudioEndpointVolume)
-        if volume.GetMute():
-            return 0.0
-        return volume.GetMasterVolumeLevelScalar()
+        with pyaudio_init_lock:
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            if volume.GetMute():
+                return 0.0
+            return volume.GetMasterVolumeLevelScalar()
     except Exception:
         return None
 
@@ -215,8 +217,11 @@ class CaptureManager:
         self._stop_event.clear()
         self._start_time = time.time()
 
-        # Load VAD model
-        self._vad.load()
+        # Load VAD model (non-fatal — recording works without VAD)
+        try:
+            self._vad.load()
+        except Exception:
+            logger.exception("VAD model failed to load. Recording will continue without VAD.")
 
         # Start mute sync (hooks meeting app's mute shortcut + manual toggle)
         if self._mute_sync is not None:

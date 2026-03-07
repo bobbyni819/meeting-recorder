@@ -8,6 +8,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from meeting_recorder.audio.level_monitor import MIN_DB
 from meeting_recorder.ui.theme import (
     BG_COLOR, BG_HEADER, BG_CONTROLS,
     TEXT_COLOR, TEXT_DIM,

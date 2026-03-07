@@ -65,15 +65,63 @@ class DesktopAudioCapture:
             self._thread = None
         logger.info("Desktop audio capture stopped.")
 
+    @staticmethod
+    def _find_loopback_device(p) -> dict:
+        """Find a WASAPI loopback device, with fallback for NVIDIA HDMI.
+
+        Tries the default loopback first. If that fails (common with NVIDIA
+        HDMI audio outputs), enumerates all WASAPI loopback devices and picks
+        the first one that isn't an HDMI/DisplayPort output.
+        """
+        try:
+            return p.get_default_wasapi_loopback()
+        except LookupError:
+            pass
+
+        logger.warning("Default WASAPI loopback not available. Searching for alternatives...")
+
+        # Enumerate all WASAPI loopback devices
+        loopback_devices = []
+        for i in range(p.get_device_count()):
+            try:
+                info = p.get_device_info_by_index(i)
+            except Exception:
+                continue
+            # Loopback devices have maxInputChannels > 0 and contain "[Loopback]"
+            # or are in the WASAPI host API with loopback flag
+            name = info.get("name", "")
+            if info.get("maxInputChannels", 0) > 0 and "[Loopback]" in name:
+                loopback_devices.append(info)
+                logger.info("  Found loopback device: %s (index %d)", name, i)
+
+        if not loopback_devices:
+            raise LookupError(
+                "No WASAPI loopback devices found. "
+                "Ensure a non-HDMI audio output device is available."
+            )
+
+        # Prefer non-NVIDIA/non-HDMI devices
+        for dev in loopback_devices:
+            name_lower = dev["name"].lower()
+            if "nvidia" not in name_lower and "hdmi" not in name_lower:
+                logger.info("Using fallback loopback device: %s", dev["name"])
+                return dev
+
+        # If all devices are HDMI, use the first one anyway
+        logger.info("Only HDMI loopback devices available. Using: %s", loopback_devices[0]["name"])
+        return loopback_devices[0]
+
     def _capture_loop(self) -> None:
         """Main capture loop using PyAudioWPatch WASAPI loopback."""
         stream = None
         p = None
         try:
             import pyaudiowpatch as pyaudio
+            from meeting_recorder.audio._pyaudio_lock import pyaudio_init_lock
 
-            p = pyaudio.PyAudio()
-            loopback_device = p.get_default_wasapi_loopback()
+            with pyaudio_init_lock:
+                p = pyaudio.PyAudio()
+            loopback_device = self._find_loopback_device(p)
 
             native_rate = int(loopback_device["defaultSampleRate"])
             native_channels = max(int(loopback_device["maxInputChannels"]), 1)

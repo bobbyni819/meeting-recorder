@@ -143,25 +143,23 @@ class TestConfigSaveAtomicity:
 class TestVoiceActivityDetector:
     """Test VAD error handling and state management."""
 
-    def test_speech_probability_before_load_raises(self):
-        """Calling speech_probability without load() should raise RuntimeError."""
+    def test_speech_probability_before_load_passes_through(self):
+        """speech_probability returns 1.0 (pass-through) when model not loaded."""
         from meeting_recorder.audio.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         audio_bytes = np.zeros(480, dtype=np.int16).tobytes()
 
-        with pytest.raises(RuntimeError, match="not loaded"):
-            vad.speech_probability(audio_bytes)
+        assert vad.speech_probability(audio_bytes) == 1.0
 
-    def test_is_speech_before_load_raises(self):
-        """Calling is_speech without load() should raise RuntimeError."""
+    def test_is_speech_before_load_passes_through(self):
+        """is_speech returns True (pass-through) when model not loaded."""
         from meeting_recorder.audio.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         audio_bytes = np.zeros(480, dtype=np.int16).tobytes()
 
-        with pytest.raises(RuntimeError, match="not loaded"):
-            vad.is_speech(audio_bytes)
+        assert vad.is_speech(audio_bytes) is True
 
     def test_is_loaded_initially_false(self):
         from meeting_recorder.audio.vad import VoiceActivityDetector

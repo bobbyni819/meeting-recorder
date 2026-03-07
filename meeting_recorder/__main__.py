@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import atexit
+import faulthandler
 import logging
 import os
 import sys
+import threading
 
 
 def _fix_stdio() -> None:
@@ -46,6 +49,33 @@ def main() -> None:
     )
     logger = logging.getLogger(__name__)
 
+    # Enable faulthandler to print traceback on segfault/abort to the log file.
+    # This catches C-level crashes (e.g. in Tk, audio libs) that bypass Python
+    # exception handling entirely.
+    _fault_file = open("meeting_recorder.log", "a", encoding="utf-8")
+    faulthandler.enable(file=_fault_file)
+
+    # Install global exception hooks to catch unhandled exceptions on ANY thread
+    def _excepthook(exc_type, exc_value, exc_tb):
+        logger.critical(
+            "Unhandled exception on main thread", exc_info=(exc_type, exc_value, exc_tb)
+        )
+    sys.excepthook = _excepthook
+
+    def _threading_excepthook(args):
+        logger.critical(
+            "Unhandled exception on thread '%s'",
+            args.thread.name if args.thread else "unknown",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+    threading.excepthook = _threading_excepthook
+
+    # Log on process exit regardless of how it happens
+    def _atexit():
+        logger.info("Process exiting (atexit). Active threads: %s",
+                     [t.name for t in threading.enumerate()])
+    atexit.register(_atexit)
+
     logger.info("=" * 60)
     logger.info("Meeting Recorder starting")
     logger.info("=" * 60)
@@ -69,10 +99,15 @@ def main() -> None:
 
         signal.signal(signal.SIGINT, _sigint_handler)
 
+        logger.info("Starting app.run() on main thread (%s)", threading.current_thread().name)
         app.run()
+        logger.info("app.run() returned normally.")
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
+    except SystemExit as e:
+        logger.info("SystemExit raised with code: %s", e.code)
+        raise
     except Exception:
         logger.exception("Fatal error")
         sys.exit(1)

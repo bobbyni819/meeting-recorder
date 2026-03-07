@@ -65,7 +65,7 @@ class VoiceActivityDetector:
             Speech probability between 0.0 and 1.0.
         """
         if self._model is None:
-            raise RuntimeError("VAD model not loaded. Call load() first.")
+            return 1.0  # Pass-through: treat all audio as speech if model not loaded
 
         # Convert bytes to float32 tensor
         audio_int16 = np.frombuffer(audio_chunk, dtype=np.int16)
