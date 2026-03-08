@@ -10,16 +10,17 @@ from pathlib import Path
 from typing import Optional
 
 from meeting_recorder.audio.ring_buffer import RingBuffer
-from meeting_recorder.audio.app_audio import AppAudioCapture
-from meeting_recorder.audio.desktop_audio import DesktopAudioCapture
-from meeting_recorder.audio.mic_audio import MicAudioCapture
-from meeting_recorder.audio.vad import VoiceActivityDetector
-from meeting_recorder.audio.mute_sync import (
+from meeting_recorder.audio.platforms import (
+    AppAudioCapture,
+    DesktopAudioCapture,
+    MicAudioCapture,
     MuteSync,
     get_all_pids_for_process,
     detect_initial_mute_state,
+    is_process_running,
+    check_system_volume as _platform_check_system_volume,
 )
-from meeting_recorder.audio.process_finder import is_process_running
+from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.level_monitor import AudioLevelMonitor
 
 logger = logging.getLogger(__name__)
@@ -57,19 +58,7 @@ def _is_buffer_silent(data: bytes) -> bool:
 
 def _check_system_volume() -> Optional[float]:
     """Return the system master volume (0.0 - 1.0), or None if unavailable."""
-    try:
-        from meeting_recorder.audio._pyaudio_lock import pyaudio_init_lock
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-        from comtypes import CLSCTX_ALL
-        with pyaudio_init_lock:
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
-            if volume.GetMute():
-                return 0.0
-            return volume.GetMasterVolumeLevelScalar()
-    except Exception:
-        return None
+    return _platform_check_system_volume()
 
 
 class CaptureManager:
@@ -176,7 +165,7 @@ class CaptureManager:
         self._screen_capture = None
         if screen_recording_enabled:
             try:
-                from meeting_recorder.video.screen_capture import ScreenCapture
+                from meeting_recorder.video.platforms import ScreenCapture
                 self._screen_capture = ScreenCapture(
                     pid=pid,
                     process_name=process_name,
@@ -604,7 +593,7 @@ class CaptureManager:
 
         Used to populate the window picker in the recording dashboard.
         """
-        from meeting_recorder.video.window_finder import list_visible_windows
+        from meeting_recorder.video.platforms import list_visible_windows
         return [
             (hwnd, f"{title} \u2014 {proc_name}" if proc_name != "unknown" else title)
             for hwnd, title, _pid, proc_name in list_visible_windows()
@@ -620,7 +609,7 @@ class CaptureManager:
             self._screen_capture.switch_window(hwnd)
 
         # Also switch audio to the process that owns the new window
-        from meeting_recorder.video.window_finder import get_hwnd_pid
+        from meeting_recorder.video.platforms import get_hwnd_pid
         new_pid = get_hwnd_pid(hwnd)
         if new_pid is None:
             logger.warning("Could not resolve PID for HWND %d; audio not switched.", hwnd)

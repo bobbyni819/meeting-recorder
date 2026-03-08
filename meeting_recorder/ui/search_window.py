@@ -10,6 +10,7 @@ from tkinter import ttk
 from typing import Optional
 
 from meeting_recorder.search.index import RecordingIndex, SearchResult
+from meeting_recorder.utils import open_in_explorer
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ class SearchWindow:
         if 0 <= idx < len(self._results):
             recording_dir = self._results[idx].recording_dir
             try:
-                os.startfile(recording_dir)
+                open_in_explorer(recording_dir)
             except Exception:
                 logger.exception("Failed to open folder: %s", recording_dir)
 

@@ -36,7 +36,7 @@ class TestSwitchScreenWindow:
         mgr._screen_capture = mock.Mock()
 
         with mock.patch(
-            "meeting_recorder.video.window_finder.get_hwnd_pid", return_value=200
+            "meeting_recorder.video.platforms.get_hwnd_pid", return_value=200
         ):
             mgr._switch_app_audio_pid = mock.Mock()
             mgr.switch_screen_window(hwnd=42)
@@ -50,7 +50,7 @@ class TestSwitchScreenWindow:
         assert mgr._screen_capture is None
 
         with mock.patch(
-            "meeting_recorder.video.window_finder.get_hwnd_pid", return_value=300
+            "meeting_recorder.video.platforms.get_hwnd_pid", return_value=300
         ):
             mgr._switch_app_audio_pid = mock.Mock()
             mgr.switch_screen_window(hwnd=99)
@@ -62,7 +62,7 @@ class TestSwitchScreenWindow:
         mgr = _make_manager(pid=555)
 
         with mock.patch(
-            "meeting_recorder.video.window_finder.get_hwnd_pid", return_value=555
+            "meeting_recorder.video.platforms.get_hwnd_pid", return_value=555
         ):
             mgr._switch_app_audio_pid = mock.Mock()
             mgr.switch_screen_window(hwnd=7)
@@ -76,7 +76,7 @@ class TestSwitchScreenWindow:
         mgr = _make_manager(pid=100)
 
         with mock.patch(
-            "meeting_recorder.video.window_finder.get_hwnd_pid", return_value=None
+            "meeting_recorder.video.platforms.get_hwnd_pid", return_value=None
         ):
             mgr._switch_app_audio_pid = mock.Mock()
             with caplog.at_level(logging.WARNING, logger="meeting_recorder.audio.capture_manager"):

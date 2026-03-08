@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from meeting_recorder.audio.level_monitor import MIN_DB
+from meeting_recorder.utils import open_in_explorer
 from meeting_recorder.ui.theme import (
     BG_COLOR, BG_HEADER, BG_PANEL, BG_CONTROLS, BG_CARD, BG_CARD_HOVER,
     TEXT_COLOR, TEXT_DIM, TEXT_BRIGHT,
@@ -1151,7 +1152,7 @@ class MainWindow:
             menu.add_command(label="Open Details", command=lambda: self._show_recording_detail(path))
             menu.add_command(label="Open in Explorer",
                              command=lambda: threading.Thread(
-                                 target=lambda: os.startfile(str(path)), daemon=True).start())
+                                 target=lambda: open_in_explorer(str(path)), daemon=True).start())
             menu.add_separator()
             menu.add_command(label="Copy Path",
                              command=lambda: (
@@ -1243,7 +1244,7 @@ class MainWindow:
         )
         open_btn.pack(side=tk.RIGHT, padx=8, pady=6)
         open_btn.bind("<Button-1>", lambda e, p=rec_path: (
-            threading.Thread(target=lambda: os.startfile(str(p)), daemon=True).start()
+            threading.Thread(target=lambda: open_in_explorer(str(p)), daemon=True).start()
         ))
         open_btn.bind("<Enter>", lambda e: open_btn.configure(fg=TEXT_COLOR))
         open_btn.bind("<Leave>", lambda e: open_btn.configure(fg=TEXT_DIM))

@@ -129,7 +129,7 @@ class TestListCapturableWindows:
         ]
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows",
+            "meeting_recorder.video.platforms.list_visible_windows",
             return_value=fake_windows,
         ):
             result = mgr.list_capturable_windows()
@@ -149,7 +149,7 @@ class TestListCapturableWindows:
         ]
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows",
+            "meeting_recorder.video.platforms.list_visible_windows",
             return_value=fake_windows,
         ):
             result = mgr.list_capturable_windows()
@@ -164,7 +164,7 @@ class TestListCapturableWindows:
         mgr = self._make_manager()
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows",
+            "meeting_recorder.video.platforms.list_visible_windows",
             return_value=[],
         ):
             result = mgr.list_capturable_windows()
@@ -180,7 +180,7 @@ class TestListCapturableWindows:
         ]
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows",
+            "meeting_recorder.video.platforms.list_visible_windows",
             return_value=fake_windows,
         ):
             result = mgr.list_capturable_windows()
@@ -223,7 +223,7 @@ class TestPickWindowForRecording:
         app = _make_app()
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows", return_value=[]
+            "meeting_recorder.video.platforms.list_visible_windows", return_value=[]
         ):
             result = app._pick_window_for_recording()
 
@@ -239,7 +239,7 @@ class TestPickWindowForRecording:
         ]
 
         with patch(
-            "meeting_recorder.video.window_finder.list_visible_windows",
+            "meeting_recorder.video.platforms.list_visible_windows",
             return_value=fake_windows,
         ):
             # Mock tkinter to avoid actual GUI

@@ -77,7 +77,7 @@ class TestAutoStartScanner:
                 return_value=[fake_proc],
             ),
             patch(
-                "meeting_recorder.app._find_meeting_window_pid",
+                "meeting_recorder.audio.process_finder._find_meeting_window_pid",
                 return_value=(1234, 100),
             ),
             patch.object(app, "_start_recording_for_process") as mock_start,
@@ -110,7 +110,7 @@ class TestAutoStartScanner:
                 return_value=[fake_proc],
             ),
             patch(
-                "meeting_recorder.app._find_meeting_window_pid",
+                "meeting_recorder.audio.process_finder._find_meeting_window_pid",
                 return_value=(5678, 10),  # Low score = idle lobby
             ),
             patch.object(app, "_start_recording_for_process") as mock_start,
@@ -137,7 +137,7 @@ class TestAutoStartScanner:
                 return_value=[fake_proc],
             ) as mock_find,
             patch(
-                "meeting_recorder.app._find_meeting_window_pid",
+                "meeting_recorder.audio.process_finder._find_meeting_window_pid",
                 return_value=(1234, 100),
             ),
             patch.object(app, "_start_recording_for_process") as mock_start,

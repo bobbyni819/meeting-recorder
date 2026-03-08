@@ -10,11 +10,12 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from meeting_recorder.utils import open_in_explorer
+
 from meeting_recorder.config import Config
-from meeting_recorder.audio.process_finder import (
+from meeting_recorder.audio.platforms import (
     find_primary_meeting_process,
     find_meeting_processes,
-    _find_meeting_window_pid,
     MeetingProcess,
 )
 from meeting_recorder.audio.capture_manager import CaptureManager
@@ -27,7 +28,7 @@ from meeting_recorder.storage.transcript_formatter import save_all_formats
 from meeting_recorder.ui.tray import TrayIcon
 from meeting_recorder.ui.dashboard import GameBarDashboard, DashboardContext
 from meeting_recorder.ui.main_window import MainWindow
-from meeting_recorder.ui import notifications
+from meeting_recorder.ui import platforms as notifications
 from meeting_recorder.integrations.outlook import find_current_meeting, CalendarEvent
 from meeting_recorder.integrations.google_drive import GoogleDriveUploader, is_google_drive_available
 
@@ -197,7 +198,7 @@ class MeetingRecorderApp:
             logger.info("No meeting application found. Opening window picker...")
             # Use the main window's picker when available (avoids Tk conflicts)
             if self._main_window and self._main_window._window:
-                from meeting_recorder.video.window_finder import list_visible_windows
+                from meeting_recorder.video.platforms import list_visible_windows
                 windows = list_visible_windows()
                 if not windows:
                     logger.warning("No visible windows found for picker.")
@@ -239,7 +240,7 @@ class MeetingRecorderApp:
         cancels or no windows are available.
         """
         import tkinter as tk
-        from meeting_recorder.video.window_finder import list_visible_windows
+        from meeting_recorder.video.platforms import list_visible_windows
 
         windows = list_visible_windows()
         if not windows:
@@ -356,7 +357,7 @@ class MeetingRecorderApp:
         # Try the main window's picker first (runs on its Tk thread)
         process = None
         if self._main_window and self._main_window._window:
-            from meeting_recorder.video.window_finder import list_visible_windows
+            from meeting_recorder.video.platforms import list_visible_windows
             windows = list_visible_windows()
             if not windows:
                 logger.warning("No visible windows found for picker.")
@@ -1050,6 +1051,7 @@ class MeetingRecorderApp:
                         continue
                     checked_apps.add(proc.app_key)
 
+                    from meeting_recorder.audio.process_finder import _find_meeting_window_pid
                     pid, score = _find_meeting_window_pid(proc.app_key)
                     if pid is not None and score >= self._auto_start_min_score:
                         logger.info(
@@ -1141,13 +1143,13 @@ class MeetingRecorderApp:
         """Open the recordings folder in the file explorer."""
         output_dir = self.config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(output_dir))
+        open_in_explorer(str(output_dir))
 
     def _open_last_recording(self) -> None:
         """Open the most recent recording folder in the file explorer."""
         latest = self._recording_store.get_latest_recording()
         if latest and latest.exists():
-            os.startfile(str(latest))
+            open_in_explorer(str(latest))
         else:
             notifications.notify_info("No recordings found.")
 
@@ -1158,7 +1160,7 @@ class MeetingRecorderApp:
     def _open_recording(self, path: Path) -> None:
         """Open a specific recording folder in the file explorer."""
         if path.exists():
-            os.startfile(str(path))
+            open_in_explorer(str(path))
         else:
             notifications.notify_info(f"Recording not found: {path.name}")
 
@@ -1167,7 +1169,7 @@ class MeetingRecorderApp:
         cm = self._capture_manager
         if cm is None:
             return
-        from meeting_recorder.video.window_finder import get_window_title
+        from meeting_recorder.video.platforms import get_window_title
         title = get_window_title(hwnd) or f"HWND {hwnd}"
         logger.info("User picked window: '%s' — switching capture", title)
         cm.switch_screen_window(hwnd)

@@ -30,10 +30,22 @@ def main() -> None:
     _fix_stdio()
 
     # Handle subcommands before full app startup
-    if len(sys.argv) > 1 and sys.argv[1] == "diagnose":
-        logging.basicConfig(level=logging.WARNING, format="%(message)s")
-        from meeting_recorder.diagnose import run_diagnostics
-        sys.exit(run_diagnostics())
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == "diagnose":
+            logging.basicConfig(level=logging.WARNING, format="%(message)s")
+            from meeting_recorder.diagnose import run_diagnostics
+            sys.exit(run_diagnostics())
+        elif cmd == "export-config":
+            from meeting_recorder.config_transfer import export_config
+            dest = sys.argv[2] if len(sys.argv) > 2 else None
+            sys.exit(export_config(dest))
+        elif cmd == "import-config":
+            if len(sys.argv) < 3:
+                print("Usage: python -m meeting_recorder import-config <file>")
+                sys.exit(1)
+            from meeting_recorder.config_transfer import import_config
+            sys.exit(import_config(sys.argv[2]))
 
     # Configure logging
     logging.basicConfig(
