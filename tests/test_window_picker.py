@@ -319,20 +319,19 @@ class TestStartRecordingFallback:
         mock_start.assert_called_once_with(manual_process)
         assert app._current_process == manual_process
 
-    def test_meeting_app_found_skips_picker(self):
-        """When a meeting app is detected, picker should NOT be called."""
+    def test_always_shows_picker(self):
+        """Window picker should always be shown, even when a meeting app is detected."""
         app = _make_app()
 
-        zoom_process = MeetingProcess(
-            pid=1234, name="zoom.exe", app_key="zoom", display_name="Zoom"
+        manual_process = MeetingProcess(
+            pid=1234, name="zoom.exe", app_key="manual", display_name="Zoom"
         )
 
-        with patch.object(_app_mod, "find_primary_meeting_process", return_value=zoom_process):
-            with patch.object(app, "_pick_window_for_recording") as mock_pick:
-                with patch.object(app, "_start_recording_for_process"):
-                    app.start_recording()
+        with patch.object(app, "_pick_window_for_recording", return_value=manual_process) as mock_pick:
+            with patch.object(app, "_start_recording_for_process"):
+                app.start_recording()
 
-        mock_pick.assert_not_called()
+        mock_pick.assert_called_once()
 
     def test_no_meeting_found_notification_no_longer_fires(self):
         """The old 'no meeting found' notification should NOT fire anymore."""

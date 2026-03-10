@@ -182,41 +182,40 @@ class MeetingRecorderApp:
         logger.info("Tray icon event loop exited.")
 
     def start_recording(self) -> None:
-        """Start recording the active meeting.
+        """Start recording — always opens a window picker.
 
-        If no known meeting app is detected, opens a window picker so the
-        user can manually select any window to record.
+        The picker pre-selects a meeting app (Zoom/Teams/Webex) if one is
+        detected, but the user always gets to confirm or change the target.
         """
         cm = self._capture_manager
         if cm and cm.is_recording:
             logger.warning("Already recording.")
             return
 
-        # Find meeting process
-        process = find_primary_meeting_process()
-        if process is None:
-            logger.info("No meeting application found. Opening window picker...")
-            # Use the main window's picker when available (avoids Tk conflicts)
-            if self._main_window and self._main_window._window:
-                from meeting_recorder.video.platforms import list_visible_windows
-                windows = list_visible_windows()
-                if not windows:
-                    logger.warning("No visible windows found for picker.")
-                    return
-                chosen = self._main_window.pick_window_for_recording(windows)
-                if chosen is not None:
-                    hwnd, title, pid, proc_name = chosen
-                    process = MeetingProcess(
-                        pid=pid,
-                        name=proc_name,
-                        app_key="manual",
-                        display_name=title,
-                    )
-            else:
-                process = self._pick_window_for_recording()
-            if process is None:
-                logger.info("Window picker cancelled by user.")
+        # Always open the window picker so the user chooses what to record.
+        # If a meeting app is running, it'll appear in the list for easy selection.
+        process = None
+        logger.info("Opening window picker...")
+        if self._main_window and self._main_window._window:
+            from meeting_recorder.video.platforms import list_visible_windows
+            windows = list_visible_windows()
+            if not windows:
+                logger.warning("No visible windows found for picker.")
                 return
+            chosen = self._main_window.pick_window_for_recording(windows)
+            if chosen is not None:
+                hwnd, title, pid, proc_name = chosen
+                process = MeetingProcess(
+                    pid=pid,
+                    name=proc_name,
+                    app_key="manual",
+                    display_name=title,
+                )
+        else:
+            process = self._pick_window_for_recording()
+        if process is None:
+            logger.info("Window picker cancelled by user.")
+            return
 
         self._current_process = process
         logger.info("Found %s (PID %d)", process.display_name, process.pid)
