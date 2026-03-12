@@ -31,8 +31,9 @@ class SettingsWindow:
 
         self._window = tk.Tk()
         self._window.title("Meeting Recorder - Settings")
-        self._window.geometry("500x600")
-        self._window.resizable(False, False)
+        self._window.geometry("500x650")
+        self._window.resizable(True, True)
+        self._window.minsize(450, 500)
 
         # Apply dark theme
         self._apply_dark_theme()
@@ -60,6 +61,11 @@ class SettingsWindow:
         dash_frame = ttk.Frame(notebook, padding=10)
         notebook.add(dash_frame, text="Dashboard")
         self._build_dashboard_tab(dash_frame)
+
+        # Speakers tab
+        speakers_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(speakers_frame, text="Speakers")
+        self._build_speakers_tab(speakers_frame)
 
         # Storage tab
         storage_frame = ttk.Frame(notebook, padding=10)
@@ -216,6 +222,14 @@ class SettingsWindow:
         ).grid(row=row, column=1, sticky=tk.W, pady=5)
 
         row += 1
+        ttk.Label(parent, text="Compute Type:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self._compute_type_var = tk.StringVar(value=self.config.transcription.compute_type)
+        ttk.Combobox(
+            parent, textvariable=self._compute_type_var, width=10,
+            values=["float16", "int8", "float32"], state="readonly",
+        ).grid(row=row, column=1, sticky=tk.W, pady=5)
+
+        row += 1
         ttk.Label(parent, text="OpenAI API Key:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self._api_key_var = tk.StringVar(value=self.config.transcription.openai_api_key)
         ttk.Entry(parent, textvariable=self._api_key_var, width=40, show="*").grid(row=row, column=1, sticky=tk.W, pady=5)
@@ -335,6 +349,167 @@ class SettingsWindow:
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(10, 2))
 
         parent.columnconfigure(1, weight=1)
+
+    def _build_speakers_tab(self, parent: ttk.Frame) -> None:
+        """Build the voice profile management tab."""
+        row = 0
+
+        ttk.Label(parent, text="Voice Profiles", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Speakers are auto-enrolled from recordings when diarization is enabled.\n"
+                 "Voice profiles are used to identify speakers across meetings.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+
+        row += 1
+        # Profile list with scrollbar
+        list_frame = ttk.Frame(parent)
+        list_frame.grid(row=row, column=0, columnspan=2, sticky=tk.NSEW, pady=5)
+        parent.rowconfigure(row, weight=1)
+
+        self._speaker_listbox = tk.Listbox(
+            list_frame,
+            font=("Segoe UI", 9),
+            bg="#0f1a2e", fg="#e0e0e0",
+            selectbackground="#0f3460", selectforeground="#ffffff",
+            activestyle="none", bd=0,
+            highlightthickness=1, highlightcolor="#0f3460",
+        )
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._speaker_listbox.yview)
+        self._speaker_listbox.configure(yscrollcommand=scrollbar.set)
+        self._speaker_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        row += 1
+        self._speaker_count_label = ttk.Label(parent, text="", foreground="gray")
+        self._speaker_count_label.grid(row=row, column=0, sticky=tk.W, pady=(2, 5))
+
+        row += 1
+        btn_frame = ttk.Frame(parent)
+        btn_frame.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Button(btn_frame, text="Rename", command=self._rename_speaker).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Delete", command=self._delete_speaker).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Refresh", command=self._refresh_speakers).pack(side=tk.LEFT, padx=(0, 5))
+
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=0)
+
+        # Load profiles
+        self._speaker_profiles: list[dict] = []
+        self._refresh_speakers()
+
+    def _refresh_speakers(self) -> None:
+        """Reload the speaker profile list from the database."""
+        self._speaker_listbox.delete(0, tk.END)
+        try:
+            from meeting_recorder.transcription.voice_profiles import VoiceProfileDB
+            db = VoiceProfileDB()
+            try:
+                self._speaker_profiles = db.list_profiles_detailed()
+            finally:
+                db.close()
+        except Exception:
+            self._speaker_profiles = []
+
+        for p in self._speaker_profiles:
+            samples = p["sample_count"]
+            updated = p["updated_at"][:10] if p.get("updated_at") else "?"
+            self._speaker_listbox.insert(
+                tk.END,
+                f"  {p['name']}    ({samples} sample{'s' if samples != 1 else ''}, last: {updated})"
+            )
+
+        count = len(self._speaker_profiles)
+        self._speaker_count_label.configure(
+            text=f"{count} voice profile{'s' if count != 1 else ''} enrolled"
+        )
+
+    def _rename_speaker(self) -> None:
+        """Rename the selected speaker profile."""
+        sel = self._speaker_listbox.curselection()
+        if not sel or sel[0] >= len(self._speaker_profiles):
+            return
+
+        old_name = self._speaker_profiles[sel[0]]["name"]
+
+        # Simple dialog for new name
+        dialog = tk.Toplevel(self._window)
+        dialog.title("Rename Speaker")
+        dialog.geometry("300x120")
+        dialog.resizable(False, False)
+        dialog.transient(self._window)
+        dialog.grab_set()
+        dialog.configure(bg="#1a1a2e")
+
+        tk.Label(
+            dialog, text=f"Rename '{old_name}' to:",
+            font=("Segoe UI", 9), fg="#e0e0e0", bg="#1a1a2e",
+        ).pack(padx=12, pady=(12, 4), anchor=tk.W)
+
+        name_var = tk.StringVar(value=old_name)
+        entry = tk.Entry(
+            dialog, textvariable=name_var, font=("Segoe UI", 9),
+            bg="#0f1a2e", fg="#e0e0e0", insertbackground="#e0e0e0",
+        )
+        entry.pack(fill=tk.X, padx=12, pady=4)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def _do_rename():
+            new_name = name_var.get().strip()
+            if not new_name or new_name == old_name:
+                dialog.destroy()
+                return
+            try:
+                from meeting_recorder.transcription.voice_profiles import VoiceProfileDB
+                db = VoiceProfileDB()
+                try:
+                    ok = db.rename_profile(old_name, new_name)
+                finally:
+                    db.close()
+                if not ok:
+                    messagebox.showwarning("Rename Failed", f"Could not rename: '{new_name}' may already exist.")
+                    return
+            except Exception as e:
+                messagebox.showerror("Error", f"Rename failed: {e}")
+                return
+            dialog.destroy()
+            self._refresh_speakers()
+
+        entry.bind("<Return>", lambda e: _do_rename())
+
+        btn_frame = tk.Frame(dialog, bg="#1a1a2e")
+        btn_frame.pack(fill=tk.X, padx=12, pady=8)
+        ttk.Button(btn_frame, text="Rename", command=_do_rename).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT)
+
+    def _delete_speaker(self) -> None:
+        """Delete the selected speaker profile."""
+        sel = self._speaker_listbox.curselection()
+        if not sel or sel[0] >= len(self._speaker_profiles):
+            return
+
+        name = self._speaker_profiles[sel[0]]["name"]
+        if not messagebox.askyesno("Delete Profile", f"Delete voice profile for '{name}'?\n\nThis cannot be undone."):
+            return
+
+        try:
+            from meeting_recorder.transcription.voice_profiles import VoiceProfileDB
+            db = VoiceProfileDB()
+            try:
+                db.delete_profile(name)
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Error", f"Delete failed: {e}")
+            return
+
+        self._refresh_speakers()
 
     def _build_storage_tab(self, parent: ttk.Frame) -> None:
         """Build the storage & retention settings tab."""
@@ -520,9 +695,16 @@ class SettingsWindow:
         )
 
         row += 1
+        ttk.Label(parent, text="Max Transcript Tokens:").grid(row=row, column=0, sticky=tk.W, pady=2)
+        self._summary_max_tokens_var = tk.IntVar(value=self.config.summary.max_transcript_tokens)
+        ttk.Spinbox(parent, from_=0, to=1000000, increment=1000, textvariable=self._summary_max_tokens_var, width=10).grid(
+            row=row, column=1, sticky=tk.W, pady=2
+        )
+
+        row += 1
         ttk.Label(
             parent,
-            text="Leave Model empty for provider default\n(gpt-4o / claude-sonnet-4-20250514).",
+            text="Leave Model empty for provider default\n(gpt-4o / claude-sonnet-4-20250514 / gemini-2.5-flash).\n0 tokens = no limit (send full transcript).",
             foreground="gray",
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
 
@@ -566,9 +748,12 @@ class SettingsWindow:
                 else:
                     self._window.after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
             except Exception as e:
-                err = str(e)[:30]
-                self._window.after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
+                short_err = str(e)[:40]
                 logger.warning("Gemini API key test failed: %s", e)
+                def _show_fail(msg=short_err):
+                    self._gemini_test_btn.configure(text="Fail", state="normal")
+                    messagebox.showwarning("Gemini Test Failed", f"API key test failed:\n{msg}")
+                self._window.after(0, _show_fail)
             self._window.after(3000, lambda: self._gemini_test_btn.configure(text="Test"))
 
         import threading
@@ -592,6 +777,7 @@ class SettingsWindow:
             self.config.transcription.backend = self._backend_var.get()
             self.config.transcription.model_size = self._model_size_var.get()
             self.config.transcription.device = self._device_var.get()
+            self.config.transcription.compute_type = self._compute_type_var.get()
             self.config.transcription.openai_api_key = self._api_key_var.get()
             self.config.transcription.gemini_api_key = self._gemini_key_var.get()
             self.config.transcription.gemini_model = self._gemini_model_var.get()
@@ -615,6 +801,7 @@ class SettingsWindow:
             self.config.summary.provider = self._summary_provider_var.get()
             self.config.summary.api_key = self._summary_api_key_var.get()
             self.config.summary.model = self._summary_model_var.get()
+            self.config.summary.max_transcript_tokens = self._summary_max_tokens_var.get()
 
             self.config.retention.enabled = self._retention_enabled_var.get()
             self.config.retention.max_age_days = self._retention_age_var.get()

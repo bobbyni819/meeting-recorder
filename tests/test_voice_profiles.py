@@ -228,6 +228,68 @@ class TestVoiceProfileDB:
         assert result.is_match is True
         assert result.similarity > 0.9
 
+    # --- list_profiles_detailed ---
+
+    def test_list_profiles_detailed_returns_metadata(self, db: VoiceProfileDB):
+        """list_profiles_detailed returns dicts with name, sample_count, and timestamps."""
+        db.enroll("Alice", np.array([1.0, 0.0, 0.0]))
+        db.enroll("Bob", np.array([0.0, 1.0, 0.0]))
+        # Update Alice to increase sample_count
+        db.enroll("Alice", np.array([0.9, 0.1, 0.0]))
+
+        profiles = db.list_profiles_detailed()
+        assert len(profiles) == 2
+        # Sorted by name
+        assert profiles[0]["name"] == "Alice"
+        assert profiles[0]["sample_count"] == 2
+        assert "created_at" in profiles[0]
+        assert "updated_at" in profiles[0]
+        assert profiles[1]["name"] == "Bob"
+        assert profiles[1]["sample_count"] == 1
+
+    def test_list_profiles_detailed_empty_db(self, db: VoiceProfileDB):
+        """list_profiles_detailed on empty database returns empty list."""
+        assert db.list_profiles_detailed() == []
+
+    # --- rename_profile ---
+
+    def test_rename_profile_success(self, db: VoiceProfileDB):
+        """Renaming a profile updates the name and preserves embedding."""
+        emb = np.array([1.0, 0.0, 0.0])
+        db.enroll("Alice", emb)
+
+        assert db.rename_profile("Alice", "Alice Smith") is True
+        assert db.get_profile("Alice") is None
+        profile = db.get_profile("Alice Smith")
+        assert profile is not None
+        np.testing.assert_array_almost_equal(profile.embedding, emb)
+
+    def test_rename_profile_case_insensitive_lookup(self, db: VoiceProfileDB):
+        """rename_profile finds old name case-insensitively."""
+        db.enroll("Alice", np.array([1.0, 0.0, 0.0]))
+        assert db.rename_profile("alice", "Alice Smith") is True
+        assert db.list_profiles() == ["Alice Smith"]
+
+    def test_rename_profile_nonexistent_returns_false(self, db: VoiceProfileDB):
+        """Renaming a name that doesn't exist returns False."""
+        assert db.rename_profile("Ghost", "New Name") is False
+
+    def test_rename_profile_conflict_returns_false(self, db: VoiceProfileDB):
+        """Renaming to an existing name returns False."""
+        db.enroll("Alice", np.array([1.0, 0.0, 0.0]))
+        db.enroll("Bob", np.array([0.0, 1.0, 0.0]))
+        assert db.rename_profile("Alice", "Bob") is False
+        # Original still exists
+        assert db.get_profile("Alice") is not None
+
+    def test_rename_profile_conflict_case_insensitive(self, db: VoiceProfileDB):
+        """Renaming to a case variant of an existing name returns False."""
+        db.enroll("Alice", np.array([1.0, 0.0, 0.0]))
+        db.enroll("Bob", np.array([0.0, 1.0, 0.0]))
+        assert db.rename_profile("Alice", "bob") is False
+
+    # --- close ---
+
     def test_close_works(self, tmp_path):
         """close() shuts down the connection and allows reopening."""
         db_path = tmp_path / "close_test.db"

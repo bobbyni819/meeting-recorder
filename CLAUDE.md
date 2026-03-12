@@ -60,6 +60,27 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Dashboard shows amber "⏸ PAUSED" indicator and pause button toggles play/pause icon
 - Tray menu "Pause / Resume" item, enabled only during recording
 
+## Voice profiles
+- `VoiceProfileDB` in `transcription/voice_profiles.py` stores speaker embeddings in SQLite
+- Auto-enrolled during transcription when diarization identifies speakers
+- Cross-meeting speaker identification via cosine similarity (threshold 0.75)
+- Settings > Speakers tab: list, rename, delete voice profiles
+- `list_profiles_detailed()` returns name, sample_count, timestamps
+- `rename_profile()` renames with conflict detection
+
+## Re-process recording
+- `reprocess_recording(path)` in app.py re-runs transcription + summary on existing audio
+- Available via "Re-process" button in recording detail view and right-click context menu
+- `reprocess_all_failed()` batch re-processes all recordings with status "error"
+- Uses current config (not original recording's config) — useful after switching backends
+- Guards against concurrent re-processing (checks if post-processing thread is alive)
+
+## Search index
+- SQLite FTS5 index in `~/.meeting_recorder/recordings.db`
+- Auto-syncs on startup via background thread (`_sync_search_index`)
+- `RecordingIndex.sync()` adds new recordings, removes deleted ones
+- Each post-processed recording indexed individually via `_index_recording`
+
 ## Known pitfalls
 - `pythonw.exe` sets `sys.stdout/stderr = None` — redirect to devnull before `torch.hub.load`
 - `torch.hub.load` deadlocks in background threads when pystray + keyboard hooks are active;
@@ -84,7 +105,7 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Disabled by default — user must set `retention.enabled = true`
 
 ## Config defaults (current)
-- `recording.auto_start = true` (auto-detect meetings)
+- `recording.auto_start = false` (manual window picker; auto-detect available via toggle)
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
 - `screen_recording.enabled = true`, `fps = 30`

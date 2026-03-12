@@ -70,6 +70,8 @@ class MainWindow:
         on_pick_window: Optional[Callable] = None,
         on_toggle_audio_mode: Optional[Callable] = None,
         on_toggle_auto_start: Optional[Callable] = None,
+        on_reprocess: Optional[Callable] = None,
+        on_reprocess_all_failed: Optional[Callable] = None,
         on_quit: Optional[Callable] = None,
         auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
@@ -89,6 +91,8 @@ class MainWindow:
         self._on_pick_window = on_pick_window
         self._on_toggle_audio_mode = on_toggle_audio_mode
         self._on_toggle_auto_start = on_toggle_auto_start
+        self._on_reprocess = on_reprocess
+        self._on_reprocess_all_failed = on_reprocess_all_failed
         self._on_quit = on_quit
         self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
@@ -518,6 +522,19 @@ class MainWindow:
             section_row, text="Recent Recordings", font=("Segoe UI", 10, "bold"),
             fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
         ).pack(side=tk.LEFT)
+        # Re-process failed link (shown dynamically when failures exist)
+        self._reprocess_failed_label = tk.Label(
+            section_row, text="", font=("Segoe UI", 8),
+            fg=AMBER, bg=BG_COLOR, cursor="hand2",
+        )
+        if self._on_reprocess_all_failed:
+            self._reprocess_failed_label.bind(
+                "<Button-1>", lambda e: self._fire(self._on_reprocess_all_failed))
+            self._reprocess_failed_label.bind(
+                "<Enter>", lambda e: self._reprocess_failed_label.configure(fg=TEXT_BRIGHT))
+            self._reprocess_failed_label.bind(
+                "<Leave>", lambda e: self._reprocess_failed_label.configure(fg=AMBER))
+
         self._stats_label = tk.Label(
             section_row, text="", font=("Segoe UI", 8),
             fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.E,
@@ -1009,6 +1026,7 @@ class MainWindow:
 
         # Compute stats from metadata
         total_duration = 0.0
+        failed_count = 0
         shown = 0
         for rec_path in recordings[:50]:  # Check up to 50
             meta = {}
@@ -1019,6 +1037,9 @@ class MainWindow:
                         meta = json.load(f)
             except Exception:
                 pass
+
+            if meta.get("status") == "error":
+                failed_count += 1
 
             # Filter: match against folder name, subject, app name, attendees
             if filter_text:
@@ -1036,9 +1057,9 @@ class MainWindow:
                 self._build_history_card(rec_path)
                 shown += 1
             total_duration += meta.get("duration_seconds", 0)
-        self._update_stats_label(len(recordings), total_duration)
+        self._update_stats_label(len(recordings), total_duration, failed_count)
 
-    def _update_stats_label(self, count: int, total_seconds: float) -> None:
+    def _update_stats_label(self, count: int, total_seconds: float, failed: int = 0) -> None:
         """Update the stats label next to 'Recent Recordings'."""
         if not hasattr(self, '_stats_label') or not self._stats_label:
             return
@@ -1050,7 +1071,20 @@ class MainWindow:
             time_str = f"{hours:.1f}h"
         else:
             time_str = f"{total_seconds / 60:.0f}m"
-        self._stats_label.configure(text=f"{count} recordings  \u2022  {time_str} total")
+        text = f"{count} recordings  \u2022  {time_str} total"
+        if failed > 0:
+            text += f"  \u2022  {failed} failed"
+        self._stats_label.configure(text=text)
+
+        # Show/hide "Re-process failed" link
+        if hasattr(self, '_reprocess_failed_label') and self._reprocess_failed_label:
+            if failed > 0 and self._on_reprocess_all_failed:
+                self._reprocess_failed_label.configure(
+                    text=f"\u21bb Re-process {failed} failed",
+                )
+                self._reprocess_failed_label.pack(side=tk.RIGHT, padx=(8, 0))
+            else:
+                self._reprocess_failed_label.pack_forget()
 
     def _build_history_card(self, rec_path: Path) -> None:
         """Build a single recording card in the history list."""
@@ -1153,6 +1187,10 @@ class MainWindow:
             menu.add_command(label="Open in Explorer",
                              command=lambda: threading.Thread(
                                  target=lambda: open_in_explorer(str(path)), daemon=True).start())
+            if self._on_reprocess:
+                menu.add_command(label="Re-process",
+                                 command=lambda: self._fire(
+                                     lambda: self._on_reprocess(path)))
             menu.add_separator()
             menu.add_command(label="Copy Path",
                              command=lambda: (
@@ -1168,14 +1206,18 @@ class MainWindow:
         card.bind("<Leave>", _leave)
         card.bind("<Button-1>", _click)
         card.bind("<Button-3>", _right_click)
-        # Propagate scroll + click to children so they work when hovering over labels
+        # Propagate hover, scroll + click to children so they work when hovering over labels
         mw_handler = getattr(self, "_history_mousewheel_handler", None)
         for child in card.winfo_children():
+            child.bind("<Enter>", _enter)
+            child.bind("<Leave>", _leave)
             child.bind("<Button-1>", _click)
             child.bind("<Button-3>", _right_click)
             if mw_handler:
                 child.bind("<MouseWheel>", mw_handler)
             for grandchild in child.winfo_children():
+                grandchild.bind("<Enter>", _enter)
+                grandchild.bind("<Leave>", _leave)
                 grandchild.bind("<Button-1>", _click)
                 grandchild.bind("<Button-3>", _right_click)
                 if mw_handler:
@@ -1288,6 +1330,22 @@ class MainWindow:
         copy_btn.bind("<Button-1>", lambda e: _copy_transcript())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_COLOR))
         copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM))
+
+        # Re-process button (only when not currently recording)
+        if self._on_reprocess and not self._is_recording:
+            reprocess_btn = tk.Label(
+                top_bar, text="\u21bb  Re-process", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            reprocess_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+            def _do_reprocess():
+                reprocess_btn.configure(text="\u21bb  Processing...", fg=AMBER)
+                self._fire(lambda: self._on_reprocess(rec_path))
+
+            reprocess_btn.bind("<Button-1>", lambda e: _do_reprocess())
+            reprocess_btn.bind("<Enter>", lambda e: reprocess_btn.configure(fg=TEXT_COLOR))
+            reprocess_btn.bind("<Leave>", lambda e: reprocess_btn.configure(fg=TEXT_DIM))
 
         # Delete button
         del_btn = tk.Label(
@@ -1433,6 +1491,140 @@ class MainWindow:
         summary_btn.bind("<Button-1>", lambda e: _show_tab(summary_text, summary_btn))
         details_btn.bind("<Button-1>", lambda e: _show_tab(details_text, details_btn))
 
+        # --- In-content search bar (hidden by default) ---
+        search_frame = tk.Frame(parent, bg=BG_CONTROLS)
+        # Don't pack yet — toggled by Ctrl+F
+        search_var = tk.StringVar()
+        search_match_label = tk.Label(
+            search_frame, text="", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg=BG_CONTROLS,
+        )
+        search_current_idx = [0]
+        search_match_positions: list[str] = []
+
+        # Configure highlight tag
+        text_widget.tag_configure("search_hl", background="#665500", foreground="#ffffff")
+        text_widget.tag_configure("search_current", background="#cc9900", foreground="#000000")
+
+        def _do_search(*_args):
+            """Highlight all occurrences of the search query."""
+            text_widget.tag_remove("search_hl", "1.0", tk.END)
+            text_widget.tag_remove("search_current", "1.0", tk.END)
+            search_match_positions.clear()
+            search_current_idx[0] = 0
+
+            query = search_var.get().strip()
+            if not query:
+                search_match_label.configure(text="")
+                return
+
+            # Find all matches
+            start = "1.0"
+            while True:
+                pos = text_widget.search(query, start, stopindex=tk.END, nocase=True)
+                if not pos:
+                    break
+                end_pos = f"{pos}+{len(query)}c"
+                text_widget.tag_add("search_hl", pos, end_pos)
+                search_match_positions.append(pos)
+                start = end_pos
+
+            count = len(search_match_positions)
+            if count > 0:
+                search_match_label.configure(text=f"1 of {count}")
+                _highlight_current(0)
+            else:
+                search_match_label.configure(text="No matches")
+
+        def _highlight_current(idx: int):
+            """Highlight the current match and scroll to it."""
+            text_widget.tag_remove("search_current", "1.0", tk.END)
+            if not search_match_positions:
+                return
+            idx = idx % len(search_match_positions)
+            search_current_idx[0] = idx
+            pos = search_match_positions[idx]
+            end_pos = f"{pos}+{len(search_var.get())}c"
+            text_widget.tag_add("search_current", pos, end_pos)
+            text_widget.see(pos)
+            search_match_label.configure(
+                text=f"{idx + 1} of {len(search_match_positions)}"
+            )
+
+        def _next_match(*_):
+            if search_match_positions:
+                _highlight_current(search_current_idx[0] + 1)
+
+        def _prev_match(*_):
+            if search_match_positions:
+                _highlight_current(search_current_idx[0] - 1)
+
+        def _close_search(*_):
+            search_frame.pack_forget()
+            text_widget.tag_remove("search_hl", "1.0", tk.END)
+            text_widget.tag_remove("search_current", "1.0", tk.END)
+            search_match_positions.clear()
+            search_match_label.configure(text="")
+
+        def _toggle_search(*_):
+            if search_frame.winfo_ismapped():
+                _close_search()
+            else:
+                search_frame.pack(fill=tk.X, padx=16, pady=(0, 2),
+                                  before=content_frame)
+                search_entry.focus_set()
+                search_entry.select_range(0, tk.END)
+
+        search_entry = tk.Entry(
+            search_frame, textvariable=search_var,
+            font=("Segoe UI", 9), bg=BG_PANEL, fg=TEXT_COLOR,
+            insertbackground=TEXT_COLOR, bd=0,
+            highlightthickness=0, width=25,
+        )
+        search_entry.pack(side=tk.LEFT, padx=(8, 4), pady=4, ipady=2)
+        search_var.trace_add("write", _do_search)
+        search_entry.bind("<Return>", _next_match)
+        search_entry.bind("<Shift-Return>", _prev_match)
+        search_entry.bind("<Escape>", _close_search)
+
+        for btn_text, btn_cmd in [("\u25b2", _prev_match), ("\u25bc", _next_match)]:
+            b = tk.Label(
+                search_frame, text=btn_text, font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BG_CONTROLS, cursor="hand2", padx=4,
+            )
+            b.pack(side=tk.LEFT, padx=1, pady=4)
+            b.bind("<Button-1>", lambda e, c=btn_cmd: c())
+            b.bind("<Enter>", lambda e, lb=b: lb.configure(fg=TEXT_COLOR))
+            b.bind("<Leave>", lambda e, lb=b: lb.configure(fg=TEXT_DIM))
+
+        search_match_label.pack(side=tk.LEFT, padx=6)
+
+        close_search_btn = tk.Label(
+            search_frame, text="\u2715", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_CONTROLS, cursor="hand2", padx=4,
+        )
+        close_search_btn.pack(side=tk.RIGHT, padx=4, pady=4)
+        close_search_btn.bind("<Button-1>", _close_search)
+        close_search_btn.bind("<Enter>", lambda e: close_search_btn.configure(fg=TEXT_COLOR))
+        close_search_btn.bind("<Leave>", lambda e: close_search_btn.configure(fg=TEXT_DIM))
+
+        # Bind Ctrl+F to toggle search within the detail view
+        if self._window:
+            # Use a detail-specific binding that's cleaned up when detail closes
+            parent.bind_all("<Control-f>", _toggle_search)
+            # Clean up the binding when detail is destroyed
+            def _on_detail_destroy(e):
+                if e.widget is parent:
+                    try:
+                        parent.unbind_all("<Control-f>")
+                        # Re-bind the outer Ctrl+F for search window
+                        if self._window:
+                            self._window.bind("<Control-f>",
+                                              lambda e: self._fire(self._on_search))
+                    except tk.TclError:
+                        pass
+            parent.bind("<Destroy>", _on_detail_destroy)
+
         # Show transcript by default, fall back to summary
         if transcript_text:
             _show_tab(transcript_text, transcript_btn)
@@ -1505,6 +1697,39 @@ class MainWindow:
         if error:
             lines.append(f"  Error:                  {error}")
         lines.append("")
+
+        # --- Speaker Stats ---
+        # Calculate per-speaker speaking time from transcript.json
+        transcript_json_path = rec_path / "transcript.json"
+        speaker_times: dict[str, float] = {}
+        if transcript_json_path.exists():
+            try:
+                import json as _json
+                with open(transcript_json_path, "r", encoding="utf-8") as _f:
+                    _tdata = _json.load(_f)
+                for seg in _tdata.get("segments", []):
+                    spk = seg.get("speaker", "Unknown")
+                    start_t = seg.get("start", 0.0)
+                    end_t = seg.get("end", 0.0)
+                    duration = max(0.0, end_t - start_t)
+                    speaker_times[spk] = speaker_times.get(spk, 0.0) + duration
+            except Exception:
+                pass
+
+        if speaker_times:
+            total_speaking = sum(speaker_times.values())
+            lines.append("SPEAKER STATS")
+            lines.append("-" * 40)
+            # Sort by speaking time descending
+            for spk, secs in sorted(speaker_times.items(), key=lambda x: -x[1]):
+                pct = (secs / total_speaking * 100) if total_speaking > 0 else 0
+                mins = int(secs // 60)
+                remaining_secs = int(secs % 60)
+                bar_len = int(pct / 5)  # 20 chars = 100%
+                bar = "\u2588" * bar_len + "\u2591" * (20 - bar_len)
+                lines.append(f"  {spk:<16} {mins:2d}:{remaining_secs:02d}  {bar}  {pct:.0f}%")
+            lines.append(f"  {'Total':<16} {int(total_speaking // 60):2d}:{int(total_speaking % 60):02d}")
+            lines.append("")
 
         # --- Speaker Map ---
         speaker_map = meta.get("speaker_map", {})
@@ -1689,6 +1914,11 @@ class MainWindow:
                 label = f"  {title} \u2014 {proc_name}" if proc_name != "unknown" else f"  {title}"
                 listbox.insert(tk.END, label)
 
+            # Pre-select first item
+            if windows:
+                listbox.selection_set(0)
+                listbox.activate(0)
+
             def _confirm():
                 sel = listbox.curselection()
                 if not sel:
@@ -1735,7 +1965,21 @@ class MainWindow:
         if not self._on_list_windows or not self._on_pick_window or not self._window:
             return
 
-        windows = self._on_list_windows()
+        # Run Win32 enumeration off the Tk thread to avoid UI freeze
+        def _do_pick():
+            windows = self._on_list_windows()
+            if not windows or not self._window:
+                return
+            try:
+                self._window.after(0, lambda: self._show_capture_picker(windows))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=_do_pick, daemon=True).start()
+
+    def _show_capture_picker(self, windows: list) -> None:
+        if not self._window:
+            return
         if not windows:
             return
 
@@ -1769,6 +2013,11 @@ class MainWindow:
 
         for _hwnd, title in windows:
             listbox.insert(tk.END, f"  {title}")
+
+        # Pre-select first item
+        if windows:
+            listbox.selection_set(0)
+            listbox.activate(0)
 
         def _confirm():
             sel = listbox.curselection()

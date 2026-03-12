@@ -26,11 +26,13 @@ def notify_transcription_started() -> None:
     _show("Processing", "Transcribing recording...")
 
 
-def notify_transcription_complete(output_dir: str) -> None:
+def notify_transcription_complete(output_dir: str, summary: str = "") -> None:
     """Show notification when transcription is done. Clicking opens the folder."""
+    body = summary + "\n" if summary else ""
+    body += f"Click to open: {output_dir}"
     _show(
         "Transcription Complete",
-        f"Click to open: {output_dir}",
+        body,
         launch=output_dir,
     )
 

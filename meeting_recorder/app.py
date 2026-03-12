@@ -102,6 +102,8 @@ class MeetingRecorderApp:
             on_pick_window=self._on_pick_capture_window,
             on_toggle_audio_mode=self._toggle_audio_mode,
             on_toggle_auto_start=self._toggle_auto_start,
+            on_reprocess=self.reprocess_recording,
+            on_reprocess_all_failed=self.reprocess_all_failed,
             on_quit=self.quit,
             auto_start=self.config.recording.auto_start,
             hotkey_recording=self.config.hotkey.toggle_recording,
@@ -156,6 +158,11 @@ class MeetingRecorderApp:
 
         # Run retention cleanup at startup
         self._run_retention_cleanup()
+
+        # Sync search index in background (indexes new recordings, removes deleted)
+        threading.Thread(
+            target=self._sync_search_index, daemon=True, name="search-index-sync"
+        ).start()
 
         # Start meeting auto-detection scanner
         if self.config.recording.auto_start:
@@ -721,7 +728,20 @@ class MeetingRecorderApp:
                 f"{hotkeys.toggle_recording} Record  |  {hotkeys.toggle_pause} Pause"
             )
             self._main_window.refresh_history()
-            notifications.notify_transcription_complete(str(recording_dir))
+
+            # Build a richer notification with key stats
+            notify_parts = []
+            dur = metadata.duration_seconds or elapsed_seconds
+            if dur:
+                m, s = divmod(int(dur), 60)
+                h, m = divmod(m, 60)
+                notify_parts.append(f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}")
+            if metadata.speaker_count:
+                notify_parts.append(f"{metadata.speaker_count} speaker{'s' if metadata.speaker_count != 1 else ''}")
+            if metadata.segment_count:
+                notify_parts.append(f"{metadata.segment_count} segments")
+            summary_line = " \u2022 ".join(notify_parts) if notify_parts else ""
+            notifications.notify_transcription_complete(str(recording_dir), summary_line)
             logger.info("Post-processing complete: %s", recording_dir)
 
             # Run retention cleanup after each recording
@@ -787,6 +807,19 @@ class MeetingRecorderApp:
             logger.info("AI summary generated successfully.")
         except Exception:
             logger.exception("AI summary generation failed (non-fatal)")
+
+    def _sync_search_index(self) -> None:
+        """Sync the search index with recordings on disk (background, non-fatal)."""
+        try:
+            from meeting_recorder.search.index import RecordingIndex
+
+            index = RecordingIndex()
+            added, removed = index.sync(self.config.output_dir)
+            index.close()
+            if added or removed:
+                logger.info("Search index synced: %d added, %d removed", added, removed)
+        except Exception:
+            logger.exception("Search index sync failed (non-fatal)")
 
     def _index_recording(self, recording_dir: Path) -> None:
         """Add recording to the search index (non-fatal)."""
@@ -1130,6 +1163,99 @@ class MeetingRecorderApp:
     def _list_recent_recordings_full(self) -> list[Path]:
         """Return up to 20 recent recording directories (for main window)."""
         return self._recording_store.list_recordings()[:20]
+
+    def reprocess_recording(self, recording_dir: Path) -> None:
+        """Re-run transcription and summary on an existing recording.
+
+        Uses current config (not original recording config).
+        Skips if a post-processing thread is already running.
+        """
+        if self._post_thread and self._post_thread.is_alive():
+            notifications.notify_error("Post-processing already running. Please wait.")
+            return
+
+        recording_dir = Path(recording_dir)
+        if not recording_dir.exists():
+            notifications.notify_error("Recording directory not found.")
+            return
+
+        # Check for at least one audio file
+        has_audio = (
+            (recording_dir / "app_audio.wav").exists()
+            or (recording_dir / "mic_audio.wav").exists()
+        )
+        if not has_audio:
+            notifications.notify_error("No audio files found in recording directory.")
+            return
+
+        # Load existing metadata
+        import json
+        meta_path = recording_dir / "metadata.json"
+        if meta_path.exists():
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                metadata = RecordingMetadata(**{
+                    k: v for k, v in data.items()
+                    if k in RecordingMetadata.__dataclass_fields__
+                })
+            except Exception:
+                metadata = RecordingMetadata()
+        else:
+            metadata = RecordingMetadata()
+
+        # Refresh pipeline with current config
+        self._pipeline = TranscriptionPipeline(self.config)
+
+        logger.info("Re-processing recording: %s", recording_dir)
+        notifications.notify_info("Re-processing recording...")
+        self._main_window.update_status_bar("Re-processing recording...")
+
+        self._post_thread = threading.Thread(
+            target=self._post_process,
+            args=(recording_dir, metadata, self.config, metadata.duration_seconds),
+            name="reprocess",
+            daemon=False,
+        )
+        self._post_thread.start()
+
+    def reprocess_all_failed(self) -> None:
+        """Re-process all recordings with status 'error', one at a time."""
+        import json as _json
+
+        recordings = self._recording_store.list_recordings()
+        failed: list[Path] = []
+        for rec_path in recordings:
+            meta_path = rec_path / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = _json.load(f)
+                if meta.get("status") == "error":
+                    failed.append(rec_path)
+            except Exception:
+                continue
+
+        if not failed:
+            notifications.notify_info("No failed recordings to re-process.")
+            return
+
+        logger.info("Batch re-processing %d failed recording(s)", len(failed))
+        notifications.notify_info(f"Re-processing {len(failed)} failed recording(s)...")
+
+        for i, rec_path in enumerate(failed, 1):
+            self._main_window.update_status_bar(
+                f"Re-processing {i}/{len(failed)}: {rec_path.name}"
+            )
+            self.reprocess_recording(rec_path)
+            # Wait for this one to finish before starting the next
+            if self._post_thread and self._post_thread.is_alive():
+                self._post_thread.join(timeout=600)  # 10 min max per recording
+
+        self._main_window.update_status_bar("Batch re-processing complete.")
+        self._main_window.refresh_history()
+        notifications.notify_info(f"Re-processed {len(failed)} recording(s).")
 
     def _list_capturable_windows(self) -> list:
         """Return windows available for capture switching (during recording)."""

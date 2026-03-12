@@ -49,8 +49,8 @@ else:
     def notify_transcription_started() -> None:
         _logger.info("Transcription started.")
 
-    def notify_transcription_complete(output_dir: str) -> None:
-        _logger.info("Transcription complete: %s", output_dir)
+    def notify_transcription_complete(output_dir: str, summary: str = "") -> None:
+        _logger.info("Transcription complete: %s %s", output_dir, summary)
 
     def notify_error(message: str) -> None:
         _logger.error("Error: %s", message)

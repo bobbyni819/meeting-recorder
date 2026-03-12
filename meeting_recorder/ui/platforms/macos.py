@@ -46,8 +46,10 @@ def notify_transcription_started() -> None:
     _show("Processing", "Transcribing recording...")
 
 
-def notify_transcription_complete(output_dir: str) -> None:
-    _show("Transcription Complete", f"Done: {output_dir}")
+def notify_transcription_complete(output_dir: str, summary: str = "") -> None:
+    body = f"{summary}\n" if summary else ""
+    body += f"Done: {output_dir}"
+    _show("Transcription Complete", body)
 
 
 def notify_error(message: str) -> None:

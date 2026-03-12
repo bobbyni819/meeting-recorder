@@ -182,6 +182,53 @@ class VoiceProfileDB:
         rows = conn.execute("SELECT name FROM speaker_profiles ORDER BY name").fetchall()
         return [row["name"] for row in rows]
 
+    def list_profiles_detailed(self) -> list[dict]:
+        """List all profiles with metadata.
+
+        Returns:
+            List of dicts with keys: name, sample_count, created_at, updated_at.
+        """
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT name, sample_count, created_at, updated_at "
+            "FROM speaker_profiles ORDER BY name"
+        ).fetchall()
+        return [
+            {
+                "name": row["name"],
+                "sample_count": row["sample_count"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def rename_profile(self, old_name: str, new_name: str) -> bool:
+        """Rename a speaker profile. Returns True if renamed.
+
+        Fails if old_name doesn't exist or new_name already exists.
+        """
+        conn = self._connect()
+        # Check for conflict
+        existing = conn.execute(
+            "SELECT 1 FROM speaker_profiles WHERE name = ? COLLATE NOCASE",
+            (new_name,)
+        ).fetchone()
+        if existing is not None:
+            logger.warning("Cannot rename to '%s': profile already exists", new_name)
+            return False
+
+        cursor = conn.execute(
+            "UPDATE speaker_profiles SET name = ?, updated_at = datetime('now') "
+            "WHERE name = ? COLLATE NOCASE",
+            (new_name, old_name)
+        )
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info("Renamed speaker profile: %s -> %s", old_name, new_name)
+            return True
+        return False
+
     def delete_profile(self, name: str) -> bool:
         """Delete a speaker profile. Returns True if deleted."""
         conn = self._connect()

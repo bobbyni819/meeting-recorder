@@ -395,6 +395,17 @@ class TestDetailViewState:
 # Auto-start and audio mode updates (no Tk)
 # ---------------------------------------------------------------------------
 
+class TestReprocessCallback:
+    def test_stores_callback(self):
+        cb = lambda path: None
+        mw = MainWindow(on_reprocess=cb)
+        assert mw._on_reprocess is cb
+
+    def test_default_no_callback(self):
+        mw = MainWindow()
+        assert mw._on_reprocess is None
+
+
 class TestAutoStartUpdate:
     def test_updates_state(self):
         mw = MainWindow(auto_start=False)
@@ -609,6 +620,31 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {})
         assert "FILES" in text
         assert "TECHNICAL" in text
+
+    def test_speaker_stats_from_transcript(self, tmp_path):
+        """Speaker stats calculated from transcript.json segments."""
+        transcript = {
+            "segments": [
+                {"speaker": "Alice", "start": 0.0, "end": 60.0, "text": "hello"},
+                {"speaker": "Bob", "start": 60.0, "end": 90.0, "text": "hi"},
+                {"speaker": "Alice", "start": 90.0, "end": 120.0, "text": "bye"},
+            ]
+        }
+        (tmp_path / "transcript.json").write_text(
+            json.dumps(transcript), encoding="utf-8"
+        )
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "SPEAKER STATS" in text
+        assert "Alice" in text
+        assert "Bob" in text
+        # Alice: 90s = 1:30, Bob: 30s = 0:30
+        assert "1:30" in text
+        assert "0:30" in text
+
+    def test_speaker_stats_absent_without_transcript(self, tmp_path):
+        """No SPEAKER STATS section when no transcript.json exists."""
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "SPEAKER STATS" not in text
 
 
 # ---------------------------------------------------------------------------
