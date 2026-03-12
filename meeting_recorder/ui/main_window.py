@@ -924,8 +924,10 @@ class MainWindow:
             rgb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
             photo = ImageTk.PhotoImage(img)
-            self._preview_label.configure(image=photo, text="")
+            # Keep old photo ref alive until new one is assigned to prevent
+            # GC flicker; set image only (not text) to avoid double redraw
             self._preview_photo = photo
+            self._preview_label.configure(image=photo)
         except Exception:
             pass
 

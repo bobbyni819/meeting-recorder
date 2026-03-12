@@ -319,8 +319,8 @@ class GameBarDashboard:
             rgb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
             photo = ImageTk.PhotoImage(img)
-            self._preview_label.configure(image=photo, text="")
-            self._preview_photo = photo  # prevent GC
+            self._preview_photo = photo  # keep ref alive before configure
+            self._preview_label.configure(image=photo)
         except Exception:
             logger.debug("Screen preview update failed", exc_info=True)
 
