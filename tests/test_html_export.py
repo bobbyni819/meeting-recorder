@@ -119,6 +119,40 @@ class TestGenerateHtmlReport:
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
+    def test_report_with_participation(self, rec_dir: Path):
+        """Should include participation section when transcript.json has speakers."""
+        data = {
+            "segments": [
+                {"speaker": "Alice", "start": 0.0, "end": 60.0, "text": "talking"},
+                {"speaker": "Bob", "start": 60.0, "end": 90.0, "text": "talking"},
+            ]
+        }
+        (rec_dir / "transcript.json").write_text(json.dumps(data), encoding="utf-8")
+        html = generate_html_report(rec_dir, {})
+        assert "Participation Equity" in html
+
+    def test_report_with_word_frequency(self, rec_dir: Path):
+        """Should include key terms section when transcript exists."""
+        (rec_dir / "transcript.txt").write_text(
+            "project timeline deadline project meeting project agenda deadline",
+            encoding="utf-8",
+        )
+        html = generate_html_report(rec_dir, {})
+        assert "Key Terms" in html
+        assert "project" in html
+
+    def test_report_with_roi(self, rec_dir: Path):
+        """Should include ROI section when summary has decisions."""
+        (rec_dir / "summary.md").write_text(
+            "We decided to proceed with plan A. Approved the budget.", encoding="utf-8"
+        )
+        meta = {
+            "duration_seconds": 3600,
+            "meeting_attendees": ["Alice", "Bob"],
+        }
+        html = generate_html_report(rec_dir, meta)
+        assert "Meeting ROI" in html
+
     def test_report_is_self_contained(self, rec_dir: Path):
         """Report should have inline CSS, no external dependencies."""
         html = generate_html_report(rec_dir, {})

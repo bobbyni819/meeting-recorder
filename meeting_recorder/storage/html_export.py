@@ -162,6 +162,116 @@ def generate_html_report(rec_path: Path, meta: dict | None = None) -> str:
             <p class="quality-label">{overall}/100</p>
         </div>"""
 
+    # Sentiment section
+    sentiment_html = ""
+    try:
+        from meeting_recorder.storage.sentiment import analyze_recording_sentiment
+        sent = analyze_recording_sentiment(rec_path)
+        if sent:
+            s_color = "#27ae60" if sent.label == "positive" else "#e74c3c" if sent.label == "negative" else "#f39c12" if sent.label == "mixed" else "#3498db"
+            pct = int((sent.score + 1) / 2 * 100)  # -1..1 → 0..100
+            sentiment_html = f"""
+        <div class="section">
+            <h2>Sentiment</h2>
+            <div class="stats-row">
+                <span class="stat-label">Overall</span>
+                <span class="stat-value" style="color: {s_color};">{html.escape(sent.label.title())}</span>
+            </div>
+            <div class="quality-bar">
+                <div class="quality-fill" style="width: {pct}%; background: {s_color};"></div>
+            </div>
+            <p class="quality-label">Score: {sent.score:.2f}</p>
+        </div>"""
+    except Exception:
+        pass
+
+    # Participation equity section
+    participation_html = ""
+    try:
+        from meeting_recorder.storage.participation import analyze_participation
+        part = analyze_participation(rec_path)
+        if part:
+            p_color = "#27ae60" if part.label == "balanced" else "#f39c12" if part.label == "moderate" else "#e74c3c"
+            share_rows = []
+            for spk, pct_val in part.speaker_shares:
+                pct = int(pct_val)
+                share_rows.append(
+                    f'<span>{html.escape(spk)}</span>'
+                    f'<div class="speaker-bar"><div class="speaker-bar-fill" '
+                    f'style="width: {pct}%; background: var(--blue);"></div></div>'
+                    f'<span class="timestamp">{pct}%</span>'
+                )
+            participation_html = f"""
+        <div class="section">
+            <h2>Participation Equity</h2>
+            <div class="stats-row">
+                <span class="stat-label">Equity Score</span>
+                <span class="stat-value" style="color: {p_color};">{part.equity_score}/100 — {html.escape(part.label.title())}</span>
+            </div>
+            <div class="quality-bar">
+                <div class="quality-fill" style="width: {part.equity_score}%; background: {p_color};"></div>
+            </div>
+            <div class="speaker-stats" style="margin-top: 12px;">{"".join(share_rows)}</div>
+        </div>"""
+    except Exception:
+        pass
+
+    # Meeting ROI section
+    roi_html = ""
+    try:
+        from meeting_recorder.storage.meeting_roi import calculate_roi
+        roi = calculate_roi(rec_path, meta)
+        if roi:
+            r_color = "#27ae60" if roi.roi_score >= 70 else "#f39c12" if roi.roi_score >= 40 else "#e74c3c"
+            rec_items = "".join(f"<li>{html.escape(r)}</li>" for r in roi.recommendations) if roi.recommendations else ""
+            rec_html = f"<ul>{rec_items}</ul>" if rec_items else ""
+            roi_html = f"""
+        <div class="section">
+            <h2>Meeting ROI</h2>
+            <div class="stats-grid">
+                <div class="stats-row"><span class="stat-label">ROI Score</span><span class="stat-value" style="color: {r_color};">{roi.roi_score}/100 — {html.escape(roi.label)}</span></div>
+                <div class="stats-row"><span class="stat-label">Duration</span><span class="stat-value">{roi.duration_minutes:.0f} min</span></div>
+                <div class="stats-row"><span class="stat-label">Person-Hours</span><span class="stat-value">{roi.person_hours:.1f}h</span></div>
+                <div class="stats-row"><span class="stat-label">Decisions</span><span class="stat-value">{roi.decision_count}</span></div>
+                <div class="stats-row"><span class="stat-label">Action Items</span><span class="stat-value">{roi.action_item_count}</span></div>
+            </div>
+            {rec_html}
+        </div>"""
+    except Exception:
+        pass
+
+    # Word frequency section
+    word_freq_html = ""
+    try:
+        from meeting_recorder.storage.word_frequency import analyze_word_frequency
+        wf = analyze_word_frequency(rec_path)
+        if wf and wf.top_words:
+            word_items = []
+            max_count = wf.top_words[0][1] if wf.top_words else 1
+            for word, count in wf.top_words[:15]:
+                pct = int(count / max_count * 100)
+                word_items.append(
+                    f'<span>{html.escape(word)}</span>'
+                    f'<div class="speaker-bar"><div class="speaker-bar-fill" '
+                    f'style="width: {pct}%; background: var(--accent);"></div></div>'
+                    f'<span class="timestamp">{count}</span>'
+                )
+            speaker_kw = ""
+            if wf.speaker_keywords:
+                kw_parts = []
+                for spk, words in wf.speaker_keywords.items():
+                    kw_parts.append(f"<li><strong>{html.escape(spk)}:</strong> {html.escape(', '.join(words[:5]))}</li>")
+                speaker_kw = f'<h3 style="margin-top: 12px; font-size: 0.95em; color: var(--text-dim);">Distinctive Terms by Speaker</h3><ul>{"".join(kw_parts)}</ul>'
+            word_freq_html = f"""
+        <div class="section">
+            <h2>Key Terms</h2>
+            <p class="quality-label">{wf.total_words} words, {wf.unique_words} unique</p>
+            <div class="speaker-stats" style="margin-top: 8px;">{"".join(word_items)}</div>
+            {speaker_kw}
+        </div>"""
+    except Exception:
+        pass
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -290,6 +400,25 @@ h2 {{
     font-size: 0.9em;
     color: var(--text-dim);
 }}
+.stats-grid {{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}}
+.stats-row {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+}}
+.stat-label {{
+    color: var(--text-dim);
+    font-size: 0.9em;
+}}
+.stat-value {{
+    font-weight: 600;
+    font-size: 0.95em;
+}}
 .footer {{
     text-align: center;
     color: var(--text-dim);
@@ -328,6 +457,10 @@ h2 {{
 {speaker_stats_html}
 {notes_html}
 {quality_html}
+{sentiment_html}
+{participation_html}
+{roi_html}
+{word_freq_html}
 {transcript_html}
 <div class="footer">
     Generated by Meeting Recorder &mdash; {html.escape(date_str)}
