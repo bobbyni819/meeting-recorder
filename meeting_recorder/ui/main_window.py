@@ -623,6 +623,16 @@ class MainWindow:
         sort_label.bind("<Enter>", lambda e: sort_label.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
         sort_label.bind("<Leave>", lambda e: sort_label.configure(fg=TEXT_DIM, bg=BUTTON_BG))
 
+        # Recurring meetings button
+        recurring_btn = tk.Label(
+            section_row, text="  Recurring  ", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2",
+        )
+        recurring_btn.pack(side=tk.LEFT, padx=(8, 0))
+        recurring_btn.bind("<Button-1>", lambda e: self._show_recurring_panel())
+        recurring_btn.bind("<Enter>", lambda e: recurring_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        recurring_btn.bind("<Leave>", lambda e: recurring_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
         # Bulk select toggle
         self._bulk_toggle_btn = tk.Label(
             section_row, text="  Select  ", font=("Segoe UI", 8),
@@ -3851,6 +3861,115 @@ class MainWindow:
         if not hasattr(self, "_diagnostics_window"):
             self._diagnostics_window = DiagnosticsWindow()
         self._diagnostics_window.show(self._window)
+
+    def _show_recurring_panel(self) -> None:
+        """Show a popup panel listing recurring meeting series."""
+        if not self._window:
+            return
+        # Toggle: dismiss if already showing
+        if hasattr(self, "_recurring_overlay") and self._recurring_overlay:
+            self._recurring_overlay.destroy()
+            self._recurring_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.recurring import find_recurring_meetings
+            series_list = find_recurring_meetings(base)
+        except Exception:
+            logger.exception("Failed to find recurring meetings")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._recurring_overlay = overlay
+
+        # Title
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Recurring Meetings",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_recurring_overlay", None)))
+
+        if not series_list:
+            tk.Label(
+                overlay, text="No recurring meetings detected yet.",
+                font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_PANEL,
+            ).pack(padx=20, pady=16)
+            return
+
+        # Series list
+        list_frame = tk.Frame(overlay, bg=BG_PANEL)
+        list_frame.pack(fill=tk.BOTH, padx=8, pady=(4, 10))
+
+        for series in series_list[:10]:
+            card = tk.Frame(list_frame, bg=BG_CARD)
+            card.pack(fill=tk.X, pady=2, ipady=4)
+
+            # Subject + count
+            tk.Label(
+                card, text=series.subject,
+                font=("Segoe UI", 9, "bold"), fg=TEXT_COLOR, bg=BG_CARD,
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=(10, 4))
+
+            # Stats line
+            avg_min = series.avg_duration / 60
+            trend = series.duration_trend
+            trend_icon = "\u2197" if trend > 5 else "\u2198" if trend < -5 else "\u2192"
+            stats = (
+                f"{series.count}x  \u2022  {series.frequency_label}  \u2022  "
+                f"~{avg_min:.0f}min {trend_icon}  \u2022  "
+                f"{len(series.core_attendees)} core attendees"
+            )
+            tk.Label(
+                card, text=stats,
+                font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_CARD,
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=(10, 4))
+
+            # Click to copy summary
+            def _on_click(e, s=series):
+                text = s.format_summary()
+                if self._window:
+                    self._window.clipboard_clear()
+                    self._window.clipboard_append(text)
+
+            card.bind("<Button-1>", _on_click)
+            for child in card.winfo_children():
+                child.bind("<Button-1>", _on_click)
+
+            # Hover
+            def _enter(e, c=card):
+                c.configure(bg=BG_CARD_HOVER)
+                for ch in c.winfo_children():
+                    ch.configure(bg=BG_CARD_HOVER)
+
+            def _leave(e, c=card):
+                c.configure(bg=BG_CARD)
+                for ch in c.winfo_children():
+                    ch.configure(bg=BG_CARD)
+
+            card.bind("<Enter>", _enter)
+            card.bind("<Leave>", _leave)
+
+        # Footer hint
+        tk.Label(
+            overlay, text="Click a series to copy its summary",
+            font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
+        ).pack(pady=(0, 8))
 
     def _show_notifications(self) -> None:
         """Open the notification center window."""
