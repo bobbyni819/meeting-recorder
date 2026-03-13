@@ -514,6 +514,7 @@ class MainWindow:
             ("\U0001f4c2 Open Folder", self._on_open_recordings),
             ("\U0001f4e6 Export All", self._export_transcripts),
             ("\U0001f4ca Stats", self._show_stats),
+            ("\U0001f464 Profiles", self._show_voice_profiles),
         ]:
             btn = tk.Label(
                 sec_frame, text=f"  {text}  ", font=("Segoe UI", 9),
@@ -2515,6 +2516,15 @@ class MainWindow:
         if not hasattr(self, "_stats_window"):
             self._stats_window = StatsWindow(base)
         self._stats_window.show(self._window)
+
+    def _show_voice_profiles(self) -> None:
+        """Open the voice profiles management window."""
+        if not self._window:
+            return
+        from meeting_recorder.ui.voice_profiles_window import VoiceProfilesWindow
+        if not hasattr(self, "_voice_profiles_window"):
+            self._voice_profiles_window = VoiceProfilesWindow()
+        self._voice_profiles_window.show(self._window)
 
     def _export_transcripts(self) -> None:
         """Export all transcripts as a ZIP file."""
