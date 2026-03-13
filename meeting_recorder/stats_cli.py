@@ -201,9 +201,19 @@ def main(argv: list[str] | None = None) -> int:
         "--week-offset", type=int, default=0,
         help="Week offset (0=current, 1=last week, etc.)",
     )
+    parser.add_argument(
+        "--streaks", action="store_true",
+        help="Show recording streaks and habit tracking",
+    )
     args = parser.parse_args(argv)
 
     config = Config.load()
+
+    if args.streaks:
+        from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
+        info = analyze_streaks(config.output_dir)
+        print(format_streaks(info))
+        return 0
 
     if args.health:
         from meeting_recorder.storage.health_summary import analyze_health, format_health

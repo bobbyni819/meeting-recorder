@@ -585,6 +585,8 @@ class MainWindow:
             ("\U0001f4a1 Insights", self._show_insights_panel),
             ("\U0001f4c8 Trends", self._show_trends_panel),
             ("\u23f0 Focus Time", self._show_focus_panel),
+            ("\U0001f525 Streaks", self._show_streaks_panel),
+            ("\U0001f4cb Prep", self._show_prep_panel),
             ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
             btn = tk.Label(
@@ -4645,6 +4647,192 @@ class MainWindow:
         copy_btn.bind("<Button-1>", lambda e: _copy_focus())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
         copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
+        result_text.pack(fill=tk.BOTH, padx=8, pady=(0, 10), expand=True)
+
+    def _show_streaks_panel(self) -> None:
+        """Show a popup panel with recording streaks and habit tracking."""
+        if not self._window:
+            return
+        if hasattr(self, "_streaks_overlay") and self._streaks_overlay:
+            self._streaks_overlay.destroy()
+            self._streaks_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
+            info = analyze_streaks(base)
+            text = format_streaks(info)
+        except Exception:
+            logger.exception("Failed to generate streaks report")
+            text = "Failed to generate streaks report."
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._streaks_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Recording Streaks",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_streaks_overlay", None)))
+
+        result_text = tk.Text(
+            overlay, wrap=tk.WORD, font=("Segoe UI", 9),
+            bg=BG_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            bd=0, highlightthickness=0, height=18, width=50,
+            state=tk.DISABLED,
+        )
+        result_text.configure(state=tk.NORMAL)
+        result_text.insert("1.0", text)
+        result_text.configure(state=tk.DISABLED)
+
+        btn_frame = tk.Frame(overlay, bg=BG_PANEL)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(4, 4))
+
+        copy_btn = tk.Label(
+            btn_frame, text="  \U0001f4cb Copy  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=6,
+        )
+        copy_btn.pack(side=tk.RIGHT)
+
+        def _copy_streaks():
+            content = result_text.get("1.0", tk.END).strip()
+            if content and self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(content)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+
+        copy_btn.bind("<Button-1>", lambda e: _copy_streaks())
+        copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
+        result_text.pack(fill=tk.BOTH, padx=8, pady=(0, 10), expand=True)
+
+    def _show_prep_panel(self) -> None:
+        """Show a popup to select a meeting subject and view prep sheet."""
+        if not self._window:
+            return
+        if hasattr(self, "_prep_overlay") and self._prep_overlay:
+            self._prep_overlay.destroy()
+            self._prep_overlay = None
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._prep_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Meeting Prep",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_prep_overlay", None)))
+
+        # Input row for subject search
+        input_frame = tk.Frame(overlay, bg=BG_PANEL)
+        input_frame.pack(fill=tk.X, padx=16, pady=(4, 4))
+        tk.Label(
+            input_frame, text="Subject:", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        subject_entry = tk.Entry(
+            input_frame, font=("Segoe UI", 9),
+            bg=BG_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            relief=tk.FLAT, highlightthickness=1,
+            highlightcolor=ACCENT, highlightbackground=BG_HEADER,
+        )
+        subject_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        result_text = tk.Text(
+            overlay, wrap=tk.WORD, font=("Segoe UI", 9),
+            bg=BG_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            bd=0, highlightthickness=0, height=22, width=65,
+            state=tk.DISABLED,
+        )
+
+        btn_frame = tk.Frame(overlay, bg=BG_PANEL)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(4, 4))
+
+        def _generate():
+            subject = subject_entry.get().strip()
+            if not subject:
+                return
+            try:
+                base = self.config.output_dir if hasattr(self, "config") else None
+                if base is None:
+                    from meeting_recorder.config import Config
+                    base = Config.load().output_dir
+                from meeting_recorder.storage.meeting_prep import generate_prep, format_prep
+                prep = generate_prep(base, subject)
+                if prep:
+                    text = format_prep(prep)
+                else:
+                    text = f"No recordings found matching \"{subject}\"."
+            except Exception:
+                logger.exception("Failed to generate meeting prep")
+                text = "Failed to generate meeting prep."
+            result_text.configure(state=tk.NORMAL)
+            result_text.delete("1.0", tk.END)
+            result_text.insert("1.0", text)
+            result_text.configure(state=tk.DISABLED)
+
+        gen_btn = tk.Label(
+            input_frame, text="  Generate  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=6,
+        )
+        gen_btn.pack(side=tk.LEFT)
+        gen_btn.bind("<Button-1>", lambda e: _generate())
+        gen_btn.bind("<Enter>", lambda e: gen_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        gen_btn.bind("<Leave>", lambda e: gen_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+        subject_entry.bind("<Return>", lambda e: _generate())
+
+        copy_btn = tk.Label(
+            btn_frame, text="  \U0001f4cb Copy  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=6,
+        )
+        copy_btn.pack(side=tk.RIGHT)
+
+        def _copy_prep():
+            content = result_text.get("1.0", tk.END).strip()
+            if content and self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(content)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+
+        copy_btn.bind("<Button-1>", lambda e: _copy_prep())
+        copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
+        # Show initial hint
+        result_text.configure(state=tk.NORMAL)
+        result_text.insert("1.0", "Enter a meeting subject (e.g. \"standup\", \"sprint planning\")\nand click Generate to see a prep sheet with:\n\n  \u2022 Last meeting summary\n  \u2022 Outstanding action items\n  \u2022 Recent topics\n  \u2022 Expected attendees\n  \u2022 Duration prediction\n  \u2022 Series stats")
+        result_text.configure(state=tk.DISABLED)
 
         result_text.pack(fill=tk.BOTH, padx=8, pady=(0, 10), expand=True)
 
