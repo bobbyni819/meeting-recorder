@@ -598,6 +598,39 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Efficiency Trend
+        try:
+            from meeting_recorder.storage.efficiency_trend import analyze_efficiency_trend
+            eff = analyze_efficiency_trend(self._recordings_dir, weeks=8)
+            if eff and len(eff.weeks) >= 2:
+                direction_icons = {
+                    "improving": "\u2197 Improving",
+                    "declining": "\u2198 Declining",
+                    "stable": "\u2192 Stable",
+                }
+                self._section(content, "Efficiency Trend")
+                eff_frame = tk.Frame(content, bg=BG_COLOR)
+                eff_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                dir_color = (
+                    GREEN if eff.overall_direction == "improving"
+                    else RED_DOT if eff.overall_direction == "declining"
+                    else TEXT_DIM
+                )
+                tk.Label(eff_frame,
+                         text=f"Overall: {direction_icons.get(eff.overall_direction, '?')}  "
+                              f"{eff.sparkline}",
+                         font=("Segoe UI", 10), fg=dir_color, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X)
+                tk.Label(eff_frame,
+                         text=f"ROI: {direction_icons.get(eff.roi_trend, '?')}  |  "
+                              f"Participation: {direction_icons.get(eff.participation_trend, '?')}  |  "
+                              f"Duration: {eff.duration_trend}",
+                         font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X, pady=(2, 0))
+        except Exception:
+            pass
+
         # Meeting ROI
         try:
             from meeting_recorder.storage.meeting_roi import aggregate_roi
