@@ -56,6 +56,61 @@ def export_recordings_csv(recordings_dir: Path) -> str:
         except Exception:
             pass
 
+        # Meeting type classification
+        meeting_type = ""
+        try:
+            from meeting_recorder.storage.meeting_classifier import classify_recording
+            cls = classify_recording(rec_dir, meta=meta)
+            if cls and cls.confidence > 0.2:
+                meeting_type = cls.meeting_type
+        except Exception:
+            pass
+
+        # Decision count
+        dec_count = ""
+        dec_path = rec_dir / "decisions.json"
+        if dec_path.exists():
+            try:
+                with open(dec_path, "r", encoding="utf-8") as f:
+                    dec_data = json.load(f)
+                dec_list = dec_data.get("decisions", []) if isinstance(dec_data, dict) else dec_data
+                dec_count = len(dec_list)
+            except Exception:
+                pass
+
+        # Action items count
+        action_count = ""
+        ai_path = rec_dir / "action_items.json"
+        if ai_path.exists():
+            try:
+                with open(ai_path, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+                action_count = len(items)
+            except Exception:
+                pass
+
+        # Velocity score
+        velocity = ""
+        try:
+            from meeting_recorder.storage.velocity import analyze_velocity
+            vel = analyze_velocity(rec_dir, meta=meta)
+            if vel:
+                velocity = vel.overall_velocity
+        except Exception:
+            pass
+
+        # Interruption count
+        interruptions = ""
+        flow_score = ""
+        try:
+            from meeting_recorder.storage.interruptions import analyze_interruptions
+            ir = analyze_interruptions(rec_dir)
+            if ir is not None:
+                interruptions = ir.total_interruptions
+                flow_score = ir.flow_score
+        except Exception:
+            pass
+
         rows.append({
             "folder": name,
             "date": date_str,
@@ -76,6 +131,12 @@ def export_recordings_csv(recordings_dir: Path) -> str:
             "transcript_quality": transcript_q,
             "sentiment_score": sentiment_score,
             "sentiment": sentiment_label,
+            "meeting_type": meeting_type,
+            "decisions": dec_count,
+            "action_items": action_count,
+            "velocity": velocity,
+            "interruptions": interruptions,
+            "flow_score": flow_score,
         })
 
     return _to_csv(rows)
