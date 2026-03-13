@@ -51,6 +51,8 @@ class RecordingMetadata:
     has_summary: bool = False
     summary_provider: str = ""
     summary_model: str = ""
+    # Quality scores (computed during post-processing)
+    quality_scores: dict = field(default_factory=dict)
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory.

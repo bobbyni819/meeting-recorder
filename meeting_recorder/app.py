@@ -711,17 +711,20 @@ class MeetingRecorderApp:
                 elapsed_seconds=elapsed_seconds,
             )
 
-            # Run summary, indexing, and Drive upload in parallel
+            # Run summary, indexing, quality scoring, and Drive upload in parallel
             _update_progress("saving & indexing...")
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            with ThreadPoolExecutor(max_workers=3, thread_name_prefix="post") as pool:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="post") as pool:
                 futures = []
                 if summary_config.enabled:
                     futures.append(pool.submit(
                         self._generate_summary, recording_dir, segments, metadata, summary_config,
                     ))
                 futures.append(pool.submit(self._index_recording, recording_dir))
+                futures.append(pool.submit(
+                    self._score_quality, recording_dir, metadata,
+                ))
                 if cfg.google_drive.enabled:
                     futures.append(pool.submit(
                         self._upload_to_google_drive, recording_dir, metadata, cfg,
@@ -860,6 +863,23 @@ class MeetingRecorderApp:
             index.close()
         except Exception:
             logger.exception("Search indexing failed (non-fatal)")
+
+    def _score_quality(self, recording_dir: Path, metadata: RecordingMetadata) -> None:
+        """Compute quality scores for the recording (non-fatal)."""
+        try:
+            from meeting_recorder.storage.quality import score_recording
+
+            scores = score_recording(recording_dir)
+            metadata.quality_scores = scores
+            logger.info(
+                "Quality scores: overall=%s audio=%s transcript=%s video=%s",
+                scores.get("overall_score"),
+                scores.get("audio_score"),
+                scores.get("transcript_score"),
+                scores.get("video_score"),
+            )
+        except Exception:
+            logger.exception("Quality scoring failed (non-fatal)")
 
     def _run_retention_cleanup(self, exclude: Path | None = None) -> None:
         """Run recording retention cleanup (non-fatal)."""

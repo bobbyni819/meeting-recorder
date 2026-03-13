@@ -1117,6 +1117,7 @@ class MainWindow:
         time_str = name[11:16].replace("-", ":") if len(name) >= 16 else ""
 
         # Try to get metadata for more info
+        meta = {}
         duration_str = ""
         subject = ""
         app_label = ""
@@ -1189,7 +1190,17 @@ class MainWindow:
             anchor=tk.W,
         ).pack(fill=tk.X)
 
-        # Duration badge on right side
+        # Quality indicator + duration badge on right side
+        quality = meta.get("quality_scores", {})
+        q_score = quality.get("overall_score") if quality else None
+        if q_score is not None:
+            q_color = GREEN if q_score >= 75 else AMBER if q_score >= 50 else RED_DOT
+            tk.Label(
+                card, text=f"{q_score}",
+                font=("Segoe UI", 8), fg=q_color, bg=BG_CARD,
+                anchor=tk.E,
+            ).pack(side=tk.RIGHT, padx=(0, 4))
+
         if duration_str:
             tk.Label(
                 card, text=duration_str,
@@ -1884,6 +1895,33 @@ class MainWindow:
                 lines.append(f"  Organizer:  {organizer}")
             if location:
                 lines.append(f"  Location:   {location}")
+            lines.append("")
+
+        # --- Quality ---
+        quality = meta.get("quality_scores", {})
+        if quality and quality.get("overall_score") is not None:
+            from meeting_recorder.storage.quality import quality_label, quality_bar
+            lines.append("QUALITY")
+            lines.append("-" * 40)
+            overall = quality["overall_score"]
+            lines.append(f"  Overall:      {quality_bar(overall)}  {overall}/100  {quality_label(overall)}")
+            audio_s = quality.get("audio_score")
+            if audio_s is not None:
+                lines.append(f"  Audio:        {quality_bar(audio_s)}  {audio_s}/100  {quality_label(audio_s)}")
+                ad = quality.get("audio_details", {})
+                if ad.get("app_rms_db") is not None:
+                    lines.append(f"    RMS: {ad['app_rms_db']:.1f} dB  Peak: {ad.get('app_peak_db', 0):.1f} dB  Silence: {ad.get('app_silence_ratio', 0):.0%}")
+                elif ad.get("mic_rms_db") is not None:
+                    lines.append(f"    RMS: {ad['mic_rms_db']:.1f} dB  Peak: {ad.get('mic_peak_db', 0):.1f} dB  Silence: {ad.get('mic_silence_ratio', 0):.0%}")
+            trans_s = quality.get("transcript_score")
+            if trans_s is not None:
+                lines.append(f"  Transcript:   {quality_bar(trans_s)}  {trans_s}/100  {quality_label(trans_s)}")
+                td = quality.get("transcript_details", {})
+                if td.get("wpm"):
+                    lines.append(f"    {td['word_count']} words  {td['wpm']:.0f} WPM  {td.get('large_gaps', 0)} gaps")
+            video_s = quality.get("video_score")
+            if video_s is not None:
+                lines.append(f"  Video:        {quality_bar(video_s)}  {video_s}/100  {quality_label(video_s)}")
             lines.append("")
 
         # --- Technical ---
