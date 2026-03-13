@@ -2379,10 +2379,72 @@ class MainWindow:
         title = subject if subject else name[20:].replace("_", " ").strip() if len(name) > 20 else "Recording"
         app_name = meta.get("app_name", "")
 
-        tk.Label(
-            parent, text=title, font=("Segoe UI", 12, "bold"),
-            fg=TEXT_BRIGHT, bg=BG_COLOR, anchor=tk.W,
-        ).pack(fill=tk.X, padx=20, pady=(12, 2))
+        title_frame = tk.Frame(parent, bg=BG_COLOR)
+        title_frame.pack(fill=tk.X, padx=20, pady=(12, 2))
+        title_label = tk.Label(
+            title_frame, text=title, font=("Segoe UI", 12, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_COLOR, anchor=tk.W, cursor="hand2",
+        )
+        title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        rename_hint = tk.Label(
+            title_frame, text="\u270e", font=("Segoe UI", 10),
+            fg=BG_COLOR, bg=BG_COLOR, cursor="hand2",
+        )
+        rename_hint.pack(side=tk.RIGHT, padx=(4, 0))
+
+        def _show_rename_hint(e):
+            rename_hint.configure(fg=TEXT_DIM)
+            title_label.configure(fg=BLUE_ACCENT)
+
+        def _hide_rename_hint(e):
+            rename_hint.configure(fg=BG_COLOR)
+            title_label.configure(fg=TEXT_BRIGHT)
+
+        def _start_rename(e=None):
+            # Replace label with entry
+            title_label.pack_forget()
+            rename_hint.pack_forget()
+            rename_entry = tk.Entry(
+                title_frame, font=("Segoe UI", 12, "bold"),
+                bg=BG_PANEL, fg=TEXT_BRIGHT, insertbackground=TEXT_BRIGHT,
+                bd=0, highlightthickness=1, highlightcolor=BLUE_ACCENT,
+            )
+            rename_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=2)
+            rename_entry.insert(0, title)
+            rename_entry.select_range(0, tk.END)
+            rename_entry.focus_set()
+
+            def _commit_rename(e=None):
+                new_title = rename_entry.get().strip()
+                rename_entry.destroy()
+                if new_title and new_title != title:
+                    try:
+                        meta["meeting_subject"] = new_title
+                        with open(rec_path / "metadata.json", "w", encoding="utf-8") as f:
+                            json.dump(meta, f, indent=2, ensure_ascii=False)
+                        title_label.configure(text=new_title)
+                        logger.info("Renamed recording %s to '%s'", rec_path.name, new_title)
+                    except Exception:
+                        logger.exception("Failed to rename recording")
+                title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                rename_hint.pack(side=tk.RIGHT, padx=(4, 0))
+
+            def _cancel_rename(e=None):
+                rename_entry.destroy()
+                title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                rename_hint.pack(side=tk.RIGHT, padx=(4, 0))
+
+            rename_entry.bind("<Return>", _commit_rename)
+            rename_entry.bind("<Escape>", _cancel_rename)
+            rename_entry.bind("<FocusOut>", _commit_rename)
+
+        title_label.bind("<Enter>", _show_rename_hint)
+        title_label.bind("<Leave>", _hide_rename_hint)
+        title_label.bind("<Button-1>", _start_rename)
+        rename_hint.bind("<Enter>", _show_rename_hint)
+        rename_hint.bind("<Leave>", _hide_rename_hint)
+        rename_hint.bind("<Button-1>", _start_rename)
 
         # --- Info line ---
         date_str = name[:10] if len(name) >= 10 else name
