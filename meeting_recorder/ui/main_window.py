@@ -2049,6 +2049,7 @@ class MainWindow:
         # Read available content
         transcript_text = self._read_file(rec_path / "transcript.txt")
         summary_text = self._read_file(rec_path / "summary.md")
+        notes_text = self._read_file(rec_path / "notes.md")
         details_text = self._build_details_text(rec_path, meta)
 
         # Edit mode state
@@ -2074,6 +2075,8 @@ class MainWindow:
                 target = rec_path / "transcript.txt"
             elif tab == "summary":
                 target = rec_path / "summary.md"
+            elif tab == "notes":
+                target = rec_path / "notes.md"
             else:
                 _cancel_edit()
                 return
@@ -2086,6 +2089,9 @@ class MainWindow:
                 elif tab == "summary":
                     nonlocal summary_text
                     summary_text = new_text
+                elif tab == "notes":
+                    nonlocal notes_text
+                    notes_text = new_text
                 logger.info("Saved edited %s for %s", tab, rec_path.name)
             except Exception:
                 logger.exception("Failed to save edited %s", tab)
@@ -2112,7 +2118,7 @@ class MainWindow:
         cancel_edit_btn.bind("<Button-1>", lambda e: _cancel_edit())
 
         tk.Label(
-            edit_bar, text="Editing transcript — changes saved to disk",
+            edit_bar, text="Editing — changes saved to disk",
             font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_CONTROLS,
         ).pack(side=tk.LEFT, padx=8, pady=4)
 
@@ -2153,12 +2159,22 @@ class MainWindow:
         details_btn.pack(side=tk.LEFT, padx=(0, 4))
         tab_buttons.append(details_btn)
 
+        notes_btn = tk.Label(
+            tab_frame, text="  Notes  ", font=("Segoe UI", 9, "bold"),
+            fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+        )
+        notes_btn.pack(side=tk.LEFT, padx=(0, 4))
+        tab_buttons.append(notes_btn)
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
             # Show/hide edit button based on tab
-            if tab_name in ("transcript", "summary") and content:
+            if tab_name in ("transcript", "summary", "notes"):
                 edit_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+                # Auto-enter edit mode for notes if empty
+                if tab_name == "notes" and not content:
+                    _enter_edit_mode()
             else:
                 edit_btn.pack_forget()
 
@@ -2178,6 +2194,7 @@ class MainWindow:
         transcript_btn.bind("<Button-1>", lambda e: _switch_tab("transcript", transcript_text, transcript_btn))
         summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
         details_btn.bind("<Button-1>", lambda e: _switch_tab("details", details_text, details_btn))
+        notes_btn.bind("<Button-1>", lambda e: _switch_tab("notes", notes_text, notes_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)
