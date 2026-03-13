@@ -62,6 +62,15 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/engagement_score.py` — composite 0-100 engagement score
 - `meeting_recorder/storage/keyword_alerts.py` — watched keyword monitoring and alerting
 - `meeting_recorder/storage/time_patterns.py` — meeting time-of-day distribution analysis
+- `meeting_recorder/storage/action_tracker.py` — cross-recording action item tracking and resolution detection
+- `meeting_recorder/storage/meeting_benchmarks.py` — per-type meeting benchmarks and comparison
+- `meeting_recorder/storage/energy_curve.py` — windowed WPM/turn energy analysis with arc types
+- `meeting_recorder/storage/question_tracker.py` — question detection, answer checking, unanswered tracking
+- `meeting_recorder/storage/interruptions.py` — speaker interruption detection with flow scoring
+- `meeting_recorder/storage/topic_timeline.py` — keyword-based topic segmentation over time
+- `meeting_recorder/storage/recap.py` — shareable meeting recap generator
+- `meeting_recorder/storage/silence_gaps.py` — silence gap detection with context
+- `meeting_recorder/storage/velocity.py` — meeting velocity composite score
 - `meeting_recorder/stats_cli.py` — CLI stats command
 - `meeting_recorder/search/cli.py` — CLI search command
 - `SETUP.md` — full install guide for a new Windows machine
