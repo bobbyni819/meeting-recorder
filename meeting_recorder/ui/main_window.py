@@ -574,6 +574,7 @@ class MainWindow:
             ("\U0001f50d Search", self._on_search),
             ("\U0001f4c2 Open Folder", self._on_open_recordings),
             ("\U0001f4e6 Export All", self._export_transcripts),
+            ("\U0001f4cb Export CSV", self._export_csv_data),
             ("\U0001f4ca Stats", self._show_stats),
             ("\U0001f464 Profiles", self._show_voice_profiles),
             ("\U0001f465 People", self._show_attendee_directory),
@@ -4707,6 +4708,48 @@ class MainWindow:
         except Exception:
             logger.exception("Failed to export transcripts")
             self._show_warning_banner("Export failed — check logs.", duration_ms=5000)
+
+    def _export_csv_data(self) -> None:
+        """Export recording data to CSV files."""
+        if not self._window:
+            return
+
+        from tkinter import filedialog
+
+        base = self.config.output_dir if hasattr(self, "config") else None
+        if base is None:
+            from meeting_recorder.config import Config
+            base = Config.load().output_dir
+
+        if not base.exists():
+            self._show_warning_banner("No recordings directory found.", duration_ms=3000)
+            return
+
+        dest = filedialog.askdirectory(
+            title="Export CSV Data — Select Output Folder",
+            parent=self._window,
+        )
+        if not dest:
+            return
+
+        def _do_export():
+            try:
+                from meeting_recorder.storage.csv_export import export_all
+                created = export_all(base, Path(dest))
+                if self._window:
+                    names = ", ".join(p.name for p in created)
+                    self._window.after(0, lambda: self._show_warning_banner(
+                        f"Exported {len(created)} CSV file(s): {names}",
+                        duration_ms=5000,
+                    ))
+            except Exception:
+                logger.exception("CSV export failed")
+                if self._window:
+                    self._window.after(0, lambda: self._show_warning_banner(
+                        "CSV export failed — check logs.", duration_ms=5000,
+                    ))
+
+        self._fire(_do_export)
 
     def _on_escape(self) -> None:
         """Handle Escape key: close detail view, dismiss help, exit bulk, or hide window."""
