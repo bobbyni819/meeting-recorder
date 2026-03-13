@@ -543,6 +543,29 @@ class TestHealthWarning:
         mw.show_warning("Test")
         mw._window.after.assert_not_called()
 
+    def test_show_warning_logs_to_notification_store(self):
+        mw = MainWindow()
+        mw.show_warning("Audio is silent")
+        assert len(mw.notification_store) == 1
+        assert mw.notification_store.entries[0].message == "Audio is silent"
+        assert mw.notification_store.entries[0].level == "warn"
+
+    def test_add_notification(self):
+        mw = MainWindow()
+        mw._window = mock.Mock()
+        mw.add_notification("info", "Recording started", source="recorder")
+        assert len(mw.notification_store) == 1
+        assert mw.notification_store.entries[0].source == "recorder"
+        mw._window.after.assert_called_once()
+
+    def test_notification_store_unread(self):
+        mw = MainWindow()
+        mw.show_warning("a")
+        mw.show_warning("b")
+        assert mw.notification_store.unread_count == 2
+        mw.notification_store.mark_read()
+        assert mw.notification_store.unread_count == 0
+
 
 # ---------------------------------------------------------------------------
 # Window title during recording

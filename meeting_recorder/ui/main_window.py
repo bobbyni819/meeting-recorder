@@ -1719,6 +1719,32 @@ class MainWindow:
             font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
         ).pack(fill=tk.X, padx=20, pady=(0, 4))
 
+        # --- Error banner (shown for failed recordings) ---
+        error_msg = meta.get("error_message", "")
+        if status == "error" and error_msg:
+            err_frame = tk.Frame(parent, bg="#3d1414")
+            err_frame.pack(fill=tk.X, padx=16, pady=(2, 4))
+            tk.Label(
+                err_frame, text=f"\u2717  Error: {error_msg}",
+                font=("Segoe UI", 9), fg="#ff6b6b", bg="#3d1414",
+                anchor=tk.W, wraplength=500, justify=tk.LEFT,
+            ).pack(fill=tk.X, padx=10, pady=6)
+
+            if self._on_reprocess:
+                retry_btn = tk.Label(
+                    err_frame, text="  \u21bb Retry  ", font=("Segoe UI", 9, "bold"),
+                    fg=TEXT_BRIGHT, bg="#5a2020", cursor="hand2", padx=8, pady=2,
+                )
+                retry_btn.pack(side=tk.RIGHT, padx=8, pady=4)
+
+                def _retry_processing(btn=retry_btn):
+                    btn.configure(text="  Processing...  ", fg=AMBER)
+                    self._fire(lambda: self._on_reprocess(rec_path))
+
+                retry_btn.bind("<Button-1>", lambda e: _retry_processing())
+                retry_btn.bind("<Enter>", lambda e: retry_btn.configure(bg="#6a2c2c"))
+                retry_btn.bind("<Leave>", lambda e: retry_btn.configure(bg="#5a2020"))
+
         # --- Attendees ---
         attendees = meta.get("meeting_attendees", [])
         if attendees:
