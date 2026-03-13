@@ -485,6 +485,31 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Recording Streaks
+        try:
+            from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
+            streak_info = analyze_streaks(self._recordings_dir)
+            if streak_info is not None:
+                self._section(content, "Recording Streaks")
+                streak_frame = tk.Frame(content, bg=BG_COLOR)
+                streak_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                flame = "\U0001f525 " if streak_info.current_streak >= 5 else ""
+                tk.Label(streak_frame,
+                         text=f"{flame}Current: {streak_info.current_streak} days  |  "
+                              f"Longest: {streak_info.longest_streak} days  |  "
+                              f"Consistency: {streak_info.consistency_pct:.0f}%",
+                         font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X)
+                tk.Label(streak_frame,
+                         text=f"Meeting-free days (4 wk): {streak_info.meeting_free_days}  |  "
+                              f"Busiest: {streak_info.busiest_weekday}  |  "
+                              f"Quietest: {streak_info.quietest_weekday}",
+                         font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X, pady=(2, 0))
+        except Exception:
+            pass
+
         # Bottom padding
         tk.Frame(content, bg=BG_COLOR, height=20).pack()
 
