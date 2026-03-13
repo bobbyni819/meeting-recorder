@@ -21,6 +21,10 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/merge.py` — merge multiple recordings
 - `meeting_recorder/storage/comparison.py` — compare recordings, find similar ones
 - `meeting_recorder/storage/html_export.py` — self-contained HTML reports
+- `meeting_recorder/storage/highlights.py` — transcript highlighting and annotations
+- `meeting_recorder/storage/recurring.py` — recurring meeting detection and trends
+- `meeting_recorder/storage/followups.py` — cross-recording follow-up tracker
+- `meeting_recorder/storage/digest.py` — daily/weekly meeting digests
 - `SETUP.md` — full install guide for a new Windows machine
 
 ## Audio pipeline
