@@ -734,6 +734,9 @@ class MeetingRecorderApp:
                     futures.append(pool.submit(
                         self._upload_to_google_drive, recording_dir, metadata, cfg,
                     ))
+                futures.append(pool.submit(
+                    self._auto_tag_recording, recording_dir, metadata,
+                ))
                 for f in as_completed(futures):
                     f.result()  # propagate exceptions (each method catches its own)
 
@@ -892,6 +895,25 @@ class MeetingRecorderApp:
             )
         except Exception:
             logger.exception("Quality scoring failed (non-fatal)")
+
+    @staticmethod
+    def _auto_tag_recording(recording_dir: Path, metadata: RecordingMetadata) -> None:
+        """Automatically suggest and apply tags based on transcript content (non-fatal)."""
+        try:
+            from meeting_recorder.storage.auto_tag import suggest_tags_for_recording
+
+            meta_dict = {}
+            if metadata.tags:
+                meta_dict["tags"] = list(metadata.tags)
+            suggestions = suggest_tags_for_recording(recording_dir, meta_dict)
+            if suggestions:
+                existing = set(metadata.tags or [])
+                new_tags = [t for t in suggestions if t not in existing]
+                if new_tags:
+                    metadata.tags = list(existing) + new_tags
+                    logger.info("Auto-tagged recording with: %s", ", ".join(new_tags))
+        except Exception:
+            logger.exception("Auto-tagging failed (non-fatal)")
 
     def _run_retention_cleanup(self, exclude: Path | None = None) -> None:
         """Run recording retention cleanup (non-fatal)."""
