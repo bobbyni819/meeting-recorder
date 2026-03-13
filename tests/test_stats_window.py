@@ -28,6 +28,8 @@ def _make_recording(
     quality_score: int | None = None,
     speaker_segments: list[dict] | None = None,
     speaker_map: dict | None = None,
+    attendees: list[str] | None = None,
+    tags: list[str] | None = None,
 ) -> Path:
     """Create a recording directory with metadata and optional transcript."""
     rec = base / name
@@ -41,6 +43,10 @@ def _make_recording(
         meta["quality_scores"] = {"overall_score": quality_score}
     if speaker_map:
         meta["speaker_map"] = speaker_map
+    if attendees is not None:
+        meta["meeting_attendees"] = attendees
+    if tags is not None:
+        meta["tags"] = tags
     with open(rec / "metadata.json", "w") as f:
         json.dump(meta, f)
     if speaker_segments:
@@ -172,6 +178,60 @@ class TestComputeStats:
         # Should still count the recording
         assert stats["total_recordings"] == 1
         assert stats["speaker_times"] == {}
+
+
+    def test_attendee_frequency(self, recordings_dir: Path):
+        _make_recording(
+            recordings_dir, "rec1",
+            attendees=["Alice", "Bob"], duration=600)
+        _make_recording(
+            recordings_dir, "rec2",
+            attendees=["Alice", "Charlie"], duration=300)
+        _make_recording(
+            recordings_dir, "rec3",
+            attendees=["Alice"], duration=900)
+        sw = StatsWindow(recordings_dir)
+        stats = sw._compute_stats()
+        assert stats["attendee_counts"]["Alice"] == 3
+        assert stats["attendee_counts"]["Bob"] == 1
+        assert stats["attendee_counts"]["Charlie"] == 1
+        # Alice total time = 600 + 300 + 900 = 1800
+        assert stats["attendee_time"]["Alice"] == 1800
+
+    def test_hour_distribution(self, recordings_dir: Path):
+        _make_recording(recordings_dir, "2026-03-10_09-00-00_Morning")
+        _make_recording(recordings_dir, "2026-03-10_09-30-00_Morning2")
+        _make_recording(recordings_dir, "2026-03-10_14-00-00_Afternoon")
+        sw = StatsWindow(recordings_dir)
+        stats = sw._compute_stats()
+        assert stats["hour_counts"][9] == 2
+        assert stats["hour_counts"][14] == 1
+
+    def test_day_of_week_distribution(self, recordings_dir: Path):
+        # 2026-03-09 is Monday, 2026-03-10 is Tuesday
+        _make_recording(recordings_dir, "2026-03-09_10-00-00_Mon")
+        _make_recording(recordings_dir, "2026-03-10_10-00-00_Tue")
+        _make_recording(recordings_dir, "2026-03-10_14-00-00_Tue2")
+        sw = StatsWindow(recordings_dir)
+        stats = sw._compute_stats()
+        assert stats["day_counts"][0] == 1  # Monday
+        assert stats["day_counts"][1] == 2  # Tuesday
+
+    def test_tag_frequency(self, recordings_dir: Path):
+        _make_recording(recordings_dir, "rec1", tags=["engineering", "standup"])
+        _make_recording(recordings_dir, "rec2", tags=["engineering", "planning"])
+        _make_recording(recordings_dir, "rec3", tags=["standup"])
+        sw = StatsWindow(recordings_dir)
+        stats = sw._compute_stats()
+        assert stats["tag_counts"]["engineering"] == 2
+        assert stats["tag_counts"]["standup"] == 2
+        assert stats["tag_counts"]["planning"] == 1
+
+    def test_empty_attendees(self, recordings_dir: Path):
+        _make_recording(recordings_dir, "rec1")
+        sw = StatsWindow(recordings_dir)
+        stats = sw._compute_stats()
+        assert stats["attendee_counts"] == {}
 
 
 class TestStatsWindowLifecycle:

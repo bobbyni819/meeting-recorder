@@ -113,6 +113,49 @@ class StatsWindow:
             except Exception:
                 continue
 
+        # Attendee frequency
+        attendee_counts: dict[str, int] = defaultdict(int)
+        attendee_time: dict[str, float] = defaultdict(float)
+        for m in all_meta:
+            dur = m.get("duration_seconds", 0)
+            for att in m.get("meeting_attendees", []):
+                name = att.strip()
+                if name:
+                    attendee_counts[name] += 1
+                    attendee_time[name] += dur
+
+        # Time-of-day distribution (hour buckets)
+        hour_counts: dict[int, int] = defaultdict(int)
+        for rec_dir in sorted(recordings_dir.iterdir()):
+            if not rec_dir.is_dir():
+                continue
+            name = rec_dir.name
+            if len(name) >= 16:
+                try:
+                    hour = int(name[11:13])
+                    hour_counts[hour] += 1
+                except ValueError:
+                    pass
+
+        # Day-of-week distribution
+        day_counts: dict[int, int] = defaultdict(int)  # 0=Mon ... 6=Sun
+        for rec_dir in sorted(recordings_dir.iterdir()):
+            if not rec_dir.is_dir():
+                continue
+            name = rec_dir.name
+            if len(name) >= 10:
+                try:
+                    date = datetime.strptime(name[:10], "%Y-%m-%d")
+                    day_counts[date.weekday()] += 1
+                except ValueError:
+                    pass
+
+        # Tag frequency
+        tag_counts: dict[str, int] = defaultdict(int)
+        for m in all_meta:
+            for tag in m.get("tags", []):
+                tag_counts[tag] += 1
+
         # Compute summaries
         total_recordings = len(all_meta)
         total_duration = sum(m.get("duration_seconds", 0) for m in all_meta)
@@ -138,6 +181,11 @@ class StatsWindow:
             "app_counts": dict(app_counts),
             "weekly_duration": dict(weekly_duration),
             "this_week_time": this_week_time,
+            "attendee_counts": dict(attendee_counts),
+            "attendee_time": dict(attendee_time),
+            "hour_counts": dict(hour_counts),
+            "day_counts": dict(day_counts),
+            "tag_counts": dict(tag_counts),
         }
 
     def _build_ui(self, stats: dict) -> None:
@@ -248,6 +296,110 @@ class StatsWindow:
                 tk.Label(row, text=f"{app}: {count} recording{'s' if count != 1 else ''}",
                          font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
                          anchor=tk.W).pack(fill=tk.X)
+
+        # Frequent collaborators
+        attendee_counts = stats.get("attendee_counts", {})
+        attendee_time_map = stats.get("attendee_time", {})
+        if attendee_counts:
+            self._section(content, "Frequent Collaborators")
+            top_attendees = sorted(attendee_counts.items(), key=lambda x: -x[1])[:10]
+            max_count = top_attendees[0][1] if top_attendees else 1
+
+            for name, count in top_attendees:
+                row = tk.Frame(content, bg=BG_COLOR)
+                row.pack(fill=tk.X, padx=20, pady=1)
+
+                bar_width = int(200 * count / max_count)
+                time_h = attendee_time_map.get(name, 0) / 3600
+
+                tk.Label(row, text=name, font=("Segoe UI", 9), fg=TEXT_COLOR,
+                         bg=BG_COLOR, width=16, anchor=tk.W).pack(side=tk.LEFT)
+
+                bar_canvas = tk.Canvas(row, width=200, height=14,
+                                       bg=BG_PANEL, highlightthickness=0)
+                bar_canvas.pack(side=tk.LEFT, padx=4)
+                bar_canvas.create_rectangle(0, 0, bar_width, 14, fill="#9b59b6", outline="")
+
+                tk.Label(row, text=f"{count}x \u2022 {time_h:.1f}h",
+                         font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR,
+                         width=10, anchor=tk.E).pack(side=tk.LEFT)
+
+        # Time of day distribution
+        hour_counts = stats.get("hour_counts", {})
+        if hour_counts:
+            self._section(content, "Meeting Time of Day")
+            tod_frame = tk.Frame(content, bg=BG_COLOR)
+            tod_frame.pack(fill=tk.X, padx=20, pady=4)
+
+            max_hour_count = max(hour_counts.values()) if hour_counts else 1
+            bar_total_width = 400
+            bar_h = 60
+
+            tod_canvas = tk.Canvas(tod_frame, width=bar_total_width, height=bar_h + 20,
+                                   bg=BG_PANEL, highlightthickness=0)
+            tod_canvas.pack()
+
+            for hour in range(24):
+                count = hour_counts.get(hour, 0)
+                x = int(hour * bar_total_width / 24)
+                w = max(int(bar_total_width / 24) - 2, 4)
+                h = int(bar_h * count / max_hour_count) if max_hour_count > 0 else 0
+
+                color = "#2ecc71" if 9 <= hour <= 17 else "#0f3460"
+                tod_canvas.create_rectangle(x, bar_h - h, x + w, bar_h,
+                                           fill=color, outline="")
+
+                if hour % 3 == 0:
+                    label = f"{hour:02d}"
+                    tod_canvas.create_text(x + w // 2, bar_h + 10,
+                                          text=label, fill=TEXT_DIM,
+                                          font=("Segoe UI", 7))
+
+        # Day of week distribution
+        day_counts = stats.get("day_counts", {})
+        if day_counts:
+            self._section(content, "Meetings by Day of Week")
+            dow_frame = tk.Frame(content, bg=BG_COLOR)
+            dow_frame.pack(fill=tk.X, padx=20, pady=4)
+
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            max_day_count = max(day_counts.values()) if day_counts else 1
+
+            for day_idx in range(7):
+                row = tk.Frame(dow_frame, bg=BG_COLOR)
+                row.pack(fill=tk.X, pady=1)
+
+                count = day_counts.get(day_idx, 0)
+                bar_width = int(200 * count / max_day_count) if max_day_count > 0 else 0
+
+                tk.Label(row, text=day_names[day_idx], font=("Segoe UI", 9),
+                         fg=TEXT_COLOR, bg=BG_COLOR, width=5, anchor=tk.W).pack(side=tk.LEFT)
+
+                bar_canvas = tk.Canvas(row, width=200, height=14,
+                                       bg=BG_PANEL, highlightthickness=0)
+                bar_canvas.pack(side=tk.LEFT, padx=4)
+                color = "#e74c3c" if day_idx >= 5 else "#3498db"
+                bar_canvas.create_rectangle(0, 0, bar_width, 14, fill=color, outline="")
+
+                tk.Label(row, text=str(count) if count else "",
+                         font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR,
+                         width=4, anchor=tk.E).pack(side=tk.LEFT)
+
+        # Top tags
+        tag_counts = stats.get("tag_counts", {})
+        if tag_counts:
+            self._section(content, "Common Tags")
+            tag_frame = tk.Frame(content, bg=BG_COLOR)
+            tag_frame.pack(fill=tk.X, padx=20, pady=4)
+
+            top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:15]
+            for tag, count in top_tags:
+                pill = tk.Label(
+                    tag_frame, text=f" {tag} ({count}) ",
+                    font=("Segoe UI", 8), fg=TEXT_COLOR,
+                    bg=BG_CONTROLS, padx=4, pady=2,
+                )
+                pill.pack(side=tk.LEFT, padx=2, pady=2)
 
         # Weekly trend
         weekly = stats.get("weekly_duration", {})
