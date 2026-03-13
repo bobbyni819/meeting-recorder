@@ -485,6 +485,69 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Meeting Heatmap
+        try:
+            from meeting_recorder.storage.heatmap import build_heatmap, format_heatmap
+            heatmap = build_heatmap(self._recordings_dir, weeks=8)
+            if heatmap is not None:
+                self._section(content, "Meeting Heatmap (Last 8 Weeks)")
+                hm_frame = tk.Frame(content, bg=BG_COLOR)
+                hm_frame.pack(fill=tk.X, padx=16, pady=4)
+
+                hm_text = format_heatmap(heatmap)
+                # Show just the summary line in stats (full heatmap is too wide)
+                tk.Label(hm_frame,
+                         text=f"Peak: {heatmap.peak_day} {heatmap.peak_slot} "
+                              f"({heatmap.peak_minutes:.0f} min)  |  "
+                              f"{heatmap.total_meetings} meetings across "
+                              f"{heatmap.weeks_covered} weeks",
+                         font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X)
+
+                # Compact grid: day vs slot with color indicators
+                grid_frame = tk.Frame(hm_frame, bg=BG_COLOR)
+                grid_frame.pack(fill=tk.X, pady=(4, 0))
+                slot_labels = [s[1] for s in [("", "7-9"), ("", "9-11"), ("", "11-1"),
+                                                ("", "1-3"), ("", "3-5"), ("", "5-7")]]
+                # Header
+                tk.Label(grid_frame, text="     ", font=("Consolas", 8),
+                         fg=TEXT_DIM, bg=BG_COLOR, width=5).grid(row=0, column=0)
+                for s, label in enumerate(slot_labels):
+                    tk.Label(grid_frame, text=label, font=("Consolas", 8),
+                             fg=TEXT_DIM, bg=BG_COLOR, width=5).grid(row=0, column=s+1)
+                # Grid cells
+                from meeting_recorder.storage.heatmap import DAY_NAMES as _DAYS
+                max_val = max(max(row) for row in heatmap.grid) if heatmap.grid else 1
+                if max_val == 0:
+                    max_val = 1
+                for d in range(5):
+                    tk.Label(grid_frame, text=_DAYS[d], font=("Consolas", 8),
+                             fg=TEXT_DIM, bg=BG_COLOR, width=5).grid(row=d+1, column=0)
+                    for s in range(6):
+                        val = heatmap.grid[d][s]
+                        intensity = val / max_val if max_val > 0 else 0
+                        if heatmap.counts[d][s] == 0:
+                            color = BG_COLOR
+                            fg = TEXT_DIM
+                            label = "\u00b7"
+                        else:
+                            # Green -> amber -> red gradient
+                            if intensity < 0.33:
+                                color = "#1a3a1a"
+                                fg = GREEN
+                            elif intensity < 0.66:
+                                color = "#3a3a1a"
+                                fg = AMBER
+                            else:
+                                color = "#3a1a1a"
+                                fg = RED_DOT
+                            label = str(heatmap.counts[d][s])
+                        tk.Label(grid_frame, text=label, font=("Consolas", 8),
+                                 fg=fg, bg=color, width=5, relief=tk.FLAT,
+                                 padx=1, pady=1).grid(row=d+1, column=s+1, padx=1, pady=1)
+        except Exception:
+            pass
+
         # Recording Streaks
         try:
             from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
