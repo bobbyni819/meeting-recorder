@@ -670,6 +670,23 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {})
         assert "SPEAKER STATS" not in text
 
+    def test_key_topics_displayed(self, tmp_path):
+        """KEY TOPICS section shows when transcript has frequent words."""
+        transcript = (
+            "deployment deployment deployment pipeline pipeline "
+            "infrastructure infrastructure testing testing "
+            "monitoring monitoring security security "
+        )
+        (tmp_path / "transcript.txt").write_text(transcript, encoding="utf-8")
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "KEY TOPICS" in text
+        assert "deployment" in text
+
+    def test_key_topics_absent_without_transcript(self, tmp_path):
+        """No KEY TOPICS section when no transcript.txt exists."""
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "KEY TOPICS" not in text
+
     def test_quality_scores_displayed(self, tmp_path):
         """Quality scores section shows when metadata has scores."""
         meta = {

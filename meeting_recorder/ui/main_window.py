@@ -3234,6 +3234,21 @@ class MainWindow:
             lines.append(f"  {'Total':<16} {int(total_speaking // 60):2d}:{int(total_speaking % 60):02d}")
             lines.append("")
 
+        # --- Key Topics ---
+        transcript_txt_path = rec_path / "transcript.txt"
+        if transcript_txt_path.exists():
+            try:
+                from meeting_recorder.storage.comparison import _extract_topics
+                transcript_text = transcript_txt_path.read_text(encoding="utf-8")
+                topics = _extract_topics(transcript_text, min_freq=2, top_n=10)
+                if topics:
+                    lines.append("KEY TOPICS")
+                    lines.append("-" * 40)
+                    lines.append("  " + "  \u2022  ".join(sorted(topics)))
+                    lines.append("")
+            except Exception:
+                pass
+
         # --- Speaker Map ---
         speaker_map = meta.get("speaker_map", {})
         if speaker_map:
