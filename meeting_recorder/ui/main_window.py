@@ -3516,6 +3516,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Participation Equity ---
+        try:
+            from meeting_recorder.storage.participation import analyze_participation, format_participation
+            ps = analyze_participation(rec_path, meta)
+            if ps is not None:
+                lines.append(format_participation(ps))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Word Frequency ---
         try:
             from meeting_recorder.storage.word_frequency import analyze_word_frequency, format_word_frequency
