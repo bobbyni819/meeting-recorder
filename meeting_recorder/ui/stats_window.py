@@ -573,6 +573,31 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Collaboration
+        try:
+            from meeting_recorder.storage.collaboration import analyze_collaboration
+            collab = analyze_collaboration(self._recordings_dir, top_n=5)
+            if collab is not None and collab.top_pairs:
+                self._section(content, "Top Collaborators")
+                collab_frame = tk.Frame(content, bg=BG_COLOR)
+                collab_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                for pair in collab.top_pairs[:5]:
+                    tk.Label(collab_frame,
+                             text=f"{pair.person_a} \u2194 {pair.person_b}  "
+                                  f"({pair.meeting_count} meetings, {pair.total_hours:.1f}h)",
+                             font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                             anchor=tk.W).pack(fill=tk.X, pady=1)
+
+                if collab.most_connected:
+                    tk.Label(collab_frame,
+                             text=f"Most connected: {collab.most_connected} "
+                                  f"({collab.most_connected_count} contacts)",
+                             font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR,
+                             anchor=tk.W).pack(fill=tk.X, pady=(4, 0))
+        except Exception:
+            pass
+
         # Bottom padding
         tk.Frame(content, bg=BG_COLOR, height=20).pack()
 
