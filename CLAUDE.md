@@ -25,6 +25,18 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/recurring.py` — recurring meeting detection and trends
 - `meeting_recorder/storage/followups.py` — cross-recording follow-up tracker
 - `meeting_recorder/storage/digest.py` — daily/weekly meeting digests
+- `meeting_recorder/storage/speaker_analytics.py` — per-speaker talk time, WPM, cross-talk detection
+- `meeting_recorder/storage/insights.py` — meeting insights engine (trends, collaboration, issues)
+- `meeting_recorder/storage/meeting_cost.py` — meeting cost estimation (duration × attendees × rate)
+- `meeting_recorder/storage/focus_time.py` — focus vs meeting time analysis
+- `meeting_recorder/storage/bookmarks.py` — named timestamps within recordings
+- `meeting_recorder/storage/csv_export.py` — CSV data export for spreadsheets/BI tools
+- `meeting_recorder/storage/topic_trends.py` — keyword frequency trends across weeks
+- `meeting_recorder/storage/streaks.py` — recording consistency and habit tracking
+- `meeting_recorder/storage/heatmap.py` — day×time meeting density heatmap
+- `meeting_recorder/storage/note_templates.py` — pre-formatted meeting note templates
+- `meeting_recorder/storage/collaboration.py` — attendee co-occurrence analysis
+- `meeting_recorder/storage/summary_diff.py` — compare summaries across recurring meetings
 - `SETUP.md` — full install guide for a new Windows machine
 
 ## Audio pipeline
