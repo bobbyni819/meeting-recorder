@@ -3515,6 +3515,43 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Duration Prediction ---
+        try:
+            from meeting_recorder.storage.duration_predict import predict_durations, _normalize_subject
+            subject = meta.get("meeting_subject", "")
+            if not subject:
+                folder_name = rec_path.name
+                subject = folder_name[20:].replace("_", " ").strip() if len(folder_name) > 20 else ""
+            if subject:
+                normalized = _normalize_subject(subject)
+                recordings_dir = rec_path.parent
+                predictions = predict_durations(recordings_dir)
+                pred = next((p for p in predictions if p.subject == normalized), None)
+                if pred:
+                    trend_arrows = {
+                        "getting_longer": "\u2197 Getting longer",
+                        "getting_shorter": "\u2198 Getting shorter",
+                        "stable": "\u2192 Stable",
+                    }
+                    actual = meta.get("duration_seconds", 0) / 60
+                    lines.append("DURATION PREDICTION")
+                    lines.append("-" * 40)
+                    lines.append(f"  Series:     {pred.subject}")
+                    lines.append(f"  Predicted:  {pred.predicted_minutes:.0f} min  "
+                                 f"(avg {pred.avg_minutes:.0f}, "
+                                 f"range {pred.min_minutes:.0f}-{pred.max_minutes:.0f})")
+                    lines.append(f"  Trend:      {trend_arrows.get(pred.trend, pred.trend)}")
+                    lines.append(f"  Based on:   {pred.sample_count} meetings  "
+                                 f"(\u00b1{pred.std_dev:.0f} min)")
+                    if actual > 0 and pred.avg_minutes > 0:
+                        dev = (actual - pred.avg_minutes) / pred.avg_minutes * 100
+                        if abs(dev) >= 20:
+                            sign = "+" if dev > 0 else ""
+                            lines.append(f"  This one:   {actual:.0f} min ({sign}{dev:.0f}% vs avg)")
+                    lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)

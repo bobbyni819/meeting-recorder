@@ -598,6 +598,78 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Duration Predictions
+        try:
+            from meeting_recorder.storage.duration_predict import (
+                predict_durations, find_anomalies,
+            )
+            predictions = predict_durations(self._recordings_dir)
+            if predictions:
+                self._section(content, "Duration Predictions")
+                pred_frame = tk.Frame(content, bg=BG_COLOR)
+                pred_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                trend_arrows = {
+                    "getting_longer": "\u2197",
+                    "getting_shorter": "\u2198",
+                    "stable": "\u2192",
+                }
+
+                for pred in predictions[:8]:
+                    arrow = trend_arrows.get(pred.trend, "")
+                    trend_color = (
+                        AMBER if pred.trend == "getting_longer"
+                        else GREEN if pred.trend == "getting_shorter"
+                        else TEXT_DIM
+                    )
+                    row = tk.Frame(pred_frame, bg=BG_COLOR)
+                    row.pack(fill=tk.X, pady=1)
+                    tk.Label(
+                        row, text=pred.subject,
+                        font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                        width=24, anchor=tk.W,
+                    ).pack(side=tk.LEFT)
+                    tk.Label(
+                        row,
+                        text=f"~{pred.predicted_minutes:.0f}m "
+                             f"({pred.min_minutes:.0f}-{pred.max_minutes:.0f}) "
+                             f"{arrow}",
+                        font=("Segoe UI", 9), fg=trend_color, bg=BG_COLOR,
+                        anchor=tk.W,
+                    ).pack(side=tk.LEFT, padx=4)
+                    tk.Label(
+                        row, text=f"{pred.sample_count}x",
+                        font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR,
+                        width=4, anchor=tk.E,
+                    ).pack(side=tk.LEFT)
+
+            # Duration Anomalies
+            anomalies = find_anomalies(self._recordings_dir, threshold=0.5, max_results=5)
+            if anomalies:
+                self._section(content, "Duration Anomalies")
+                anom_frame = tk.Frame(content, bg=BG_COLOR)
+                anom_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                for anom in anomalies:
+                    color = RED_DOT if anom.deviation_pct > 0 else GREEN
+                    sign = "+" if anom.deviation_pct > 0 else ""
+                    row = tk.Frame(anom_frame, bg=BG_COLOR)
+                    row.pack(fill=tk.X, pady=1)
+                    tk.Label(
+                        row, text=anom.subject or anom.folder[:20],
+                        font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                        width=24, anchor=tk.W,
+                    ).pack(side=tk.LEFT)
+                    tk.Label(
+                        row,
+                        text=f"{anom.actual_minutes:.0f}m vs {anom.expected_minutes:.0f}m "
+                             f"({sign}{anom.deviation_pct:.0f}%)",
+                        font=("Segoe UI", 9), fg=color, bg=BG_COLOR,
+                        anchor=tk.W,
+                    ).pack(side=tk.LEFT, padx=4)
+        except Exception:
+            pass
+
         # Bottom padding
         tk.Frame(content, bg=BG_COLOR, height=20).pack()
 
