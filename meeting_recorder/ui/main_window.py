@@ -1538,6 +1538,27 @@ class MainWindow:
         notes_btn.bind("<Enter>", lambda e: notes_btn.configure(fg=TEXT_COLOR))
         notes_btn.bind("<Leave>", lambda e: notes_btn.configure(fg=TEXT_DIM))
 
+        # Speaker editor button (only if transcript.json exists)
+        if (rec_path / "transcript.json").exists():
+            speakers_btn = tk.Label(
+                top_bar, text="\U0001f465  Speakers", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            speakers_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+            def _open_speaker_editor():
+                from meeting_recorder.ui.speaker_editor import SpeakerEditorDialog
+                def _on_saved():
+                    # Refresh the detail view after speaker map changes
+                    if self._window:
+                        self._window.after(100, lambda: self._open_detail(rec_path))
+                dialog = SpeakerEditorDialog(rec_path, on_saved=_on_saved)
+                dialog.show(self._window)
+
+            speakers_btn.bind("<Button-1>", lambda e: _open_speaker_editor())
+            speakers_btn.bind("<Enter>", lambda e: speakers_btn.configure(fg=TEXT_COLOR))
+            speakers_btn.bind("<Leave>", lambda e: speakers_btn.configure(fg=TEXT_DIM))
+
         # Delete button
         del_btn = tk.Label(
             top_bar, text="\U0001f5d1  Delete", font=("Segoe UI", 9),
