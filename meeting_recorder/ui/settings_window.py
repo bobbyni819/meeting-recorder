@@ -72,6 +72,11 @@ class SettingsWindow:
         notebook.add(storage_frame, text="Storage")
         self._build_storage_tab(storage_frame)
 
+        # Hotkeys tab
+        hotkey_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(hotkey_frame, text="Hotkeys")
+        self._build_hotkeys_tab(hotkey_frame)
+
         # Integrations tab
         integ_frame = ttk.Frame(notebook, padding=10)
         notebook.add(integ_frame, text="Integrations")
@@ -735,6 +740,89 @@ class SettingsWindow:
 
         parent.columnconfigure(1, weight=1)
 
+    def _build_hotkeys_tab(self, parent: ttk.Frame) -> None:
+        """Build the hotkeys settings tab."""
+        row = 0
+
+        ttk.Label(parent, text="Global Hotkeys", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+        row += 1
+        ttk.Label(
+            parent, text="These work system-wide even when the app is in background.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+
+        # Start/Stop (already has a var from recording tab)
+        row += 1
+        ttk.Label(parent, text="Start / Stop Recording:").grid(
+            row=row, column=0, sticky=tk.W, pady=4)
+        if not hasattr(self, "_hotkey_var"):
+            self._hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_recording)
+        ttk.Entry(parent, textvariable=self._hotkey_var, width=22).grid(
+            row=row, column=1, sticky=tk.W, pady=4)
+
+        # Pause (already has a var from recording tab)
+        row += 1
+        ttk.Label(parent, text="Pause / Resume:").grid(
+            row=row, column=0, sticky=tk.W, pady=4)
+        if not hasattr(self, "_pause_hotkey_var"):
+            self._pause_hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_pause)
+        ttk.Entry(parent, textvariable=self._pause_hotkey_var, width=22).grid(
+            row=row, column=1, sticky=tk.W, pady=4)
+
+        # Mute toggle
+        row += 1
+        ttk.Label(parent, text="Manual Mic Mute:").grid(
+            row=row, column=0, sticky=tk.W, pady=4)
+        self._mute_hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_mute)
+        ttk.Entry(parent, textvariable=self._mute_hotkey_var, width=22).grid(
+            row=row, column=1, sticky=tk.W, pady=4)
+
+        # Dashboard toggle
+        row += 1
+        ttk.Label(parent, text="Show / Hide Dashboard:").grid(
+            row=row, column=0, sticky=tk.W, pady=4)
+        self._dash_hotkey_var = tk.StringVar(value=self.config.hotkey.toggle_dashboard)
+        ttk.Entry(parent, textvariable=self._dash_hotkey_var, width=22).grid(
+            row=row, column=1, sticky=tk.W, pady=4)
+
+        row += 1
+        ttk.Label(
+            parent,
+            text='Format: "ctrl+shift+r", "alt+F10", etc.\n'
+                 "Changes take effect after restart.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(4, 8))
+
+        # Separator
+        row += 1
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=10)
+
+        # App-level keyboard shortcuts (read-only info)
+        row += 1
+        ttk.Label(parent, text="Window Shortcuts (not configurable)", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 4))
+
+        shortcuts = [
+            ("Ctrl+F", "Search / filter recordings"),
+            ("Ctrl+,", "Open settings"),
+            ("F1", "Toggle keyboard help"),
+            ("F5", "Refresh recording history"),
+            ("Escape", "Close detail / exit bulk select / hide"),
+            ("\u2191 / \u2193", "Navigate recording list"),
+            ("Enter", "Open selected recording"),
+        ]
+        for key, desc in shortcuts:
+            row += 1
+            ttk.Label(parent, text=key, font=("Consolas", 9, "bold")).grid(
+                row=row, column=0, sticky=tk.W, pady=1, padx=(10, 0))
+            ttk.Label(parent, text=desc).grid(
+                row=row, column=1, sticky=tk.W, pady=1)
+
+        parent.columnconfigure(1, weight=1)
+
     def _export_config(self) -> None:
         """Export config secrets to a portable file."""
         path = filedialog.asksaveasfilename(
@@ -856,6 +944,10 @@ class SettingsWindow:
             self.config.recording.live_transcription = self._live_transcription_var.get()
             self.config.hotkey.toggle_recording = self._hotkey_var.get()
             self.config.hotkey.toggle_pause = self._pause_hotkey_var.get()
+            if hasattr(self, "_mute_hotkey_var"):
+                self.config.hotkey.toggle_mute = self._mute_hotkey_var.get()
+            if hasattr(self, "_dash_hotkey_var"):
+                self.config.hotkey.toggle_dashboard = self._dash_hotkey_var.get()
 
             self.config.vad.threshold = self._vad_threshold_var.get()
             self.config.vad.min_speech_duration_ms = self._min_speech_var.get()
