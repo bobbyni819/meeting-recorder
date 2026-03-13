@@ -610,6 +610,7 @@ class MainWindow:
             ("\u231b Optimizer", self._show_optimizer_panel),
             ("\U0001f91d Network", self._show_network_panel),
             ("\u2696 Balance", self._show_balance_panel),
+            ("\U0001f514 Alerts", self._show_alerts_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
         ]:
             btn = tk.Label(
@@ -5670,6 +5671,71 @@ class MainWindow:
             overlay, text=f"{pending} pending across {len(groups)} meeting(s)",
             font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(0, 8))
+
+    def _show_alerts_panel(self) -> None:
+        """Show a popup panel with keyword alert results."""
+        if not self._window:
+            return
+        if hasattr(self, "_alerts_overlay") and self._alerts_overlay:
+            self._alerts_overlay.destroy()
+            self._alerts_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.keyword_alerts import scan_all_recordings, format_keyword_alerts
+            report = scan_all_recordings(base)
+            text = format_keyword_alerts(report)
+        except Exception:
+            logger.exception("Failed to scan keyword alerts")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._alerts_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Keyword Alerts",
+            font=("Segoe UI", 11, "bold"), fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        def _copy():
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        copy_btn.bind("<Button-1>", lambda e: _copy())
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_alerts_overlay", None)))
+
+        tw = tk.Text(
+            overlay, wrap=tk.WORD, font=("Consolas", 9),
+            bg=BG_PANEL, fg=TEXT_COLOR, bd=0, highlightthickness=0,
+            width=60, height=min(22, max(8, text.count("\n") + 2)),
+            padx=16, pady=8,
+        )
+        tw.pack(fill=tk.BOTH, expand=True)
+        tw.insert("1.0", text)
+        tw.configure(state=tk.DISABLED)
 
     def _show_balance_panel(self) -> None:
         """Show a popup panel with talk-time balance analysis."""

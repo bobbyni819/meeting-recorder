@@ -230,6 +230,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Show talk-time balance analysis",
     )
     parser.add_argument(
+        "--alerts", action="store_true",
+        help="Show keyword alert matches",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Show comprehensive report (stats + weekly + health + streaks + costs)",
     )
@@ -241,6 +245,12 @@ def main(argv: list[str] | None = None) -> int:
         from meeting_recorder.storage.transcript_search import search_transcripts, format_search_results
         hits = search_transcripts(config.output_dir, args.search, max_results=20)
         print(format_search_results(hits, args.search))
+        return 0
+
+    if args.alerts:
+        from meeting_recorder.storage.keyword_alerts import scan_all_recordings, format_keyword_alerts
+        report = scan_all_recordings(config.output_dir)
+        print(format_keyword_alerts(report))
         return 0
 
     if args.balance:
