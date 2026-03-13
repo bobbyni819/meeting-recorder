@@ -2529,6 +2529,31 @@ class MainWindow:
         notes_btn.bind("<Enter>", lambda e: notes_btn.configure(fg=TEXT_COLOR))
         notes_btn.bind("<Leave>", lambda e: notes_btn.configure(fg=TEXT_DIM))
 
+        # Recap button
+        recap_btn = tk.Label(
+            top_bar, text="\U0001f4e8  Recap", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+        )
+        recap_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+        def _copy_recap():
+            try:
+                from meeting_recorder.storage.recap import generate_recap, format_recap
+                recap = generate_recap(rec_path, meta=meta)
+                text = format_recap(recap)
+                if self._window:
+                    self._window.clipboard_clear()
+                    self._window.clipboard_append(text)
+                    recap_btn.configure(text="\u2713  Copied!", fg=GREEN)
+                    self._window.after(2000, lambda: recap_btn.configure(
+                        text="\U0001f4e8  Recap", fg=TEXT_DIM))
+            except Exception:
+                logger.exception("Failed to generate recap")
+
+        recap_btn.bind("<Button-1>", lambda e: _copy_recap())
+        recap_btn.bind("<Enter>", lambda e: recap_btn.configure(fg=TEXT_COLOR))
+        recap_btn.bind("<Leave>", lambda e: recap_btn.configure(fg=TEXT_DIM))
+
         # Export HTML button
         html_btn = tk.Label(
             top_bar, text="\U0001f310  HTML", font=("Segoe UI", 9),
