@@ -3909,6 +3909,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Meeting Velocity ---
+        try:
+            from meeting_recorder.storage.velocity import analyze_velocity, format_velocity
+            vel = analyze_velocity(rec_path, meta=meta)
+            if vel is not None:
+                lines.append(format_velocity(vel))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
