@@ -3430,6 +3430,19 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Meeting Cost ---
+        try:
+            from meeting_recorder.storage.meeting_cost import estimate_recording_cost, format_cost
+            cost = estimate_recording_cost(rec_path, meta)
+            if cost is not None:
+                lines.append("MEETING COST")
+                lines.append("-" * 40)
+                lines.append(f"  Estimated:  {format_cost(cost)}")
+                lines.append(f"  Per minute: ${cost.cost_per_minute:.2f}")
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)

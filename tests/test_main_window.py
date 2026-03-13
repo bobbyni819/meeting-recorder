@@ -725,6 +725,18 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {"duration_seconds": 10})
         assert "PRODUCTIVITY" not in text
 
+    def test_meeting_cost_displayed(self, tmp_path):
+        """MEETING COST section shown when recording has duration."""
+        meta = {"duration_seconds": 3600, "meeting_attendees": ["Alice", "Bob"]}
+        text = MainWindow._build_details_text(tmp_path, meta)
+        assert "MEETING COST" in text
+        assert "$" in text
+
+    def test_meeting_cost_absent_no_duration(self, tmp_path):
+        """No MEETING COST for zero-duration recordings."""
+        text = MainWindow._build_details_text(tmp_path, {"duration_seconds": 0})
+        assert "MEETING COST" not in text
+
     def test_attendance_verification(self, tmp_path):
         """Attendance section shows who spoke and who didn't."""
         meta = {
