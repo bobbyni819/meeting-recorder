@@ -4722,7 +4722,10 @@ class MainWindow:
                 anchor=tk.W,
             ).pack(fill=tk.X, padx=(10, 4))
 
-            # Stats line
+            # Stats line + prep button
+            stats_row = tk.Frame(card, bg=BG_CARD)
+            stats_row.pack(fill=tk.X, padx=(10, 4))
+
             avg_min = series.avg_duration / 60
             trend = series.duration_trend
             trend_icon = "\u2197" if trend > 5 else "\u2198" if trend < -5 else "\u2192"
@@ -4732,10 +4735,25 @@ class MainWindow:
                 f"{len(series.core_attendees)} core attendees"
             )
             tk.Label(
-                card, text=stats,
+                stats_row, text=stats,
                 font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_CARD,
                 anchor=tk.W,
-            ).pack(fill=tk.X, padx=(10, 4))
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # Prep button
+            prep_btn = tk.Label(
+                stats_row, text="\U0001f4cb Prep",
+                font=("Segoe UI", 8), fg=AMBER, bg=BG_CARD,
+                cursor="hand2",
+            )
+            prep_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+            def _gen_prep(e, subj=series.subject):
+                self._generate_prep_sheet(subj)
+
+            prep_btn.bind("<Button-1>", _gen_prep)
+            prep_btn.bind("<Enter>", lambda e, b=prep_btn: b.configure(fg=TEXT_BRIGHT))
+            prep_btn.bind("<Leave>", lambda e, b=prep_btn: b.configure(fg=AMBER))
 
             # Click to show series diff
             def _on_click(e, s=series, frame=list_frame):
@@ -4764,6 +4782,23 @@ class MainWindow:
             overlay, text="Click a series to see what changed",
             font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(0, 8))
+
+    def _generate_prep_sheet(self, subject: str) -> None:
+        """Generate and copy a meeting prep sheet to clipboard."""
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.meeting_prep import generate_prep, format_prep
+            prep = generate_prep(base, subject)
+            if prep and self._window:
+                text = format_prep(prep)
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                self._update_status("Prep sheet copied to clipboard")
+        except Exception:
+            logger.exception("Failed to generate prep sheet")
 
     def _show_series_diff(self, series, parent_frame: tk.Frame) -> None:
         """Show summary diffs for a recurring meeting series."""
