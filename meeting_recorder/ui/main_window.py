@@ -2727,6 +2727,16 @@ class MainWindow:
             add_btn.bind("<Enter>", lambda e: add_btn.configure(fg=TEXT_COLOR))
             add_btn.bind("<Leave>", lambda e: add_btn.configure(fg=TEXT_DIM))
 
+            # Auto-suggest button
+            suggest_btn = tk.Label(
+                parent, text="\u2728 suggest", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2",
+            )
+            suggest_btn.pack(side=tk.LEFT, padx=(4, 0))
+            suggest_btn.bind("<Button-1>", lambda e: _show_suggestions())
+            suggest_btn.bind("<Enter>", lambda e: suggest_btn.configure(fg=AMBER))
+            suggest_btn.bind("<Leave>", lambda e: suggest_btn.configure(fg=TEXT_DIM))
+
         def _add_tag_inline():
             # Replace "+ tag" with an entry
             for w in parent.winfo_children():
@@ -2772,6 +2782,39 @@ class MainWindow:
                     json.dump(meta, f, indent=2, ensure_ascii=False)
             except Exception:
                 logger.exception("Failed to save tags")
+
+        def _show_suggestions():
+            from meeting_recorder.storage.auto_tag import suggest_tags_for_recording
+            suggestions = suggest_tags_for_recording(rec_path, meta)
+            if not suggestions:
+                return
+            # Show suggestions as clickable pills below the tag bar
+            # Remove any existing suggestion row
+            for w in parent.master.winfo_children():
+                if getattr(w, "_is_suggestion_row", False):
+                    w.destroy()
+            row = tk.Frame(parent.master, bg=BG_COLOR)
+            row._is_suggestion_row = True
+            row.pack(fill=tk.X, padx=20, pady=(0, 2))
+            tk.Label(
+                row, text="Suggestions:", font=("Segoe UI", 7),
+                fg=TEXT_DIM, bg=BG_COLOR,
+            ).pack(side=tk.LEFT, padx=(0, 4))
+            for sug in suggestions:
+                def _add_suggestion(s=sug):
+                    if s not in tags:
+                        tags.append(s)
+                        _save_tags()
+                        _redraw()
+                    row.destroy()
+                pill = tk.Label(
+                    row, text=f" +{sug} ", font=("Segoe UI", 7),
+                    fg=TEXT_BRIGHT, bg="#1a3a2e", cursor="hand2",
+                )
+                pill.pack(side=tk.LEFT, padx=(0, 3))
+                pill.bind("<Button-1>", lambda e, cb=_add_suggestion: cb())
+                pill.bind("<Enter>", lambda e, p=pill: p.configure(bg=GREEN_DARK))
+                pill.bind("<Leave>", lambda e, p=pill: p.configure(bg="#1a3a2e"))
 
         _redraw()
 
