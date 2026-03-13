@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -105,6 +106,7 @@ class MeetingRecorderApp:
             on_toggle_auto_start=self._toggle_auto_start,
             on_reprocess=self.reprocess_recording,
             on_reprocess_all_failed=self.reprocess_all_failed,
+            on_import_audio=self.import_audio,
             on_quit=self.quit,
             auto_start=self.config.recording.auto_start,
             hotkey_recording=self.config.hotkey.toggle_recording,
@@ -127,6 +129,7 @@ class MeetingRecorderApp:
             on_list_recent=self._list_recent_recordings,
             on_open_recording=self._open_recording,
             on_show_main_window=self._show_main_window,
+            on_import_audio=self._import_audio_from_tray,
             auto_start=self.config.recording.auto_start,
             hotkey_recording=self.config.hotkey.toggle_recording,
             hotkey_mute=self.config.hotkey.toggle_mute,
@@ -1326,6 +1329,113 @@ class MeetingRecorderApp:
         self._main_window.update_status_bar("Batch re-processing complete.")
         self._main_window.refresh_history()
         notifications.notify_info(f"Re-processed {len(failed)} recording(s).")
+
+    def import_audio(self, file_path: str | Path) -> None:
+        """Import an external audio file and run post-processing on it.
+
+        Copies the file into a new recording directory as app_audio.wav
+        (converting from MP3/M4A/etc. if needed), then runs the transcription
+        and summary pipeline.
+        """
+        import shutil
+        import wave
+
+        file_path = Path(file_path)
+        if not file_path.exists():
+            notifications.notify_error(f"File not found: {file_path}")
+            return
+
+        if self._post_thread and self._post_thread.is_alive():
+            notifications.notify_error("Post-processing already running. Please wait.")
+            return
+
+        # Create recording directory
+        stem = file_path.stem
+        recording_dir = self._recording_store.create_recording_dir(
+            app_name="Import",
+            meeting_subject=stem,
+        )
+
+        # Copy/convert to app_audio.wav
+        dest_wav = recording_dir / "app_audio.wav"
+        suffix = file_path.suffix.lower()
+        if suffix == ".wav":
+            shutil.copy2(file_path, dest_wav)
+        else:
+            # Convert MP3/M4A/OGG/FLAC/etc. to WAV via pydub
+            try:
+                from pydub import AudioSegment
+                audio = AudioSegment.from_file(str(file_path))
+                audio.export(str(dest_wav), format="wav")
+            except Exception as exc:
+                logger.exception("Failed to convert %s to WAV", file_path)
+                notifications.notify_error(f"Cannot convert {suffix} file: {exc}")
+                shutil.rmtree(recording_dir, ignore_errors=True)
+                return
+
+        if not _validate_wav(dest_wav):
+            notifications.notify_error("Imported audio is corrupt or empty.")
+            shutil.rmtree(recording_dir, ignore_errors=True)
+            return
+
+        # Get duration from WAV
+        try:
+            with wave.open(str(dest_wav), "rb") as wf:
+                duration = wf.getnframes() / wf.getframerate()
+        except Exception:
+            duration = 0.0
+
+        # Create metadata
+        metadata = RecordingMetadata(
+            app_name="Import",
+            start_time=datetime.now().isoformat(),
+            has_app_audio=True,
+            duration_seconds=duration,
+            sample_rate=16000,
+            channels=1,
+            language=self.config.recording.language,
+            transcription_backend=self.config.transcription.backend,
+            status="processing",
+            meeting_subject=stem,
+        )
+        self._save_metadata(metadata, recording_dir)
+
+        # Refresh pipeline with current config
+        self._pipeline = TranscriptionPipeline(self.config)
+
+        logger.info("Importing audio: %s -> %s", file_path, recording_dir)
+        notifications.notify_info(f"Importing: {file_path.name}")
+        self._main_window.update_status_bar(f"Importing: {file_path.name}...")
+        self._main_window.add_notification("info", f"Imported audio: {file_path.name}", source="import")
+
+        self._post_thread = threading.Thread(
+            target=self._post_process,
+            args=(recording_dir, metadata, self.config, duration),
+            name="import-audio",
+            daemon=False,
+        )
+        self._post_thread.start()
+
+    def _import_audio_from_tray(self) -> None:
+        """Open a file dialog and import the selected audio file."""
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        file_path = filedialog.askopenfilename(
+            title="Import Audio File",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.ogg *.flac *.wma *.aac"),
+                ("WAV files", "*.wav"),
+                ("MP3 files", "*.mp3"),
+                ("All files", "*.*"),
+            ],
+        )
+        root.destroy()
+        if file_path:
+            self.import_audio(file_path)
 
     def _list_capturable_windows(self) -> list:
         """Return windows available for capture switching (during recording)."""

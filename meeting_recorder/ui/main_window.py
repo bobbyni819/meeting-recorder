@@ -73,6 +73,7 @@ class MainWindow:
         on_toggle_auto_start: Optional[Callable] = None,
         on_reprocess: Optional[Callable] = None,
         on_reprocess_all_failed: Optional[Callable] = None,
+        on_import_audio: Optional[Callable] = None,
         on_quit: Optional[Callable] = None,
         auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
@@ -94,6 +95,7 @@ class MainWindow:
         self._on_toggle_auto_start = on_toggle_auto_start
         self._on_reprocess = on_reprocess
         self._on_reprocess_all_failed = on_reprocess_all_failed
+        self._on_import_audio = on_import_audio
         self._on_quit = on_quit
         self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
@@ -530,6 +532,7 @@ class MainWindow:
 
         for text, callback in [
             ("\u29bf Record Window...", self._on_record_window),
+            ("\U0001f4e5 Import Audio...", self._import_audio_dialog),
             ("\U0001f50d Search", self._on_search),
             ("\U0001f4c2 Open Folder", self._on_open_recordings),
             ("\U0001f4e6 Export All", self._export_transcripts),
@@ -2795,6 +2798,28 @@ class MainWindow:
         if not hasattr(self, "_calendar_window"):
             self._calendar_window = CalendarWindow(base, on_date_click=_on_date_click)
         self._calendar_window.show(self._window)
+
+    def _import_audio_dialog(self) -> None:
+        """Open a file dialog and pass selected audio file to import callback."""
+        if not self._window or not self._on_import_audio:
+            return
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            parent=self._window,
+            title="Import Audio File",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.ogg *.flac *.wma *.aac"),
+                ("WAV files", "*.wav"),
+                ("MP3 files", "*.mp3"),
+                ("All files", "*.*"),
+            ],
+        )
+        if file_path:
+            threading.Thread(
+                target=self._on_import_audio,
+                args=(file_path,),
+                daemon=True,
+            ).start()
 
     def _show_diagnostics(self) -> None:
         """Open the system diagnostics window."""

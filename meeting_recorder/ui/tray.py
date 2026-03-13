@@ -45,6 +45,7 @@ class TrayIcon:
         on_list_recent: Optional[Callable] = None,
         on_open_recording: Optional[Callable] = None,
         on_show_main_window: Optional[Callable] = None,
+        on_import_audio: Optional[Callable] = None,
         auto_start: bool = False,
         hotkey_recording: str = "ctrl+shift+r",
         hotkey_mute: str = "ctrl+shift+u",
@@ -65,6 +66,7 @@ class TrayIcon:
         self._on_list_recent = on_list_recent
         self._on_open_recording = on_open_recording
         self._on_show_main_window = on_show_main_window
+        self._on_import_audio = on_import_audio
         self._auto_start = auto_start
         self._hotkey_recording = hotkey_recording
         self._hotkey_mute = hotkey_mute
@@ -112,6 +114,11 @@ class TrayIcon:
                 Item(
                     "Record Window...",
                     self._handle_record_window,
+                    enabled=lambda _: self._state == "idle",
+                ),
+                Item(
+                    "Import Audio...",
+                    self._handle_import_audio,
                     enabled=lambda _: self._state == "idle",
                 ),
                 Item(
@@ -197,6 +204,11 @@ class TrayIcon:
         """Handle 'Record Window...' menu click."""
         if self._on_record_window:
             threading.Thread(target=self._on_record_window, daemon=True).start()
+
+    def _handle_import_audio(self, icon, item) -> None:
+        """Handle 'Import Audio...' menu click."""
+        if self._on_import_audio:
+            threading.Thread(target=self._on_import_audio, daemon=True).start()
 
     def _handle_toggle_auto_start(self, icon, item) -> None:
         """Handle 'Auto-Record Meetings' toggle."""
