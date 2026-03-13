@@ -565,9 +565,9 @@ class MainWindow:
         self._start_btn.bind("<Enter>", lambda e: self._start_btn.configure(bg=GREEN))
         self._start_btn.bind("<Leave>", lambda e: self._start_btn.configure(bg=GREEN_DARK))
 
-        # Secondary buttons row
-        sec_frame = tk.Frame(parent, bg=BG_COLOR)
-        sec_frame.pack(pady=(0, 12))
+        # Action buttons row
+        action_frame = tk.Frame(parent, bg=BG_COLOR)
+        action_frame.pack(pady=(0, 4))
 
         for text, callback in [
             ("\u29bf Record Window...", self._on_record_window),
@@ -580,25 +580,40 @@ class MainWindow:
             ("\U0001f464 Profiles", self._show_voice_profiles),
             ("\U0001f465 People", self._show_attendee_directory),
             ("\U0001f4c5 Calendar", self._show_calendar),
+            ("\U0001f9ea Diagnostics", self._show_diagnostics),
+        ]:
+            btn = tk.Label(
+                action_frame, text=f"  {text}  ", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8, pady=4,
+            )
+            btn.pack(side=tk.LEFT, padx=3)
+            btn.bind("<Button-1>", lambda e, cb=callback: self._fire(cb))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BUTTON_HOVER, fg=TEXT_COLOR))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BUTTON_BG, fg=TEXT_DIM))
+
+        # Analytics buttons row
+        analytics_frame = tk.Frame(parent, bg=BG_COLOR)
+        analytics_frame.pack(pady=(0, 12))
+
+        for text, callback in [
+            ("\U0001f4c4 Weekly", self._show_weekly_panel),
             ("\u2611 Follow-ups", self._show_followups_panel),
             ("\U0001f4dd Digest", self._show_digest_panel),
             ("\U0001f4a1 Insights", self._show_insights_panel),
             ("\U0001f4c8 Trends", self._show_trends_panel),
-            ("\u23f0 Focus Time", self._show_focus_panel),
-            ("\U0001f4c4 Weekly", self._show_weekly_panel),
+            ("\u23f0 Focus", self._show_focus_panel),
             ("\U0001f525 Streaks", self._show_streaks_panel),
             ("\U0001f4b0 Costs", self._show_costs_panel),
             ("\U0001f5d3 Heatmap", self._show_heatmap_panel),
-            ("\U0001f3af Effectiveness", self._show_effectiveness_panel),
+            ("\U0001f3af Effective", self._show_effectiveness_panel),
             ("\u231b Optimizer", self._show_optimizer_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
-            ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
             btn = tk.Label(
-                sec_frame, text=f"  {text}  ", font=("Segoe UI", 9),
+                analytics_frame, text=f"  {text}  ", font=("Segoe UI", 9),
                 fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8, pady=4,
             )
-            btn.pack(side=tk.LEFT, padx=4)
+            btn.pack(side=tk.LEFT, padx=3)
             btn.bind("<Button-1>", lambda e, cb=callback: self._fire(cb))
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BUTTON_HOVER, fg=TEXT_COLOR))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BUTTON_BG, fg=TEXT_DIM))
