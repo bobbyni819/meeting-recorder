@@ -1541,6 +1541,24 @@ class MainWindow:
         open_btn.bind("<Enter>", lambda e: open_btn.configure(fg=TEXT_COLOR))
         open_btn.bind("<Leave>", lambda e: open_btn.configure(fg=TEXT_DIM))
 
+        # Play audio button (if audio file exists)
+        audio_file = None
+        for fname in ("mixed.wav", "app_audio.wav", "mic_audio.wav"):
+            if (rec_path / fname).exists():
+                audio_file = rec_path / fname
+                break
+        if audio_file:
+            play_btn = tk.Label(
+                top_bar, text="\u25b6  Play", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            play_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+            play_btn.bind("<Button-1>", lambda e, f=audio_file: (
+                threading.Thread(target=lambda: os.startfile(str(f)), daemon=True).start()
+            ))
+            play_btn.bind("<Enter>", lambda e: play_btn.configure(fg=TEXT_COLOR))
+            play_btn.bind("<Leave>", lambda e: play_btn.configure(fg=TEXT_DIM))
+
         # Google Drive button (if uploaded)
         drive_id = meta.get("google_drive_folder_id", "")
         if drive_id:
