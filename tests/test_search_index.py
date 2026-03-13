@@ -25,6 +25,9 @@ def _make_metadata(
     duration_seconds: float = 600.0,
     speaker_count: int = 2,
     segment_count: int = 10,
+    quality_scores: dict | None = None,
+    tags: list[str] | None = None,
+    status: str = "",
 ) -> Path:
     """Create a metadata.json file in the given recording directory."""
     recording_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +41,12 @@ def _make_metadata(
         "speaker_count": speaker_count,
         "segment_count": segment_count,
     }
+    if quality_scores:
+        meta["quality_scores"] = quality_scores
+    if tags:
+        meta["tags"] = tags
+    if status:
+        meta["status"] = status
     path = recording_dir / "metadata.json"
     path.write_text(json.dumps(meta), encoding="utf-8")
     return path
@@ -347,6 +356,122 @@ class TestSearch:
         results = index.search(query="deployment")
         assert len(results) >= 1
         assert "deployment" in results[0].snippet.lower()
+
+
+# ---------------------------------------------------------------------------
+# Extended search filters
+# ---------------------------------------------------------------------------
+
+class TestExtendedSearch:
+    """Test extended search filters (sentiment, quality, status, tags)."""
+
+    def test_search_by_sentiment(self, index: RecordingIndex, tmp_path: Path):
+        rec = _make_recording(tmp_path, "rec_sent")
+        # Create a transcript with positive sentiment
+        (rec / "transcript.txt").write_text(
+            "This was an amazing wonderful excellent meeting",
+            encoding="utf-8",
+        )
+        index.index_recording(rec)
+
+        results = index.search(sentiment="positive")
+        assert len(results) >= 1
+
+    def test_search_by_quality(self, index: RecordingIndex, tmp_path: Path):
+        rec_dir = tmp_path / "rec_quality"
+        rec_dir.mkdir()
+        _make_metadata(rec_dir, quality_scores={"overall_score": 85})
+        _make_transcript(rec_dir)
+        index.index_recording(rec_dir)
+
+        rec_dir2 = tmp_path / "rec_low_quality"
+        rec_dir2.mkdir()
+        _make_metadata(rec_dir2, quality_scores={"overall_score": 30})
+        _make_transcript(rec_dir2)
+        index.index_recording(rec_dir2)
+
+        results = index.search(min_quality=70)
+        assert len(results) == 1
+
+    def test_search_by_status(self, index: RecordingIndex, tmp_path: Path):
+        rec_dir = tmp_path / "rec_completed"
+        rec_dir.mkdir()
+        _make_metadata(rec_dir, status="completed")
+        _make_transcript(rec_dir)
+        index.index_recording(rec_dir)
+
+        rec_dir2 = tmp_path / "rec_error"
+        rec_dir2.mkdir()
+        _make_metadata(rec_dir2, status="error")
+        _make_transcript(rec_dir2)
+        index.index_recording(rec_dir2)
+
+        results = index.search(status="completed")
+        assert len(results) == 1
+
+        results = index.search(status="error")
+        assert len(results) == 1
+
+    def test_search_by_tag(self, index: RecordingIndex, tmp_path: Path):
+        rec_dir = tmp_path / "rec_tagged"
+        rec_dir.mkdir()
+        _make_metadata(rec_dir, tags=["important", "client"])
+        _make_transcript(rec_dir)
+        index.index_recording(rec_dir)
+
+        rec_dir2 = tmp_path / "rec_untagged"
+        rec_dir2.mkdir()
+        _make_metadata(rec_dir2)
+        _make_transcript(rec_dir2)
+        index.index_recording(rec_dir2)
+
+        results = index.search(tag="important")
+        assert len(results) == 1
+
+    def test_combined_extended_filters(self, index: RecordingIndex, tmp_path: Path):
+        rec_dir = tmp_path / "rec_combined"
+        rec_dir.mkdir()
+        _make_metadata(
+            rec_dir,
+            quality_scores={"overall_score": 90},
+            status="completed",
+            tags=["standup"],
+        )
+        _make_transcript(rec_dir)
+        index.index_recording(rec_dir)
+
+        results = index.search(min_quality=80, status="completed", tag="standup")
+        assert len(results) == 1
+
+    def test_schema_migration(self, index: RecordingIndex):
+        """Calling ensure_schema on existing DB adds new columns."""
+        conn = index._connect()
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(recordings)").fetchall()}
+        assert "quality_score" in columns
+        assert "sentiment_score" in columns
+        assert "sentiment_label" in columns
+        assert "tags" in columns
+        assert "status" in columns
+        assert "action_item_count" in columns
+
+    def test_new_fields_in_search_result(self, index: RecordingIndex, tmp_path: Path):
+        rec_dir = tmp_path / "rec_fields"
+        rec_dir.mkdir()
+        _make_metadata(
+            rec_dir,
+            quality_scores={"overall_score": 75},
+            status="completed",
+            tags=["review"],
+        )
+        _make_transcript(rec_dir)
+        index.index_recording(rec_dir)
+
+        results = index.search(subject="Standup")
+        assert len(results) >= 1
+        r = results[0]
+        assert r.quality_score == 75
+        assert r.status == "completed"
+        assert "review" in r.tags
 
 
 # ---------------------------------------------------------------------------

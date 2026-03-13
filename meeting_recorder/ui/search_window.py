@@ -76,6 +76,36 @@ class SearchWindow:
         self._date_to_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._date_to_var, width=10).pack(side=tk.LEFT)
 
+        # Extended filters row
+        filter_row2 = ttk.Frame(self._window, padding=(10, 0, 10, 5))
+        filter_row2.pack(fill=tk.X)
+
+        ttk.Label(filter_row2, text="Sentiment:").pack(side=tk.LEFT, padx=(0, 3))
+        self._sentiment_var = tk.StringVar()
+        sentiment_combo = ttk.Combobox(
+            filter_row2, textvariable=self._sentiment_var, width=10,
+            values=["", "positive", "negative", "neutral", "mixed"],
+            state="readonly",
+        )
+        sentiment_combo.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(filter_row2, text="Min Quality:").pack(side=tk.LEFT, padx=(0, 3))
+        self._quality_var = tk.StringVar()
+        ttk.Entry(filter_row2, textvariable=self._quality_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(filter_row2, text="Status:").pack(side=tk.LEFT, padx=(0, 3))
+        self._status_var = tk.StringVar()
+        status_combo = ttk.Combobox(
+            filter_row2, textvariable=self._status_var, width=10,
+            values=["", "completed", "error", "processing"],
+            state="readonly",
+        )
+        status_combo.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(filter_row2, text="Tag:").pack(side=tk.LEFT, padx=(0, 3))
+        self._tag_var = tk.StringVar()
+        ttk.Entry(filter_row2, textvariable=self._tag_var, width=12).pack(side=tk.LEFT)
+
         # Date shortcut buttons
         date_shortcut_frame = ttk.Frame(self._window, padding=(10, 0, 10, 5))
         date_shortcut_frame.pack(fill=tk.X)
@@ -90,19 +120,21 @@ class SearchWindow:
         tree_frame = ttk.Frame(self._window, padding=10)
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("date", "subject", "app", "speakers", "preview")
+        columns = ("date", "subject", "app", "quality", "sentiment", "preview")
         self._tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
 
         self._tree.heading("date", text="Date", command=lambda: self._sort_column("date"))
         self._tree.heading("subject", text="Subject")
         self._tree.heading("app", text="App")
-        self._tree.heading("speakers", text="Speakers")
+        self._tree.heading("quality", text="Qual")
+        self._tree.heading("sentiment", text="Sent")
         self._tree.heading("preview", text="Preview")
 
         self._tree.column("date", width=130, minwidth=100)
         self._tree.column("subject", width=150, minwidth=100)
-        self._tree.column("app", width=80, minwidth=60)
-        self._tree.column("speakers", width=120, minwidth=80)
+        self._tree.column("app", width=70, minwidth=50)
+        self._tree.column("quality", width=45, minwidth=35)
+        self._tree.column("sentiment", width=65, minwidth=50)
         self._tree.column("preview", width=200, minwidth=100)
 
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self._tree.yview)
@@ -150,8 +182,20 @@ class SearchWindow:
         attendee = self._attendee_var.get().strip()
         date_from = self._date_from_var.get().strip()
         date_to = self._date_to_var.get().strip()
+        sentiment = self._sentiment_var.get().strip()
+        quality_str = self._quality_var.get().strip()
+        status = self._status_var.get().strip()
+        tag = self._tag_var.get().strip()
 
-        if not any([query, speaker, subject, attendee, date_from, date_to]):
+        min_quality = 0
+        if quality_str:
+            try:
+                min_quality = int(quality_str)
+            except ValueError:
+                pass
+
+        if not any([query, speaker, subject, attendee, date_from, date_to,
+                    sentiment, min_quality, status, tag]):
             self._status_var.set("Enter a search query or filter, or click Browse All.")
             return
 
@@ -168,6 +212,10 @@ class SearchWindow:
                     attendee=attendee,
                     date_from=date_from,
                     date_to=date_to,
+                    sentiment=sentiment,
+                    min_quality=min_quality,
+                    status=status,
+                    tag=tag,
                 )
                 self._window.after(0, self._display_results)
             except Exception as e:
@@ -197,11 +245,14 @@ class SearchWindow:
 
         for i, r in enumerate(self._results):
             date_short = r.date[:19] if r.date else ""
+            quality_str = str(r.quality_score) if r.quality_score else ""
+            sentiment_str = r.sentiment_label if r.sentiment_label else ""
             self._tree.insert("", tk.END, iid=str(i), values=(
                 date_short,
                 r.subject,
                 r.app_name,
-                r.speakers,
+                quality_str,
+                sentiment_str,
                 r.snippet[:80] if r.snippet else "",
             ))
 

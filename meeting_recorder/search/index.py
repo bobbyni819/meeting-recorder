@@ -26,6 +26,12 @@ class SearchResult:
     speakers: str
     snippet: str
     rank: float = 0.0
+    quality_score: int = 0
+    sentiment_score: float = 0.0
+    sentiment_label: str = ""
+    tags: str = ""
+    status: str = ""
+    action_item_count: int = 0
 
 
 class RecordingIndex:
@@ -97,6 +103,22 @@ class RecordingIndex:
                 VALUES (new.rowid, new.recording_dir, new.subject, new.app_name, new.organizer, new.attendees, new.speakers, new.transcript_text);
             END;
         """)
+        # Migrate: add new columns if they don't exist
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(recordings)").fetchall()}
+        migrations = [
+            ("quality_score", "INTEGER NOT NULL DEFAULT 0"),
+            ("sentiment_score", "REAL NOT NULL DEFAULT 0"),
+            ("sentiment_label", "TEXT NOT NULL DEFAULT ''"),
+            ("tags", "TEXT NOT NULL DEFAULT ''"),
+            ("status", "TEXT NOT NULL DEFAULT ''"),
+            ("action_item_count", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for col, col_type in migrations:
+            if col not in existing:
+                try:
+                    conn.execute(f"ALTER TABLE recordings ADD COLUMN {col} {col_type}")
+                except sqlite3.OperationalError:
+                    pass
         conn.commit()
 
     def index_recording(self, recording_dir: Path) -> bool:
@@ -159,13 +181,47 @@ class RecordingIndex:
             else:
                 attendees_str = str(attendees)
 
+            # Quality score
+            qs = meta.get("quality_scores", {})
+            quality_score = qs.get("overall_score", 0) or 0
+
+            # Sentiment
+            sentiment_score = 0.0
+            sentiment_label = ""
+            try:
+                from meeting_recorder.storage.sentiment import analyze_recording_sentiment
+                sent = analyze_recording_sentiment(recording_dir)
+                if sent:
+                    sentiment_score = sent.score
+                    sentiment_label = sent.label
+            except Exception:
+                pass
+
+            # Tags
+            tags = meta.get("tags", [])
+            tags_str = ", ".join(tags) if isinstance(tags, list) else str(tags)
+
+            # Status
+            status = meta.get("status", "")
+
+            # Action items
+            action_count = 0
+            try:
+                from meeting_recorder.storage.action_items import extract_action_items
+                items = extract_action_items(recording_dir)
+                action_count = len(items)
+            except Exception:
+                pass
+
             # Upsert into recordings table
             conn.execute("""
                 INSERT INTO recordings (
                     recording_dir, date, subject, app_name, organizer,
                     attendees, speakers, transcript_text, duration_seconds,
-                    speaker_count, segment_count, has_summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    speaker_count, segment_count, has_summary,
+                    quality_score, sentiment_score, sentiment_label,
+                    tags, status, action_item_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(recording_dir) DO UPDATE SET
                     date=excluded.date, subject=excluded.subject,
                     app_name=excluded.app_name, organizer=excluded.organizer,
@@ -174,7 +230,13 @@ class RecordingIndex:
                     duration_seconds=excluded.duration_seconds,
                     speaker_count=excluded.speaker_count,
                     segment_count=excluded.segment_count,
-                    has_summary=excluded.has_summary
+                    has_summary=excluded.has_summary,
+                    quality_score=excluded.quality_score,
+                    sentiment_score=excluded.sentiment_score,
+                    sentiment_label=excluded.sentiment_label,
+                    tags=excluded.tags,
+                    status=excluded.status,
+                    action_item_count=excluded.action_item_count
             """, (
                 str(recording_dir),
                 meta.get("start_time", ""),
@@ -188,6 +250,12 @@ class RecordingIndex:
                 meta.get("speaker_count", 0),
                 meta.get("segment_count", 0),
                 1 if (recording_dir / "summary.json").exists() else 0,
+                quality_score,
+                sentiment_score,
+                sentiment_label,
+                tags_str,
+                status,
+                action_count,
             ))
             conn.commit()
             logger.info("Indexed recording: %s", recording_dir.name)
@@ -211,6 +279,10 @@ class RecordingIndex:
         date_to: str = "",
         attendee: str = "",
         subject: str = "",
+        sentiment: str = "",
+        min_quality: int = 0,
+        status: str = "",
+        tag: str = "",
         limit: int = 50,
     ) -> list[SearchResult]:
         """Search recordings with optional filters.
@@ -222,6 +294,10 @@ class RecordingIndex:
             date_to: Filter by end date (ISO format, inclusive)
             attendee: Filter by attendee name (substring match)
             subject: Filter by meeting subject (substring match)
+            sentiment: Filter by sentiment label (positive, negative, neutral, mixed)
+            min_quality: Minimum quality score (0-100)
+            status: Filter by status (completed, error, processing)
+            tag: Filter by tag (substring match)
             limit: Maximum results to return
 
         Returns:
@@ -257,6 +333,18 @@ class RecordingIndex:
         if subject:
             sql += " AND r.subject LIKE ?"
             params.append(f"%{subject}%")
+        if sentiment:
+            sql += " AND r.sentiment_label = ?"
+            params.append(sentiment)
+        if min_quality > 0:
+            sql += " AND r.quality_score >= ?"
+            params.append(min_quality)
+        if status:
+            sql += " AND r.status = ?"
+            params.append(status)
+        if tag:
+            sql += " AND r.tags LIKE ?"
+            params.append(f"%{tag}%")
 
         if query:
             sql += " ORDER BY rank LIMIT ?"
@@ -289,6 +377,32 @@ class RecordingIndex:
             elif transcript:
                 snippet = transcript[:100] + ("..." if len(transcript) > 100 else "")
 
+            # Safe access for new columns (may not exist in old DBs)
+            try:
+                q_score = row["quality_score"]
+            except (IndexError, KeyError):
+                q_score = 0
+            try:
+                s_score = row["sentiment_score"]
+            except (IndexError, KeyError):
+                s_score = 0.0
+            try:
+                s_label = row["sentiment_label"]
+            except (IndexError, KeyError):
+                s_label = ""
+            try:
+                r_tags = row["tags"]
+            except (IndexError, KeyError):
+                r_tags = ""
+            try:
+                r_status = row["status"]
+            except (IndexError, KeyError):
+                r_status = ""
+            try:
+                r_actions = row["action_item_count"]
+            except (IndexError, KeyError):
+                r_actions = 0
+
             results.append(SearchResult(
                 recording_dir=row["recording_dir"],
                 date=row["date"],
@@ -299,6 +413,12 @@ class RecordingIndex:
                 speakers=row["speakers"],
                 snippet=snippet,
                 rank=row["rank"],
+                quality_score=q_score,
+                sentiment_score=s_score,
+                sentiment_label=s_label,
+                tags=r_tags,
+                status=r_status,
+                action_item_count=r_actions,
             ))
 
         return results
