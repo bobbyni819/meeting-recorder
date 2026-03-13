@@ -210,6 +210,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Show meeting cost budget tracker",
     )
     parser.add_argument(
+        "--effectiveness", action="store_true",
+        help="Show meeting effectiveness analysis",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Show comprehensive report (stats + weekly + health + streaks + costs)",
     )
@@ -270,6 +274,12 @@ def main(argv: list[str] | None = None) -> int:
         from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
         info = analyze_streaks(config.output_dir)
         print(format_streaks(info))
+        return 0
+
+    if args.effectiveness:
+        from meeting_recorder.storage.effectiveness import analyze_effectiveness, format_effectiveness
+        report = analyze_effectiveness(config.output_dir, weeks=8)
+        print(format_effectiveness(report))
         return 0
 
     if args.costs:
