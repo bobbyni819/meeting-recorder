@@ -596,6 +596,7 @@ class MainWindow:
         analytics_frame.pack(pady=(0, 12))
 
         for text, callback in [
+            ("\u2600 Today", self._show_today_panel),
             ("\U0001f4c4 Weekly", self._show_weekly_panel),
             ("\u2611 Follow-ups", self._show_followups_panel),
             ("\U0001f4dd Digest", self._show_digest_panel),
@@ -5641,6 +5642,71 @@ class MainWindow:
             overlay, text=f"{pending} pending across {len(groups)} meeting(s)",
             font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(0, 8))
+
+    def _show_today_panel(self) -> None:
+        """Show a popup panel with today's meeting summary."""
+        if not self._window:
+            return
+        if hasattr(self, "_today_overlay") and self._today_overlay:
+            self._today_overlay.destroy()
+            self._today_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.daily_summary import generate_daily_summary, format_daily_summary
+            summary = generate_daily_summary(base)
+            text = format_daily_summary(summary)
+        except Exception:
+            logger.exception("Failed to generate daily summary")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._today_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Today's Meetings",
+            font=("Segoe UI", 11, "bold"), fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        def _copy():
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        copy_btn.bind("<Button-1>", lambda e: _copy())
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_today_overlay", None)))
+
+        tw = tk.Text(
+            overlay, wrap=tk.WORD, font=("Consolas", 9),
+            bg=BG_PANEL, fg=TEXT_COLOR, bd=0, highlightthickness=0,
+            width=60, height=min(22, max(8, text.count("\n") + 2)),
+            padx=16, pady=8,
+        )
+        tw.pack(fill=tk.BOTH, expand=True)
+        tw.insert("1.0", text)
+        tw.configure(state=tk.DISABLED)
 
     def _show_recurring_panel(self) -> None:
         """Show a popup panel listing recurring meeting series."""
