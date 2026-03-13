@@ -120,6 +120,30 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Never deletes the active recording directory (`exclude` parameter)
 - Disabled by default — user must set `retention.enabled = true`
 
+## Import external audio
+- `import_audio(file_path)` in app.py accepts WAV/MP3/M4A/OGG/FLAC files
+- Non-WAV converted via pydub → app_audio.wav in new recording directory
+- Runs the full post-processing pipeline (transcription, diarization, summary)
+- Available from main window "Import Audio..." button and tray menu
+
+## Main window UI features
+- `ui/main_window.py` — full desktop GUI with idle and recording views
+- `ui/diagnostics_window.py` — system health checks (GPU, audio, config)
+- `ui/notification_center.py` — NotificationStore + NotificationWindow for system alerts
+- `ui/calendar_view.py` — monthly calendar showing recording days, click to filter
+- `ui/stats_window.py` — aggregate statistics across all recordings
+- **Notification center**: bell icon in header, unread badge, stores warnings/info/errors
+- **Calendar view**: monthly grid with green tint for recording days, navigation arrows
+- **Diagnostics panel**: runs structured checks, shows pass/warn/fail with re-run button
+- **Import audio**: file dialog or tray menu, converts non-WAV formats
+- **Bulk operations**: Select mode in history, multi-select with checkboxes, action bar
+  (Delete/Export/Re-process/Select All), confirmation dialog for batch delete
+- **Notes tab**: fourth tab in detail view for free-form notes (notes.md), auto-edit when empty
+- **Error banner**: failed recordings show red banner with error message and Retry button
+- **Play audio button**: opens mixed.wav/app_audio.wav/mic_audio.wav in system player
+- **Config export/import**: buttons in Settings > Storage tab for multi-machine portability
+- **Hotkeys tab**: all 4 global hotkeys editable in Settings, window shortcuts reference
+
 ## Config validation
 - `Config.validate()` checks backend, provider, fps, vad threshold, retention values
 - Logs warnings for invalid values; does not raise
