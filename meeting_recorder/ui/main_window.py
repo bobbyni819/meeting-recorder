@@ -3399,6 +3399,22 @@ class MainWindow:
                 lines.append(f"  Video:        {quality_bar(video_s)}  {video_s}/100  {quality_label(video_s)}")
             lines.append("")
 
+        # --- Productivity ---
+        try:
+            from meeting_recorder.storage.productivity import score_productivity, productivity_label as _prod_label
+            prod = score_productivity(rec_path, meta)
+            if prod is not None:
+                lines.append("PRODUCTIVITY")
+                lines.append("-" * 40)
+                lines.append(f"  Overall:        {prod.overall}/100  {_prod_label(prod.overall)}")
+                lines.append(f"  Action density: {prod.action_density}/100  ({prod.breakdown.get('items_per_hour', 0)} items/hr)")
+                lines.append(f"  Participation:  {prod.participation}/100  ({prod.breakdown.get('speaker_count', 0)} speakers)")
+                lines.append(f"  Discussion:     {prod.discussion_density}/100  ({prod.breakdown.get('wpm', 0)} WPM)")
+                lines.append(f"  Efficiency:     {prod.time_efficiency}/100  ({prod.breakdown.get('speech_ratio', 0):.0%} speech)")
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)

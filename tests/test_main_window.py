@@ -711,6 +711,20 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {})
         assert "QUALITY" not in text
 
+    def test_productivity_displayed(self, tmp_path):
+        """PRODUCTIVITY section shown when recording has enough data."""
+        meta = {"duration_seconds": 1800}
+        (tmp_path / "transcript.txt").write_text("word " * 500, encoding="utf-8")
+        text = MainWindow._build_details_text(tmp_path, meta)
+        assert "PRODUCTIVITY" in text
+        assert "Action density" in text
+        assert "Participation" in text
+
+    def test_productivity_absent_short(self, tmp_path):
+        """No PRODUCTIVITY for very short recordings."""
+        text = MainWindow._build_details_text(tmp_path, {"duration_seconds": 10})
+        assert "PRODUCTIVITY" not in text
+
     def test_attendance_verification(self, tmp_path):
         """Attendance section shows who spoke and who didn't."""
         meta = {
