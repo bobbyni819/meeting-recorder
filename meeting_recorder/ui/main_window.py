@@ -1739,13 +1739,16 @@ class MainWindow:
             fg=TEXT_BRIGHT, bg=BG_HEADER,
         ).pack(side=tk.LEFT, padx=(12, 8), pady=6)
 
-        for text, cmd in [
+        actions = [
             ("Delete", self._bulk_delete),
             ("Export", self._bulk_export),
             ("Re-process", self._bulk_reprocess),
             ("Select All", self._bulk_select_all),
             ("Deselect All", self._bulk_deselect_all),
-        ]:
+        ]
+        if count >= 2:
+            actions.insert(2, ("Merge", self._bulk_merge))
+        for text, cmd in actions:
             btn = tk.Label(
                 self._bulk_bar, text=f"  {text}  ", font=("Segoe UI", 8),
                 fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4,
@@ -1881,6 +1884,41 @@ class MainWindow:
                 time.sleep(0.5)
 
         threading.Thread(target=_reprocess_batch, daemon=True).start()
+
+    def _bulk_merge(self) -> None:
+        """Merge selected recordings into a single combined recording."""
+        if len(self._bulk_selected) < 2:
+            return
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+        except Exception:
+            return
+
+        paths = sorted(self._bulk_selected)
+        self._bulk_selected.clear()
+        self._bulk_mode = False
+        self._hide_bulk_bar()
+        if self._bulk_toggle_btn:
+            self._bulk_toggle_btn.configure(
+                text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
+
+        try:
+            from meeting_recorder.storage.merge import merge_transcripts
+            merged_dir = merge_transcripts(paths, base)
+            self._refresh_history()
+            self.add_notification(
+                "success",
+                f"Merged {len(paths)} recordings into {merged_dir.name}",
+                source="merge",
+            )
+            self._show_recording_detail(merged_dir)
+        except Exception:
+            logger.exception("Merge failed")
+            self.add_notification("error", "Merge failed — check logs", source="merge")
+            self._refresh_history()
 
     # ------------------------------------------------------------------
     # Recording detail view
