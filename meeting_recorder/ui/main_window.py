@@ -585,6 +585,10 @@ class MainWindow:
         # Divider
         tk.Frame(parent, bg=BG_HEADER, height=1).pack(fill=tk.X, padx=16)
 
+        # Weekly activity strip
+        self._week_strip_frame = tk.Frame(parent, bg=BG_COLOR)
+        self._week_strip_frame.pack(fill=tk.X, padx=20, pady=(8, 0))
+
         # Section label with stats
         section_row = tk.Frame(parent, bg=BG_COLOR)
         section_row.pack(fill=tk.X, padx=20, pady=(10, 4))
@@ -1185,9 +1189,85 @@ class MainWindow:
             len(recordings), total_duration, failed_count, avg_quality,
             shown_count=shown if filter_text else None,
         )
+        # Update weekly activity strip
+        self._update_week_strip(meta_cache)
+
         # Scroll to top when filter changes
         if hasattr(self, "_history_canvas") and self._history_canvas:
             self._history_canvas.yview_moveto(0)
+
+    def _update_week_strip(self, meta_cache: dict[Path, dict]) -> None:
+        """Update the weekly activity heatmap strip."""
+        strip = getattr(self, "_week_strip_frame", None)
+        if not strip:
+            return
+        for w in strip.winfo_children():
+            w.destroy()
+
+        from datetime import date, timedelta
+        today = date.today()
+        # Start from Monday of current week
+        monday = today - timedelta(days=today.weekday())
+
+        # Count recordings per day and total duration per day
+        day_counts: dict[str, int] = {}
+        day_durations: dict[str, float] = {}
+        for path, meta in meta_cache.items():
+            name = path.name
+            if len(name) >= 10:
+                day_str = name[:10]
+                day_counts[day_str] = day_counts.get(day_str, 0) + 1
+                day_durations[day_str] = day_durations.get(day_str, 0) + meta.get("duration_seconds", 0)
+
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for i in range(7):
+            day = monday + timedelta(days=i)
+            day_str = day.isoformat()
+            count = day_counts.get(day_str, 0)
+            dur = day_durations.get(day_str, 0)
+            is_today = day == today
+            is_future = day > today
+
+            # Color intensity based on count
+            if is_future:
+                bg = BG_COLOR
+                fg = BG_HEADER
+            elif count == 0:
+                bg = BG_PANEL
+                fg = TEXT_DIM
+            elif count <= 2:
+                bg = "#0f3460"
+                fg = TEXT_COLOR
+            elif count <= 5:
+                bg = "#1a5276"
+                fg = TEXT_BRIGHT
+            else:
+                bg = BLUE_ACCENT
+                fg = TEXT_BRIGHT
+
+            cell = tk.Frame(strip, bg=bg, bd=1 if is_today else 0,
+                           highlightbackground=AMBER if is_today else bg,
+                           highlightthickness=1 if is_today else 0)
+            cell.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+
+            tk.Label(
+                cell, text=day_names[i],
+                font=("Segoe UI", 7, "bold" if is_today else ""),
+                fg=AMBER if is_today else fg, bg=bg,
+            ).pack()
+
+            if count > 0 and not is_future:
+                dur_min = int(dur / 60)
+                dur_text = f"{dur_min}m" if dur_min > 0 else ""
+                tk.Label(
+                    cell, text=f"{count}" + (f" \u2022 {dur_text}" if dur_text else ""),
+                    font=("Segoe UI", 7), fg=fg, bg=bg,
+                ).pack()
+            elif not is_future:
+                tk.Label(
+                    cell, text="\u2014",
+                    font=("Segoe UI", 7), fg=fg, bg=bg,
+                ).pack()
 
     def _update_stats_label(self, count: int, total_seconds: float,
                            failed: int = 0, avg_quality: int | None = None,
