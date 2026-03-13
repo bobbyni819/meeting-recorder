@@ -189,12 +189,23 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true",
         help="Output raw stats as JSON",
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--health", action="store_true",
+        help="Show recording health summary",
+    )
+    args = parser.parse_args(argv)
 
     config = Config.load()
+
+    if args.health:
+        from meeting_recorder.storage.health_summary import analyze_health, format_health
+        hs = analyze_health(config.output_dir)
+        print(format_health(hs))
+        return 0
+
     stats = compute_stats(config.output_dir)
 
-    if parser.parse_args(argv).json:
+    if args.json:
         import json as json_mod
         print(json_mod.dumps(stats, indent=2, default=str))
     else:
