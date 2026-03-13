@@ -3704,6 +3704,21 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Benchmark Comparison ---
+        try:
+            from meeting_recorder.storage.meeting_benchmarks import compute_benchmarks, compare_to_benchmark, format_benchmark_comparison
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            bms = compute_benchmarks(base)
+            comp = compare_to_benchmark(rec_path, bms, meta=meta)
+            if comp is not None:
+                lines.append(format_benchmark_comparison(comp))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Engagement Score ---
         try:
             from meeting_recorder.storage.engagement_score import compute_engagement, format_engagement
