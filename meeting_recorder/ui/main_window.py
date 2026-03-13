@@ -3132,6 +3132,26 @@ class MainWindow:
         else:
             ag_btn = None
 
+        # Decisions tab (extracted decision log)
+        decisions_text = ""
+        try:
+            from meeting_recorder.storage.decision_log import extract_recording_decisions, format_decision_log
+            dlog = extract_recording_decisions(rec_path, meta=meta)
+            if dlog and dlog.decisions:
+                decisions_text = format_decision_log(dlog)
+        except Exception:
+            pass
+
+        if decisions_text:
+            dec_btn = tk.Label(
+                tab_frame, text="  Decisions  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            dec_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(dec_btn)
+        else:
+            dec_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -3208,6 +3228,8 @@ class MainWindow:
             kw_btn.bind("<Button-1>", lambda e: _switch_tab("keywords", keywords_text, kw_btn))
         if ag_btn:
             ag_btn.bind("<Button-1>", lambda e: _switch_tab("agenda", agenda_text, ag_btn))
+        if dec_btn:
+            dec_btn.bind("<Button-1>", lambda e: _switch_tab("decisions", decisions_text, dec_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)

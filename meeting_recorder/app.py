@@ -740,6 +740,9 @@ class MeetingRecorderApp:
                 futures.append(pool.submit(
                     self._extract_action_items, recording_dir,
                 ))
+                futures.append(pool.submit(
+                    self._extract_decisions, recording_dir,
+                ))
                 for f in as_completed(futures):
                     f.result()  # propagate exceptions (each method catches its own)
 
@@ -933,6 +936,22 @@ class MeetingRecorderApp:
                             len(items), recording_dir.name)
         except Exception:
             logger.exception("Action item extraction failed (non-fatal)")
+
+    @staticmethod
+    def _extract_decisions(recording_dir: Path) -> None:
+        """Extract and save decisions from transcript (non-fatal)."""
+        try:
+            from meeting_recorder.storage.decision_log import (
+                extract_recording_decisions,
+                save_decisions,
+            )
+            log = extract_recording_decisions(recording_dir)
+            if log and log.decisions:
+                save_decisions(recording_dir, log)
+                logger.info("Extracted %d decisions for %s",
+                            len(log.decisions), recording_dir.name)
+        except Exception:
+            logger.exception("Decision extraction failed (non-fatal)")
 
     def _run_retention_cleanup(self, exclude: Path | None = None) -> None:
         """Run recording retention cleanup (non-fatal)."""

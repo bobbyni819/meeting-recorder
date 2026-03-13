@@ -214,6 +214,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Show meeting effectiveness analysis",
     )
     parser.add_argument(
+        "--optimizer", action="store_true",
+        help="Show meeting duration optimizer suggestions",
+    )
+    parser.add_argument(
+        "--sentiment", action="store_true",
+        help="Show sentiment analysis across recent recordings",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Show comprehensive report (stats + weekly + health + streaks + costs)",
     )
@@ -289,6 +297,39 @@ def main(argv: list[str] | None = None) -> int:
             print("No meeting cost data available.")
         else:
             print(format_cost_budget(cb))
+        return 0
+
+    if args.optimizer:
+        from meeting_recorder.storage.duration_optimizer import analyze_duration_optimization, format_duration_optimizer
+        report = analyze_duration_optimization(config.output_dir, weeks=12)
+        print(format_duration_optimizer(report))
+        return 0
+
+    if args.sentiment:
+        from meeting_recorder.storage.sentiment import analyze_recording_sentiment, format_sentiment
+        if not config.output_dir.exists():
+            print("No recordings found.")
+            return 0
+        all_results = []
+        for rec_dir in sorted(config.output_dir.iterdir(), reverse=True):
+            if not rec_dir.is_dir():
+                continue
+            s = analyze_recording_sentiment(rec_dir)
+            if s:
+                all_results.append((rec_dir.name, s))
+            if len(all_results) >= 20:
+                break
+        if not all_results:
+            print("No transcripts found for sentiment analysis.")
+        else:
+            lines = ["SENTIMENT ACROSS RECORDINGS", "=" * 55, ""]
+            for name, s in all_results:
+                from meeting_recorder.storage.sentiment import sentiment_emoji
+                emoji = sentiment_emoji(s.score)
+                lines.append(
+                    f"  {name[:35]:<35}  {s.label:>8} {emoji}  ({s.score:+.2f})"
+                )
+            print("\n".join(lines))
         return 0
 
     if args.health:
