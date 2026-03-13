@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import tkinter as tk
@@ -4736,12 +4737,9 @@ class MainWindow:
                 anchor=tk.W,
             ).pack(fill=tk.X, padx=(10, 4))
 
-            # Click to copy summary
-            def _on_click(e, s=series):
-                text = s.format_summary()
-                if self._window:
-                    self._window.clipboard_clear()
-                    self._window.clipboard_append(text)
+            # Click to show series diff
+            def _on_click(e, s=series, frame=list_frame):
+                self._show_series_diff(s, frame)
 
             card.bind("<Button-1>", _on_click)
             for child in card.winfo_children():
@@ -4763,9 +4761,115 @@ class MainWindow:
 
         # Footer hint
         tk.Label(
-            overlay, text="Click a series to copy its summary",
+            overlay, text="Click a series to see what changed",
             font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(0, 8))
+
+    def _show_series_diff(self, series, parent_frame: tk.Frame) -> None:
+        """Show summary diffs for a recurring meeting series."""
+        # Remove any existing diff panel
+        if hasattr(self, "_series_diff_frame") and self._series_diff_frame:
+            self._series_diff_frame.destroy()
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.summary_diff import diff_series, format_diff
+            subject = re.escape(series.subject)
+            diffs = diff_series(base, subject_pattern=subject, max_diffs=3)
+        except Exception:
+            logger.exception("Failed to compute series diffs")
+            return
+
+        diff_frame = tk.Frame(parent_frame, bg=BG_PANEL)
+        diff_frame.pack(fill=tk.X, pady=(4, 0))
+        self._series_diff_frame = diff_frame
+
+        header_row = tk.Frame(diff_frame, bg=BG_PANEL)
+        header_row.pack(fill=tk.X, padx=8, pady=(6, 2))
+        tk.Label(
+            header_row, text=f"Changes: {series.subject}",
+            font=("Segoe UI", 9, "bold"), fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        close_btn = tk.Label(
+            header_row, text="\u2715", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            diff_frame.destroy(), setattr(self, "_series_diff_frame", None)))
+
+        if not diffs:
+            tk.Label(
+                diff_frame, text="No consecutive summaries to compare.",
+                font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_PANEL,
+            ).pack(padx=12, pady=8)
+            return
+
+        for diff in diffs:
+            d_card = tk.Frame(diff_frame, bg=BG_COLOR)
+            d_card.pack(fill=tk.X, padx=8, pady=2)
+
+            # Header: dates + similarity
+            tk.Label(
+                d_card,
+                text=f"{diff.rec_a_name[:10]} \u2192 {diff.rec_b_name[:10]}  "
+                     f"({diff.similarity:.0%} similar)",
+                font=("Segoe UI", 8, "bold"), fg=TEXT_COLOR, bg=BG_COLOR,
+            ).pack(fill=tk.X, padx=8, pady=(4, 2))
+
+            # New topics
+            if diff.new_topics:
+                items = diff.new_topics[:3]
+                tk.Label(
+                    d_card,
+                    text="+ " + ", ".join(items[:3]),
+                    font=("Segoe UI", 8), fg=GREEN, bg=BG_COLOR,
+                ).pack(fill=tk.X, padx=12)
+
+            # Dropped topics
+            if diff.dropped_topics:
+                items = diff.dropped_topics[:3]
+                tk.Label(
+                    d_card,
+                    text="- " + ", ".join(items[:3]),
+                    font=("Segoe UI", 8), fg=RED_DOT, bg=BG_COLOR,
+                ).pack(fill=tk.X, padx=12)
+
+            # Action items
+            if diff.new_action_items:
+                tk.Label(
+                    d_card,
+                    text=f"\u2605 {len(diff.new_action_items)} new action item(s)",
+                    font=("Segoe UI", 8), fg=AMBER, bg=BG_COLOR,
+                ).pack(fill=tk.X, padx=12)
+            if diff.resolved_items:
+                tk.Label(
+                    d_card,
+                    text=f"\u2713 {len(diff.resolved_items)} resolved",
+                    font=("Segoe UI", 8), fg=GREEN, bg=BG_COLOR,
+                ).pack(fill=tk.X, padx=12)
+
+            tk.Frame(d_card, bg=BG_COLOR, height=4).pack()
+
+        # Copy button
+        def _copy_diffs():
+            text = "\n\n".join(format_diff(d) for d in diffs)
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+
+        copy_btn = tk.Label(
+            diff_frame, text="\U0001f4cb Copy diffs",
+            font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_PANEL,
+            cursor="hand2",
+        )
+        copy_btn.pack(pady=(2, 8))
+        copy_btn.bind("<Button-1>", lambda e: _copy_diffs())
+        copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_COLOR))
+        copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM))
 
     def _show_notifications(self) -> None:
         """Open the notification center window."""
