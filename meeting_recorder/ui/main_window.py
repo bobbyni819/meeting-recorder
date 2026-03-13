@@ -2821,6 +2821,7 @@ class MainWindow:
                 ("Enter", "Open selected recording"),
             ]),
             ("Detail View", [
+                ("\u25c0 / \u25b6", "Previous / Next recording"),
                 ("Ctrl+F", "Search in transcript"),
                 ("Escape", "Close detail / search"),
             ]),

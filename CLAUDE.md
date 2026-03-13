@@ -75,6 +75,22 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Uses current config (not original recording's config) — useful after switching backends
 - Guards against concurrent re-processing (checks if post-processing thread is alive)
 
+## Recording quality scoring
+- `storage/quality.py`: audio, transcript, video quality scores (0-100)
+- Runs in parallel during post-processing; stored in `metadata.quality_scores`
+- Displayed on history cards (colored indicator) and in detail view (Quality section)
+
+## Cross-recording analytics
+- `ui/stats_window.py`: total recordings, time, weekly trends, top speakers, platform usage
+- `ui/timeline_view.py`: per-recording speaker timeline visualization
+- `ui/voice_profiles_window.py`: manage voice profiles (rename, delete)
+- `ui/speaker_editor.py`: rename diarized speakers, saves to metadata + transcript.txt
+
+## Recording tags
+- User-defined tags stored in `metadata.tags` list
+- Inline add/remove in detail view, displayed as pills on history cards
+- Tags are searchable via the inline filter bar
+
 ## Search index
 - SQLite FTS5 index in `~/.meeting_recorder/recordings.db`
 - Auto-syncs on startup via background thread (`_sync_search_index`)
