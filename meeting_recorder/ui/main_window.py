@@ -3854,6 +3854,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Interruptions ---
+        try:
+            from meeting_recorder.storage.interruptions import analyze_interruptions, format_interruption_report
+            ir = analyze_interruptions(rec_path)
+            if ir is not None:
+                lines.append(format_interruption_report(ir))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
