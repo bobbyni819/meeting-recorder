@@ -123,6 +123,30 @@ def generate_html_report(rec_path: Path, meta: dict | None = None) -> str:
             <div class="content">{_markdown_to_html(notes)}</div>
         </div>"""
 
+    # Action items section
+    action_items_html = ""
+    try:
+        from meeting_recorder.storage.action_items import (
+            load_action_items,
+            extract_action_items_for_recording,
+        )
+        items = load_action_items(rec_path)
+        if not items:
+            items = extract_action_items_for_recording(rec_path, meta)
+        if items:
+            ai_rows = []
+            for item in items:
+                desc = html.escape(item.description)
+                assignee = f' <span class="badge">{html.escape(item.assignee)}</span>' if item.assignee else ""
+                ai_rows.append(f"<li>{desc}{assignee}</li>")
+            action_items_html = f"""
+        <div class="section">
+            <h2>Action Items</h2>
+            <ul>{"".join(ai_rows)}</ul>
+        </div>"""
+    except Exception:
+        pass
+
     # Quality section
     quality = meta.get("quality_scores", {})
     quality_html = ""
@@ -300,6 +324,7 @@ h2 {{
 </div>
 {attendees_html}
 {summary_html}
+{action_items_html}
 {speaker_stats_html}
 {notes_html}
 {quality_html}
