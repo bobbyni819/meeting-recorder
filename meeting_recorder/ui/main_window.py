@@ -636,6 +636,10 @@ class MainWindow:
         )
         self._stats_label.pack(side=tk.RIGHT)
 
+        # Quick tag filter pills
+        self._tag_filter_frame = tk.Frame(parent, bg=BG_COLOR)
+        self._tag_filter_frame.pack(fill=tk.X, padx=20, pady=(0, 2))
+
         # Inline filter
         filter_row = tk.Frame(parent, bg=BG_COLOR)
         filter_row.pack(fill=tk.X, padx=20, pady=(0, 4))
@@ -1197,6 +1201,8 @@ class MainWindow:
         )
         # Update weekly activity strip
         self._update_week_strip(meta_cache)
+        # Update tag filter pills
+        self._update_tag_pills(meta_cache)
 
         # Scroll to top when filter changes
         if hasattr(self, "_history_canvas") and self._history_canvas:
@@ -1274,6 +1280,59 @@ class MainWindow:
                     cell, text="\u2014",
                     font=("Segoe UI", 7), fg=fg, bg=bg,
                 ).pack()
+
+    def _update_tag_pills(self, meta_cache: dict[Path, dict]) -> None:
+        """Update the quick-filter tag pills above the filter bar."""
+        frame = getattr(self, "_tag_filter_frame", None)
+        if not frame:
+            return
+        for w in frame.winfo_children():
+            w.destroy()
+
+        # Count tag frequency across visible recordings
+        from collections import Counter
+        tag_counter: Counter[str] = Counter()
+        for meta in meta_cache.values():
+            for tag in meta.get("tags", []):
+                tag_counter[tag] += 1
+
+        top_tags = tag_counter.most_common(8)
+        if not top_tags:
+            return
+
+        # Get current filter to highlight active tag
+        placeholder = "\U0001f50d Filter recordings..."
+        current_filter = ""
+        if hasattr(self, "_filter_var"):
+            raw = self._filter_var.get()
+            if raw != placeholder:
+                current_filter = raw.strip().lower()
+
+        for tag, count in top_tags:
+            is_active = current_filter == tag.lower()
+            pill = tk.Label(
+                frame, text=f" {tag} ({count}) ",
+                font=("Segoe UI", 7), cursor="hand2",
+                fg=TEXT_BRIGHT if is_active else TEXT_DIM,
+                bg=BLUE_DARK if is_active else BG_CONTROLS,
+                padx=2, pady=1,
+            )
+            pill.pack(side=tk.LEFT, padx=1, pady=1)
+
+            def _click_tag(e, t=tag):
+                placeholder_text = "\U0001f50d Filter recordings..."
+                if hasattr(self, "_filter_var"):
+                    current = self._filter_var.get()
+                    if current.strip().lower() == t.lower():
+                        # Toggle off
+                        self._filter_var.set(placeholder_text)
+                    else:
+                        self._filter_var.set(t)
+
+            pill.bind("<Button-1>", _click_tag)
+            pill.bind("<Enter>", lambda e, p=pill: p.configure(fg=TEXT_BRIGHT))
+            pill.bind("<Leave>", lambda e, p=pill, a=is_active: p.configure(
+                fg=TEXT_BRIGHT if a else TEXT_DIM))
 
     def _update_stats_label(self, count: int, total_seconds: float,
                            failed: int = 0, avg_quality: int | None = None,
