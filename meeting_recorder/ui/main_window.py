@@ -3699,6 +3699,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Meeting Type Classification ---
+        try:
+            from meeting_recorder.storage.meeting_classifier import classify_recording, format_classification
+            cls = classify_recording(rec_path, meta=meta)
+            if cls is not None and cls.confidence > 0.1:
+                lines.append(format_classification(cls))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Sentiment ---
         try:
             from meeting_recorder.storage.sentiment import analyze_recording_sentiment, format_sentiment
