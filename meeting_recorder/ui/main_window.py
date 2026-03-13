@@ -3833,6 +3833,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Energy Curve ---
+        try:
+            from meeting_recorder.storage.energy_curve import analyze_energy, format_energy_curve
+            curve = analyze_energy(rec_path)
+            if curve is not None:
+                lines.append(format_energy_curve(curve))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
