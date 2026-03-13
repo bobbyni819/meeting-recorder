@@ -2426,7 +2426,35 @@ class MainWindow:
                 self._window.after(2000, lambda: notes_btn.configure(
                     text="\U0001f4dd  Notes", fg=TEXT_DIM))
 
+        def _show_template_menu(event):
+            menu = tk.Menu(self._window, tearoff=0, bg=BG_PANEL, fg=TEXT_COLOR,
+                           activebackground=BLUE_ACCENT, activeforeground=TEXT_BRIGHT)
+            try:
+                from meeting_recorder.storage.note_templates import list_templates, render_template
+                for tmpl in list_templates():
+                    menu.add_command(
+                        label=f"{tmpl.name.title()} — {tmpl.description}",
+                        command=lambda t=tmpl.name: _copy_template(t),
+                    )
+            except Exception:
+                menu.add_command(label="Templates unavailable", state=tk.DISABLED)
+            menu.tk_popup(event.x_root, event.y_root)
+
+        def _copy_template(template_name: str):
+            try:
+                from meeting_recorder.storage.note_templates import render_template
+                text = render_template(template_name, rec_path, meta)
+                if text and self._window:
+                    self._window.clipboard_clear()
+                    self._window.clipboard_append(text)
+                    notes_btn.configure(text=f"\u2713  {template_name}!", fg=GREEN)
+                    self._window.after(2000, lambda: notes_btn.configure(
+                        text="\U0001f4dd  Notes", fg=TEXT_DIM))
+            except Exception:
+                logger.exception("Failed to render template %s", template_name)
+
         notes_btn.bind("<Button-1>", lambda e: _copy_meeting_notes())
+        notes_btn.bind("<Button-3>", _show_template_menu)
         notes_btn.bind("<Enter>", lambda e: notes_btn.configure(fg=TEXT_COLOR))
         notes_btn.bind("<Leave>", lambda e: notes_btn.configure(fg=TEXT_DIM))
 
