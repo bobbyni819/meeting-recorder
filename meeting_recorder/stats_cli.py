@@ -222,12 +222,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Show sentiment analysis across recent recordings",
     )
     parser.add_argument(
+        "--search", type=str, default="",
+        help="Search all transcripts for a keyword",
+    )
+    parser.add_argument(
+        "--balance", action="store_true",
+        help="Show talk-time balance analysis",
+    )
+    parser.add_argument(
         "--all", action="store_true",
         help="Show comprehensive report (stats + weekly + health + streaks + costs)",
     )
     args = parser.parse_args(argv)
 
     config = Config.load()
+
+    if args.search:
+        from meeting_recorder.storage.transcript_search import search_transcripts, format_search_results
+        hits = search_transcripts(config.output_dir, args.search, max_results=20)
+        print(format_search_results(hits, args.search))
+        return 0
+
+    if args.balance:
+        from meeting_recorder.storage.talk_balance import analyze_talk_balance_report, format_talk_balance
+        report = analyze_talk_balance_report(config.output_dir, weeks=8)
+        print(format_talk_balance(report))
+        return 0
 
     if getattr(args, "all", False):
         sections = []
