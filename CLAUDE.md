@@ -16,6 +16,11 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/video/window_finder.py` — Win32 EnumWindows helpers
 - `meeting_recorder/ui/dashboard.py` — floating overlay (Tkinter GameBarDashboard)
 - `meeting_recorder/transcription/` — faster-whisper pipeline + pyannote diarization
+- `meeting_recorder/storage/action_items.py` — extract action items from transcripts
+- `meeting_recorder/storage/auto_tag.py` — topic-based tag suggestions
+- `meeting_recorder/storage/merge.py` — merge multiple recordings
+- `meeting_recorder/storage/comparison.py` — compare recordings, find similar ones
+- `meeting_recorder/storage/html_export.py` — self-contained HTML reports
 - `SETUP.md` — full install guide for a new Windows machine
 
 ## Audio pipeline
@@ -137,12 +142,21 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - **Diagnostics panel**: runs structured checks, shows pass/warn/fail with re-run button
 - **Import audio**: file dialog or tray menu, converts non-WAV formats
 - **Bulk operations**: Select mode in history, multi-select with checkboxes, action bar
-  (Delete/Export/Re-process/Select All), confirmation dialog for batch delete
+  (Delete/Export/Re-process/Merge/Compare/Select All), confirmation dialog for batch delete
+- **Recording merge**: combine 2+ selected recordings into one (transcripts, summaries, metadata)
+- **Recording comparison**: select 2 recordings to see attendee/topic/tag diff (copies to clipboard)
 - **Notes tab**: fourth tab in detail view for free-form notes (notes.md), auto-edit when empty
 - **Error banner**: failed recordings show red banner with error message and Retry button
 - **Play audio button**: opens mixed.wav/app_audio.wav/mic_audio.wav in system player
 - **Config export/import**: buttons in Settings > Storage tab for multi-machine portability
 - **Hotkeys tab**: all 4 global hotkeys editable in Settings, window shortcuts reference
+- **HTML export**: self-contained HTML reports with dark theme, speaker stats, action items
+- **Auto-tag suggestions**: topic-pattern matching + keyword extraction, wired into post-processing
+- **Action items**: auto-extracts commitments, assignments, directives from transcripts (Actions tab)
+- **Tag filter pills**: clickable tag pills above filter bar for quick filtering
+- **Weekly activity heatmap**: Mon-Sun colored strip showing recording frequency
+- **Similar recordings**: collapsible section in detail view showing related meetings
+- **Stats enhancements**: collaborator frequency, time-of-day, day-of-week, common tags
 
 ## Config validation
 - `Config.validate()` checks backend, provider, fps, vad threshold, retention values
