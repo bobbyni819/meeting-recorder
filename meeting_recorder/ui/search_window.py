@@ -76,6 +76,16 @@ class SearchWindow:
         self._date_to_var = tk.StringVar()
         ttk.Entry(filter_frame, textvariable=self._date_to_var, width=10).pack(side=tk.LEFT)
 
+        # Date shortcut buttons
+        date_shortcut_frame = ttk.Frame(self._window, padding=(10, 0, 10, 5))
+        date_shortcut_frame.pack(fill=tk.X)
+        ttk.Label(date_shortcut_frame, text="Quick:").pack(side=tk.LEFT, padx=(0, 5))
+        for label, days in [("Today", 0), ("Last 7 days", 7), ("Last 30 days", 30), ("All time", None)]:
+            ttk.Button(
+                date_shortcut_frame, text=label,
+                command=lambda d=days: self._set_date_range(d),
+            ).pack(side=tk.LEFT, padx=(0, 4))
+
         # Results treeview
         tree_frame = ttk.Frame(self._window, padding=10)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -218,6 +228,29 @@ class SearchWindow:
                 open_in_explorer(recording_dir)
             except Exception:
                 logger.exception("Failed to open folder: %s", recording_dir)
+
+    def _set_date_range(self, days: int | None) -> None:
+        """Set the From/To date fields and trigger a search.
+
+        Args:
+            days: Number of days back from today, or None for all time.
+        """
+        from datetime import date, timedelta
+        self._date_to_var.set("")
+        if days is None:
+            self._date_from_var.set("")
+        elif days == 0:
+            self._date_from_var.set(date.today().isoformat())
+        else:
+            start = date.today() - timedelta(days=days)
+            self._date_from_var.set(start.isoformat())
+        self._do_search() if any([
+            self._query_var.get().strip(),
+            self._speaker_var.get().strip(),
+            self._subject_var.get().strip(),
+            self._attendee_var.get().strip(),
+            self._date_from_var.get().strip(),
+        ]) else self._browse_all()
 
     def _close(self) -> None:
         """Close the search window."""

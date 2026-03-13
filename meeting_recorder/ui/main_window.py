@@ -150,6 +150,10 @@ class MainWindow:
         self._warning_label: Optional[tk.Label] = None
         self._warning_dismiss_id: Optional[str] = None
 
+        # Keyboard navigation for history
+        self._history_card_paths: list[Path] = []
+        self._selected_card_idx: int = -1
+
     def show(self) -> None:
         """Show the main window. Creates it in a dedicated thread if needed."""
         if self._window is not None:
@@ -423,6 +427,9 @@ class MainWindow:
         self._window.bind("<F5>", lambda e: self._refresh_history())
         self._window.bind("<Control-f>", lambda e: self._fire(self._on_search))
         self._window.bind("<Control-comma>", lambda e: self._fire(self._on_settings))
+        self._window.bind("<Up>", lambda e: self._nav_history(-1))
+        self._window.bind("<Down>", lambda e: self._nav_history(1))
+        self._window.bind("<Return>", lambda e: self._open_selected_card())
 
     def _build_header(self) -> None:
         header = tk.Frame(self._window, bg=BG_HEADER, height=52)
@@ -870,9 +877,7 @@ class MainWindow:
         self._auto_start = new_state
         self._apply_auto_start()
         if self._on_toggle_auto_start:
-            threading.Thread(
-                target=self._on_toggle_auto_start, args=(new_state,), daemon=True,
-            ).start()
+            self._fire(lambda: self._on_toggle_auto_start(new_state))
 
     def _set_elapsed(self, text: str) -> None:
         if self._elapsed_label:
@@ -887,7 +892,15 @@ class MainWindow:
             home = Path.home()
             usage = shutil.disk_usage(home)
             free_gb = usage.free / (1024 ** 3)
-            if free_gb < 1.0:
+            if free_gb < 0.1:
+                # Critical: auto-stop recording to prevent data loss
+                self._disk_label.configure(
+                    text="\u26a0 DISK FULL — stopping", fg=RED_DOT)
+                logger.error("Disk space critically low (%.0f MB) — auto-stopping recording",
+                             usage.free / (1024 ** 2))
+                self._fire(self._on_stop)
+                return
+            elif free_gb < 1.0:
                 free_mb = usage.free / (1024 ** 2)
                 self._disk_label.configure(
                     text=f"\u26a0 {free_mb:.0f} MB free", fg=RED_DOT)
@@ -1010,6 +1023,9 @@ class MainWindow:
         except Exception:
             recordings = []
 
+        self._history_card_paths = []
+        self._selected_card_idx = -1
+
         if not recordings:
             tk.Label(
                 self._history_frame, text="No recordings yet. Start your first recording!",
@@ -1057,6 +1073,7 @@ class MainWindow:
 
             if shown < 20:
                 self._build_history_card(rec_path)
+                self._history_card_paths.append(rec_path)
                 shown += 1
             total_duration += meta.get("duration_seconds", 0)
         self._update_stats_label(len(recordings), total_duration, failed_count)
@@ -1126,6 +1143,23 @@ class MainWindow:
                     status_icon = "\u26a0"  # interrupted
         except Exception:
             pass
+
+        # Thumbnail (if available)
+        thumb_path = rec_path / "thumbnail.jpg"
+        if thumb_path.exists():
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(thumb_path)
+                # Scale to 64px wide
+                tw = 64
+                th = int(img.height * tw / img.width) if img.width > 0 else 36
+                img = img.resize((tw, th))
+                photo = ImageTk.PhotoImage(img)
+                thumb_label = tk.Label(card, image=photo, bg=BG_CARD, bd=0)
+                thumb_label.image = photo  # prevent GC
+                thumb_label.pack(side=tk.LEFT, padx=(8, 0), pady=2)
+            except Exception:
+                pass
 
         # Layout: info on left, duration badge on right
         left = tk.Frame(card, bg=BG_CARD)
@@ -1224,6 +1258,82 @@ class MainWindow:
                 grandchild.bind("<Button-3>", _right_click)
                 if mw_handler:
                     grandchild.bind("<MouseWheel>", mw_handler)
+
+    # ------------------------------------------------------------------
+    # History keyboard navigation
+    # ------------------------------------------------------------------
+
+    def _nav_history(self, delta: int) -> None:
+        """Move selection up or down in history list."""
+        if self._is_recording or not self._history_card_paths:
+            return
+        if self._detail_frame and self._detail_frame.winfo_viewable():
+            return  # Don't navigate while viewing a detail
+        n = len(self._history_card_paths)
+        if self._selected_card_idx < 0:
+            new_idx = 0 if delta > 0 else n - 1
+        else:
+            new_idx = max(0, min(n - 1, self._selected_card_idx + delta))
+        self._select_card(new_idx)
+
+    def _select_card(self, idx: int) -> None:
+        """Visually select a history card by index."""
+        if not self._history_frame:
+            return
+        cards = [w for w in self._history_frame.winfo_children()
+                 if isinstance(w, tk.Frame)]
+        if not cards or idx < 0 or idx >= len(cards):
+            return
+        # Deselect old
+        if 0 <= self._selected_card_idx < len(cards):
+            old = cards[self._selected_card_idx]
+            old.configure(bg=BG_CARD)
+            for child in old.winfo_children():
+                child.configure(bg=BG_CARD)
+                for gc in child.winfo_children():
+                    gc.configure(bg=BG_CARD)
+        # Select new
+        self._selected_card_idx = idx
+        card = cards[idx]
+        card.configure(bg=BG_CARD_HOVER)
+        for child in card.winfo_children():
+            child.configure(bg=BG_CARD_HOVER)
+            for gc in child.winfo_children():
+                gc.configure(bg=BG_CARD_HOVER)
+        # Scroll to keep selected card visible
+        self._scroll_to_card(card)
+
+    def _scroll_to_card(self, card: tk.Frame) -> None:
+        """Scroll the history canvas so the given card is visible."""
+        canvas = getattr(self, "_history_canvas", None)
+        if not canvas or not self._history_frame:
+            return
+        self._history_frame.update_idletasks()
+        card_y = card.winfo_y()
+        card_h = card.winfo_height()
+        canvas_h = canvas.winfo_height()
+        # Get current scroll position in pixels
+        bbox = canvas.bbox("all")
+        if not bbox:
+            return
+        total_h = bbox[3] - bbox[1]
+        if total_h <= canvas_h:
+            return  # Everything fits, no scrolling needed
+        # Calculate desired scroll fraction
+        top = card_y / total_h
+        bottom = (card_y + card_h) / total_h
+        view_top, view_bottom = canvas.yview()
+        if top < view_top:
+            canvas.yview_moveto(top)
+        elif bottom > view_bottom:
+            canvas.yview_moveto(bottom - (canvas_h / total_h))
+
+    def _open_selected_card(self) -> None:
+        """Open the detail view for the currently selected history card."""
+        if (self._selected_card_idx >= 0
+                and self._selected_card_idx < len(self._history_card_paths)):
+            self._show_recording_detail(
+                self._history_card_paths[self._selected_card_idx])
 
     # ------------------------------------------------------------------
     # Recording detail view
@@ -1327,6 +1437,10 @@ class MainWindow:
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713  Copied!", fg=GREEN)
                 self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb  Copy", fg=TEXT_DIM))
+            elif self._window:
+                copy_btn.configure(text="No transcript yet", fg=AMBER)
+                self._window.after(2000, lambda: copy_btn.configure(
                     text="\U0001f4cb  Copy", fg=TEXT_DIM))
 
         copy_btn.bind("<Button-1>", lambda e: _copy_transcript())
@@ -1848,16 +1962,57 @@ class MainWindow:
 
     @classmethod
     def _load_geometry(cls) -> str:
-        """Load saved geometry, or return empty string."""
+        """Load saved geometry, or return empty string.
+
+        Validates that the saved position is at least partially on-screen
+        (e.g., after unplugging a monitor). Returns empty string if not.
+        """
         try:
             if cls._GEOMETRY_FILE.exists():
                 geo = cls._GEOMETRY_FILE.read_text(encoding="utf-8").strip()
                 # Basic validation: WxH+X+Y or WxH-X-Y patterns
                 if "x" in geo and ("+" in geo or "-" in geo):
-                    return geo
+                    return cls._validate_geometry_on_screen(geo)
         except Exception:
             pass
         return ""
+
+    @staticmethod
+    def _validate_geometry_on_screen(geo: str) -> str:
+        """Check if geometry position is on a visible monitor.
+
+        Returns the geometry string if valid, or just the size portion
+        (letting the WM place it) if the position is off-screen.
+        """
+        import re
+        m = re.match(r"(\d+)x(\d+)([+-]-?\d+)([+-]-?\d+)", geo)
+        if not m:
+            return geo
+        w, h = int(m.group(1)), int(m.group(2))
+        # Strip leading '+' before int() so '+-2000' parses as -2000
+        x = int(m.group(3).lstrip("+"))
+        y = int(m.group(4).lstrip("+"))
+
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # Get virtual screen bounds (spans all monitors)
+            virt_left = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            virt_top = user32.GetSystemMetrics(77)    # SM_YVIRTUALSCREEN
+            virt_w = user32.GetSystemMetrics(78)      # SM_CXVIRTUALSCREEN
+            virt_h = user32.GetSystemMetrics(79)      # SM_CYVIRTUALSCREEN
+            virt_right = virt_left + virt_w
+            virt_bottom = virt_top + virt_h
+
+            # Check if at least 100px of the window is on-screen
+            margin = 100
+            if (x + margin > virt_right or x + w < virt_left + margin
+                    or y + margin > virt_bottom or y < virt_top):
+                # Off-screen: return just the size, let WM place it
+                return f"{w}x{h}"
+        except Exception:
+            pass  # Not on Windows or ctypes unavailable — trust the geometry
+        return geo
 
     # ------------------------------------------------------------------
     # Window picker
@@ -2064,4 +2219,9 @@ class MainWindow:
     def _fire(self, callback) -> None:
         """Fire a callback in a background thread."""
         if callback:
-            threading.Thread(target=callback, daemon=True).start()
+            def _safe():
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("Callback %s failed", callback)
+            threading.Thread(target=_safe, daemon=True).start()

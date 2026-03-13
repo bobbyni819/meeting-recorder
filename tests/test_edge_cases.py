@@ -86,25 +86,29 @@ class TestConfigSaveAtomicity:
         else:
             import tomli as tomllib
 
-        config_file = tmp_path / "config.toml"
+        bundled = tmp_path / "config.toml"
+        secrets_file = tmp_path / "secrets.toml"
         with (
-            mock.patch("meeting_recorder.config.CONFIG_FILE", config_file),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
             mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
         ):
             cfg = Config()
             cfg.recording.user_name = "AtomicTest"
             cfg.save()
 
-        assert config_file.exists()
-        with open(config_file, "rb") as f:
+        assert bundled.exists()
+        with open(bundled, "rb") as f:
             data = tomllib.load(f)
         assert data["recording"]["user_name"] == "AtomicTest"
 
     def test_save_does_not_leave_tmp_file(self, tmp_path):
         """After save(), no .tmp file should remain."""
-        config_file = tmp_path / "config.toml"
+        bundled = tmp_path / "config.toml"
+        secrets_file = tmp_path / "secrets.toml"
         with (
-            mock.patch("meeting_recorder.config.CONFIG_FILE", config_file),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
             mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
         ):
             cfg = Config()
@@ -120,9 +124,11 @@ class TestConfigSaveAtomicity:
         else:
             import tomli as tomllib
 
-        config_file = tmp_path / "config.toml"
+        bundled = tmp_path / "config.toml"
+        secrets_file = tmp_path / "secrets.toml"
         with (
-            mock.patch("meeting_recorder.config.CONFIG_FILE", config_file),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
             mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
         ):
             cfg = Config()
@@ -131,7 +137,7 @@ class TestConfigSaveAtomicity:
             cfg.recording.user_name = "Second"
             cfg.save()
 
-        with open(config_file, "rb") as f:
+        with open(bundled, "rb") as f:
             data = tomllib.load(f)
         assert data["recording"]["user_name"] == "Second"
 

@@ -76,6 +76,7 @@ class MeetingRecorderApp:
         # Dashboard overlay
         self._dashboard: Optional[GameBarDashboard] = None
         self._capture_mode_reported: bool = False
+        self._health_warnings_shown: set[str] = set()
         self._preview_frame_counter: int = 0
         self._tray_update_counter: int = 0
 
@@ -141,6 +142,7 @@ class MeetingRecorderApp:
     def run(self) -> None:
         """Start the application. Blocks until quit."""
         logger.info("Meeting Recorder starting...")
+        self.config.validate()
         self._recording_store.ensure_base_dir()
 
         # Pre-load VAD model on the main thread before pystray blocks.
@@ -208,6 +210,7 @@ class MeetingRecorderApp:
             windows = list_visible_windows()
             if not windows:
                 logger.warning("No visible windows found for picker.")
+                notifications.notify_error("No visible windows found to record.")
                 return
             chosen = self._main_window.pick_window_for_recording(windows)
             if chosen is not None:
@@ -367,6 +370,7 @@ class MeetingRecorderApp:
             windows = list_visible_windows()
             if not windows:
                 logger.warning("No visible windows found for picker.")
+                notifications.notify_error("No visible windows found to record.")
                 return
             chosen = self._main_window.pick_window_for_recording(windows)
             if chosen is not None:
@@ -482,6 +486,7 @@ class MeetingRecorderApp:
             on_capture_mode_changed=self._on_capture_mode_changed,
         )
         self._capture_mode_reported = False
+        self._health_warnings_shown = set()
         self._preview_frame_counter = 0
         self._capture_manager.start()
 
@@ -548,6 +553,9 @@ class MeetingRecorderApp:
             self._current_metadata = None
             self._current_process = None
             self._recording_config = None
+
+        # Save a thumbnail from the last captured frame before stopping
+        self._save_thumbnail(capture_manager, recording_dir)
 
         capture_manager.stop()
 
@@ -637,7 +645,10 @@ class MeetingRecorderApp:
             app_wav = recording_dir / "app_audio.wav"
             if not _validate_wav(app_wav):
                 logger.warning("app_audio.wav is corrupt or empty — skipping transcription")
-                notifications.notify_error("App audio file is corrupt — transcription skipped")
+                notifications.notify_error(
+                    "App audio corrupt or empty — try re-recording. "
+                    "Right-click tray → Re-process to retry."
+                )
                 metadata.status = "error"
                 metadata.error_message = "App audio file corrupt or empty"
                 self._save_metadata(metadata, recording_dir)
@@ -807,6 +818,24 @@ class MeetingRecorderApp:
             logger.info("AI summary generated successfully.")
         except Exception:
             logger.exception("AI summary generation failed (non-fatal)")
+
+    @staticmethod
+    def _save_thumbnail(capture_manager: CaptureManager, recording_dir: Path) -> None:
+        """Save a thumbnail image from the last screen capture frame (non-fatal)."""
+        try:
+            frame = capture_manager.get_screen_frame()
+            if frame is None:
+                return
+            import cv2
+            thumb_h = 180
+            h, w = frame.shape[:2]
+            thumb_w = int(w * thumb_h / h) if h > 0 else 320
+            thumb = cv2.resize(frame, (thumb_w, thumb_h))
+            cv2.imwrite(str(recording_dir / "thumbnail.jpg"), thumb,
+                        [cv2.IMWRITE_JPEG_QUALITY, 80])
+            logger.info("Saved recording thumbnail.")
+        except Exception:
+            logger.debug("Failed to save thumbnail (non-fatal)", exc_info=True)
 
     def _sync_search_index(self) -> None:
         """Sync the search index with recordings on disk (background, non-fatal)."""
@@ -1005,7 +1034,15 @@ class MeetingRecorderApp:
                 self._dashboard = None
 
     def _on_health_warning(self, warning_key: str) -> None:
-        """Called when a capture issue is detected."""
+        """Called when a capture issue is detected.
+
+        Deduplicates: each warning_key fires its notification at most once
+        per recording session.  The UI banner always updates (cheap).
+        """
+        # Deduplicate notifications per recording session
+        already_shown = warning_key in self._health_warnings_shown
+        self._health_warnings_shown.add(warning_key)
+
         messages = {
             "system_volume_muted": "System volume is muted \u2014 desktop audio will be silent!",
             "app_audio_silent": "No audio detected for 10s \u2014 check volume or switch audio mode",
@@ -1016,10 +1053,14 @@ class MeetingRecorderApp:
         }
         msg = messages.get(warning_key, f"Warning: {warning_key} may have stalled")
         logger.warning("Health warning: %s", msg)
-        notifications.notify_info(msg)
-        if self._dashboard and self._dashboard.is_visible:
-            self._dashboard.update_transcript(f"[\u26a0 {msg}]")
-        self._main_window.update_transcript(f"[\u26a0 {msg}]")
+
+        if not already_shown:
+            notifications.notify_info(msg)
+            if self._dashboard and self._dashboard.is_visible:
+                self._dashboard.update_transcript(f"[\u26a0 {msg}]")
+            self._main_window.update_transcript(f"[\u26a0 {msg}]")
+
+        # Always update the warning banner (visible, cheap)
         self._main_window.show_warning(msg)
 
     def _on_capture_auto_stopped(self) -> None:

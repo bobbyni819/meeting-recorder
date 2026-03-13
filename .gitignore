@@ -79,5 +79,6 @@ recordings/
 *.mp4
 *.log
 config.local.toml
+secrets.toml
 google_credentials.json
 google_token.json

@@ -1,7 +1,11 @@
 """Config export/import for multi-machine setup.
 
-Export bundles the config and optional Google OAuth token into a single
-portable JSON file.  Import applies the bundle on a new machine.
+Export bundles the local secrets and optional Google OAuth token into a
+single portable JSON file.  Import applies the bundle on a new machine.
+
+Non-secret settings (model choices, FPS, features) live in the repo's
+``config.toml`` and sync via git — this tool only transfers secrets and
+machine-specific values that can't go in the repo.
 
 Usage:
     python -m meeting_recorder export-config [output_file]
@@ -22,7 +26,14 @@ else:
 
 import tomli_w
 
-from meeting_recorder.config import CONFIG_DIR, CONFIG_FILE
+from meeting_recorder.config import (
+    CONFIG_DIR,
+    CONFIG_FILE,
+    SECRETS_FILE,
+    BUNDLED_CONFIG,
+    _LOCAL_ONLY_FIELDS,
+    _deep_merge,
+)
 
 TOKEN_FILE = CONFIG_DIR / "google_token.json"
 
@@ -35,7 +46,7 @@ MACHINE_SPECIFIC = {
 
 
 def export_config(dest: str | None = None) -> int:
-    """Export config + optional Google token to a portable bundle file.
+    """Export secrets + optional Google token to a portable bundle file.
 
     Args:
         dest: Output file path. Defaults to ~/meeting_recorder_config.json.
@@ -43,18 +54,30 @@ def export_config(dest: str | None = None) -> int:
     Returns:
         0 on success, 1 on error.
     """
-    if not CONFIG_FILE.exists():
-        print(f"No config file found at {CONFIG_FILE}")
-        print("Run the app once first to generate a default config.")
+    # Gather secrets from secrets.toml (preferred) or legacy config.toml
+    secrets_data: dict = {}
+    if SECRETS_FILE.exists():
+        with open(SECRETS_FILE, "rb") as f:
+            secrets_data = tomllib.load(f)
+    elif CONFIG_FILE.exists():
+        # Legacy: extract secrets from old combined config
+        with open(CONFIG_FILE, "rb") as f:
+            full = tomllib.load(f)
+        for section, fields in _LOCAL_ONLY_FIELDS.items():
+            if section not in full:
+                continue
+            for key in fields:
+                val = full.get(section, {}).get(key)
+                if val and val not in ("", -1, 0):
+                    secrets_data.setdefault(section, {})[key] = val
+    else:
+        print("No secrets file found. Run the app once first.")
         return 1
 
-    with open(CONFIG_FILE, "rb") as f:
-        config_data = tomllib.load(f)
-
     bundle: dict = {
-        "version": 1,
+        "version": 2,
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "config": config_data,
+        "secrets": secrets_data,
     }
 
     # Include Google OAuth token if it exists
@@ -74,33 +97,33 @@ def export_config(dest: str | None = None) -> int:
     with open(dest_path, "w", encoding="utf-8") as f:
         json.dump(bundle, f, indent=2)
 
-    print(f"\nConfig exported to: {dest_path}")
+    print(f"\nSecrets exported to: {dest_path}")
     print(f"\nCopy this file to your other machine(s) and run:")
     print(f"  python -m meeting_recorder import-config {dest_path.name}")
 
     # Summarize what's included
-    sections = list(config_data.keys())
-    print(f"\nIncluded sections: {', '.join(sections)}")
-
     has_keys = []
-    if config_data.get("transcription", {}).get("gemini_api_key"):
+    if secrets_data.get("transcription", {}).get("gemini_api_key"):
         has_keys.append("Gemini")
-    if config_data.get("transcription", {}).get("openai_api_key"):
+    if secrets_data.get("transcription", {}).get("openai_api_key"):
         has_keys.append("OpenAI")
-    if config_data.get("diarization", {}).get("huggingface_token"):
+    if secrets_data.get("diarization", {}).get("huggingface_token"):
         has_keys.append("HuggingFace")
-    if config_data.get("summary", {}).get("api_key"):
+    if secrets_data.get("summary", {}).get("api_key"):
         has_keys.append("Summary API")
     if has_keys:
         print(f"API keys included: {', '.join(has_keys)}")
     if "google_token" in bundle:
         print("Google Drive: OAuth token included (no re-auth needed)")
 
+    print(f"\nNon-secret settings (models, FPS, features) sync via git.")
+    print(f"Just 'git pull' on the other machine for those.")
+
     return 0
 
 
 def import_config(source: str) -> int:
-    """Import config from a portable bundle file.
+    """Import secrets from a portable bundle file.
 
     Args:
         source: Path to the bundle JSON file.
@@ -120,30 +143,51 @@ def import_config(source: str) -> int:
         print(f"Invalid bundle file: {e}")
         return 1
 
-    if "config" not in bundle:
-        print("Invalid bundle: missing 'config' section.")
-        return 1
+    # Support both v1 (combined config) and v2 (secrets only) bundles
+    version = bundle.get("version", 1)
 
-    config_data = bundle["config"]
+    if version >= 2:
+        # v2: bundle contains only secrets
+        if "secrets" not in bundle:
+            print("Invalid bundle: missing 'secrets' section.")
+            return 1
+        secrets_data = bundle["secrets"]
+    else:
+        # v1 legacy: bundle contains full config, extract secrets
+        if "config" not in bundle:
+            print("Invalid bundle: missing 'config' section.")
+            return 1
+        config_data = bundle["config"]
+        secrets_data = {}
+        for section, fields in _LOCAL_ONLY_FIELDS.items():
+            if section not in config_data:
+                continue
+            for key in fields:
+                val = config_data.get(section, {}).get(key)
+                if val and val not in ("", -1, 0):
+                    secrets_data.setdefault(section, {})[key] = val
 
-    # Reset machine-specific fields to defaults
+    # Reset machine-specific fields (mic, dashboard position)
     for section, key in MACHINE_SPECIFIC:
-        if section in config_data and key in config_data[section]:
-            del config_data[section][key]
+        if section in secrets_data and key in secrets_data[section]:
+            del secrets_data[section][key]
+            # Clean up empty sections
+            if not secrets_data[section]:
+                del secrets_data[section]
 
-    # Check if config already exists
+    # Check if secrets file already exists
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if CONFIG_FILE.exists():
-        print(f"Existing config found at {CONFIG_FILE}")
+    if SECRETS_FILE.exists():
+        print(f"Existing secrets found at {SECRETS_FILE}")
         resp = input("Overwrite? [y/N] ").strip().lower()
         if resp != "y":
             print("Aborted.")
             return 0
 
-    # Write config
-    with open(CONFIG_FILE, "wb") as f:
-        tomli_w.dump(config_data, f)
-    print(f"Config written to: {CONFIG_FILE}")
+    # Write secrets
+    with open(SECRETS_FILE, "wb") as f:
+        tomli_w.dump(secrets_data, f)
+    print(f"Secrets written to: {SECRETS_FILE}")
 
     # Import Google token
     if "google_token" in bundle:
@@ -162,16 +206,25 @@ def import_config(source: str) -> int:
 
     # Print what was imported
     exported_at = bundle.get("exported_at", "unknown")
-    print(f"\nImported config exported at: {exported_at}")
+    print(f"\nImported secrets exported at: {exported_at}")
 
-    # Remind about machine-specific setup
+    # Summarize
+    has_keys = []
+    if secrets_data.get("transcription", {}).get("gemini_api_key"):
+        has_keys.append("Gemini")
+    if secrets_data.get("diarization", {}).get("huggingface_token"):
+        has_keys.append("HuggingFace")
+    if has_keys:
+        print(f"API keys imported: {', '.join(has_keys)}")
+
+    # Remind about next steps
     print("\nNext steps on this machine:")
-    print("  1. Check audio device: mic_device will use system default")
+    print("  1. git pull — to get the latest non-secret settings")
     print("  2. Check transcription.device matches your GPU (cuda/cpu)")
-    print("  3. First run will download ML models (~3GB for whisper large-v3)")
     if "google_token" not in bundle:
-        print("  4. Google Drive: first upload will open browser to authorize")
-    print(f"\n  Edit config: {CONFIG_FILE}")
+        print("  3. Google Drive: first upload will open browser to authorize")
+    print(f"\n  Secrets file: {SECRETS_FILE}")
+    print(f"  Repo config:  {BUNDLED_CONFIG}")
     print("  Verify setup: python -m meeting_recorder diagnose")
 
     return 0

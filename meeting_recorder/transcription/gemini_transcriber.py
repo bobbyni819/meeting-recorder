@@ -109,12 +109,8 @@ class GeminiTranscriber:
                 "Try again or check the Gemini API status."
             )
 
-        logger.info("File active. Transcribing with %s…", self.model)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=[uploaded, _TRANSCRIPTION_PROMPT],
-        )
-        raw_text = response.text
+        # Transcribe with retries for transient API errors
+        raw_text = self._transcribe_with_retry(client, uploaded)
 
         logger.info("Transcript received: %d chars", len(raw_text))
 
@@ -130,6 +126,48 @@ class GeminiTranscriber:
             logger.debug("Could not delete uploaded Gemini file (non-fatal)")
 
         return self._parse(raw_text)
+
+    def _transcribe_with_retry(self, client, uploaded, max_retries: int = 3):
+        """Call Gemini generate_content with retries for transient errors.
+
+        Retries on rate-limit (429), server errors (5xx), and network
+        issues.  Raises the final error if all attempts fail.
+        """
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(
+                    "Transcribing with %s (attempt %d/%d)…",
+                    self.model, attempt, max_retries,
+                )
+                response = client.models.generate_content(
+                    model=self.model,
+                    contents=[uploaded, _TRANSCRIPTION_PROMPT],
+                )
+                return response.text
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                # Retry on rate-limit, server errors, and network issues
+                retryable = any(k in err_str for k in (
+                    "429", "500", "502", "503", "resource exhausted",
+                    "rate limit", "timeout", "connection",
+                    "deadline exceeded", "unavailable",
+                ))
+                if not retryable or attempt == max_retries:
+                    logger.error(
+                        "Gemini transcription failed (attempt %d/%d): %s",
+                        attempt, max_retries, e,
+                    )
+                    raise
+                wait = 2 ** attempt  # 2s, 4s, 8s
+                logger.warning(
+                    "Gemini API error (attempt %d/%d), retrying in %ds: %s",
+                    attempt, max_retries, wait, e,
+                )
+                time.sleep(wait)
+
+        raise last_error  # unreachable, but satisfies type checkers
 
     # ------------------------------------------------------------------
     # Compression

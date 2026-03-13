@@ -7,7 +7,7 @@ Runs as a Windows system-tray app (`launch.pyw`).
 
 ## Key files
 - `meeting_recorder/app.py` — top-level orchestrator (tray, hotkeys, recording lifecycle)
-- `meeting_recorder/config.py` — all settings; config file lives at `~/.meeting_recorder/config.toml`
+- `meeting_recorder/config.py` — all settings; split config (see below)
 - `meeting_recorder/audio/capture_manager.py` — coordinates app audio + mic + screen capture threads
 - `meeting_recorder/audio/app_audio.py` — per-process audio via ProcTap (WASAPI loopback)
 - `meeting_recorder/audio/mic_audio.py` — mic capture via PyAudioWPatch + Silero VAD
@@ -103,6 +103,24 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Runs at app startup and after each post-processing completes
 - Never deletes the active recording directory (`exclude` parameter)
 - Disabled by default — user must set `retention.enabled = true`
+
+## Config validation
+- `Config.validate()` checks backend, provider, fps, vad threshold, retention values
+- Logs warnings for invalid values; does not raise
+- Called automatically in `MeetingRecorderApp.run()` at startup
+
+## Split config (multi-machine sync)
+Config is split into two layers so non-secret settings sync via git:
+- **`config.toml`** (repo root, git-tracked) — model choices, FPS, features, all non-secret settings
+- **`~/.meeting_recorder/secrets.toml`** (local only, git-ignored) — API keys, tokens, mic device, dashboard position
+
+`Config.load()` reads bundled config first, then overlays secrets.toml.
+`Config.save()` splits: secrets → secrets.toml, everything else → repo config.toml.
+On first run after upgrade, auto-migrates from legacy `~/.meeting_recorder/config.toml` → split files.
+
+Secret/local fields: `transcription.openai_api_key`, `transcription.gemini_api_key`,
+`diarization.huggingface_token`, `summary.api_key`, `audio.mic_device`,
+`dashboard.position_x`, `dashboard.position_y`.
 
 ## Config defaults (current)
 - `recording.auto_start = false` (manual window picker; auto-detect available via toggle)

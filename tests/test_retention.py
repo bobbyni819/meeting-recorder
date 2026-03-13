@@ -189,16 +189,25 @@ class TestRetentionConfig:
         config.retention.max_age_days = 60
         config.retention.max_total_gb = 25.0
 
-        tmp = Path(tempfile.mktemp(suffix=".toml"))
+        tmp_dir = Path(tempfile.mkdtemp())
         try:
-            orig_file = cfg_mod.CONFIG_FILE
-            cfg_mod.CONFIG_FILE = tmp
+            orig_bundled = cfg_mod.BUNDLED_CONFIG
+            orig_secrets = cfg_mod.SECRETS_FILE
+            orig_config = cfg_mod.CONFIG_FILE
+            orig_dir = cfg_mod.CONFIG_DIR
+            cfg_mod.BUNDLED_CONFIG = tmp_dir / "config.toml"
+            cfg_mod.SECRETS_FILE = tmp_dir / "secrets.toml"
+            cfg_mod.CONFIG_FILE = tmp_dir / "legacy.toml"
+            cfg_mod.CONFIG_DIR = tmp_dir
             config.save()
             loaded = Config.load()
             assert loaded.retention.enabled is True
             assert loaded.retention.max_age_days == 60
             assert loaded.retention.max_total_gb == 25.0
         finally:
-            cfg_mod.CONFIG_FILE = orig_file
-            if tmp.exists():
-                tmp.unlink()
+            cfg_mod.BUNDLED_CONFIG = orig_bundled
+            cfg_mod.SECRETS_FILE = orig_secrets
+            cfg_mod.CONFIG_FILE = orig_config
+            cfg_mod.CONFIG_DIR = orig_dir
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -762,6 +762,20 @@ class SettingsWindow:
     def _save(self) -> None:
         """Save settings and close."""
         try:
+            # Validate numeric ranges
+            fps = self._screen_fps_var.get()
+            if fps < 1 or fps > 120:
+                messagebox.showwarning("Invalid Setting", "FPS must be between 1 and 120.")
+                return
+            age = self._retention_age_var.get()
+            if age < 0:
+                messagebox.showwarning("Invalid Setting", "Max age days cannot be negative.")
+                return
+            size = self._retention_size_var.get()
+            if size < 0:
+                messagebox.showwarning("Invalid Setting", "Max total GB cannot be negative.")
+                return
+
             self.config.recording.output_dir = self._output_dir_var.get()
             self.config.recording.language = self._language_var.get()
             self.config.recording.user_name = self._user_name_var.get()

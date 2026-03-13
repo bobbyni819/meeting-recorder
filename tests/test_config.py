@@ -27,6 +27,10 @@ from meeting_recorder.config import (
     ScreenRecordingConfig,
     CONFIG_DIR,
     CONFIG_FILE,
+    SECRETS_FILE,
+    BUNDLED_CONFIG,
+    _deep_merge,
+    _split_secrets,
 )
 
 
@@ -176,59 +180,277 @@ class TestConfigFromDict:
 
 
 # ---------------------------------------------------------------------------
-# Load from TOML file
+# Split config helpers
 # ---------------------------------------------------------------------------
 
-class TestConfigLoadSave:
-    """Test loading from and saving to TOML files."""
+class TestDeepMerge:
+    """Test _deep_merge helper."""
 
-    def test_load_from_file(self, sample_config_toml: Path):
-        """Load a TOML file and verify parsed values."""
-        # Patch CONFIG_FILE to point to our test file
-        with mock.patch("meeting_recorder.config.CONFIG_FILE", sample_config_toml):
+    def test_merge_disjoint(self):
+        base = {"a": 1}
+        _deep_merge(base, {"b": 2})
+        assert base == {"a": 1, "b": 2}
+
+    def test_merge_overlapping(self):
+        base = {"a": {"x": 1, "y": 2}}
+        _deep_merge(base, {"a": {"y": 99, "z": 3}})
+        assert base == {"a": {"x": 1, "y": 99, "z": 3}}
+
+    def test_merge_non_dict_replaces(self):
+        base = {"a": 1}
+        _deep_merge(base, {"a": "replaced"})
+        assert base == {"a": "replaced"}
+
+
+class TestSplitSecrets:
+    """Test _split_secrets extraction."""
+
+    def test_extracts_api_keys(self):
+        data = {
+            "transcription": {"backend": "gemini", "gemini_api_key": "sk-123"},
+            "diarization": {"huggingface_token": "hf-tok"},
+        }
+        secrets = _split_secrets(data)
+        # Secrets extracted
+        assert secrets["transcription"]["gemini_api_key"] == "sk-123"
+        assert secrets["diarization"]["huggingface_token"] == "hf-tok"
+        # Data has defaults in place
+        assert data["transcription"]["gemini_api_key"] == ""
+        assert data["diarization"]["huggingface_token"] == ""
+        # Non-secret field preserved
+        assert data["transcription"]["backend"] == "gemini"
+
+    def test_empty_secrets_not_extracted(self):
+        data = {
+            "transcription": {"openai_api_key": "", "gemini_api_key": ""},
+        }
+        secrets = _split_secrets(data)
+        assert secrets == {}
+
+    def test_dashboard_position_extracted(self):
+        data = {"dashboard": {"position_x": 500, "position_y": 200, "opacity": 0.9}}
+        secrets = _split_secrets(data)
+        assert secrets["dashboard"]["position_x"] == 500
+        assert data["dashboard"]["position_x"] == -1  # reset to default
+        assert data["dashboard"]["opacity"] == 0.9  # non-local field preserved
+
+    def test_mic_device_extracted(self):
+        data = {"audio": {"sample_rate": 16000, "mic_device": "hw:1"}}
+        secrets = _split_secrets(data)
+        assert secrets["audio"]["mic_device"] == "hw:1"
+        assert data["audio"]["mic_device"] == ""
+        assert data["audio"]["sample_rate"] == 16000
+
+
+# ---------------------------------------------------------------------------
+# Load from split config
+# ---------------------------------------------------------------------------
+
+class TestConfigLoadSplit:
+    """Test loading from bundled config + secrets overlay."""
+
+    def test_load_from_bundled_config(self, tmp_path: Path):
+        """Load from bundled config.toml (no secrets)."""
+        bundled = tmp_path / "repo" / "config.toml"
+        bundled.parent.mkdir()
+        bundled_data = {"recording": {"user_name": "RepoUser"}, "screen_recording": {"fps": 15.0}}
+        with open(bundled, "wb") as f:
+            tomli_w.dump(bundled_data, f)
+
+        secrets_file = tmp_path / "secrets.toml"
+        config_file = tmp_path / "config.toml"  # legacy (doesn't exist)
+
+        with (
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.CONFIG_FILE", config_file),
+        ):
             cfg = Config.load()
 
-        assert cfg.recording.user_name == "TestUser"
-        assert cfg.transcription.model_size == "tiny"
-        assert cfg.transcription.device == "cpu"
-        assert cfg.diarization.enabled is False
-        assert cfg.screen_recording.enabled is True
+        assert cfg.recording.user_name == "RepoUser"
+        assert cfg.screen_recording.fps == 15.0
 
-    def test_load_missing_file_returns_defaults(self, tmp_path: Path):
-        """When the config file does not exist and no bundled config, return defaults."""
-        fake_file = tmp_path / "does_not_exist.toml"
-        fake_dir = tmp_path / "fake_config_dir"
+    def test_load_merges_secrets(self, tmp_path: Path):
+        """Secrets overlay on top of bundled config."""
+        bundled = tmp_path / "config.toml"
+        with open(bundled, "wb") as f:
+            tomli_w.dump({
+                "transcription": {"backend": "gemini", "gemini_api_key": ""},
+                "recording": {"user_name": "RepoUser"},
+            }, f)
+
+        secrets_file = tmp_path / "secrets.toml"
+        with open(secrets_file, "wb") as f:
+            tomli_w.dump({
+                "transcription": {"gemini_api_key": "sk-secret"},
+                "audio": {"mic_device": "hw:2"},
+            }, f)
+
         with (
-            mock.patch("meeting_recorder.config.CONFIG_FILE", fake_file),
-            mock.patch("meeting_recorder.config.CONFIG_DIR", fake_dir),
-            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", tmp_path / "no_bundled.toml"),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.CONFIG_FILE", tmp_path / "no_legacy.toml"),
+        ):
+            cfg = Config.load()
+
+        assert cfg.transcription.backend == "gemini"
+        assert cfg.transcription.gemini_api_key == "sk-secret"
+        assert cfg.audio.mic_device == "hw:2"
+        assert cfg.recording.user_name == "RepoUser"
+
+    def test_load_no_files_returns_defaults(self, tmp_path: Path):
+        """When no config files exist, return defaults."""
+        with (
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", tmp_path / "nope.toml"),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", tmp_path / "nope_secrets.toml"),
+            mock.patch("meeting_recorder.config.CONFIG_FILE", tmp_path / "nope_legacy.toml"),
         ):
             cfg = Config.load()
         assert cfg.recording.output_dir == "~/MeetingRecordings"
 
-    def test_save_and_reload(self, tmp_path: Path):
-        """Save a config and reload it, verifying round-trip fidelity."""
-        config_file = tmp_path / "config.toml"
-        config_dir = tmp_path
 
-        cfg = Config()
-        cfg.recording.user_name = "RoundTrip"
-        cfg.screen_recording.fps = 8.0
-        cfg.transcription.backend = "cloud"
+# ---------------------------------------------------------------------------
+# Legacy migration
+# ---------------------------------------------------------------------------
+
+class TestConfigMigration:
+    """Test migration from legacy single-file config to split config."""
+
+    def test_migration_creates_secrets_file(self, tmp_path: Path):
+        """Legacy config.toml with API keys migrates to secrets.toml."""
+        legacy = tmp_path / "config.toml"
+        with open(legacy, "wb") as f:
+            tomli_w.dump({
+                "transcription": {"backend": "gemini", "gemini_api_key": "sk-123"},
+                "diarization": {"huggingface_token": "hf-tok", "enabled": True},
+                "recording": {"user_name": "TestUser"},
+            }, f)
+
+        secrets_file = tmp_path / "secrets.toml"
+        bundled = tmp_path / "bundled_config.toml"
+        # Create a pre-existing bundled config
+        with open(bundled, "wb") as f:
+            tomli_w.dump({"recording": {"user_name": "OldDefault"}}, f)
 
         with (
-            mock.patch("meeting_recorder.config.CONFIG_FILE", config_file),
-            mock.patch("meeting_recorder.config.CONFIG_DIR", config_dir),
+            mock.patch("meeting_recorder.config.CONFIG_FILE", legacy),
+            mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+        ):
+            Config.load()
+
+        # Secrets file created
+        assert secrets_file.exists()
+        with open(secrets_file, "rb") as f:
+            secrets = tomllib.load(f)
+        assert secrets["transcription"]["gemini_api_key"] == "sk-123"
+        assert secrets["diarization"]["huggingface_token"] == "hf-tok"
+
+        # Bundled config updated with non-secret settings
+        with open(bundled, "rb") as f:
+            repo_data = tomllib.load(f)
+        assert repo_data["recording"]["user_name"] == "TestUser"
+        # API keys replaced with empty defaults in repo config
+        assert repo_data["transcription"]["gemini_api_key"] == ""
+
+        # Legacy config backed up
+        assert not legacy.exists()
+        assert (tmp_path / "config.toml.bak").exists()
+
+    def test_no_migration_when_secrets_exists(self, tmp_path: Path):
+        """If secrets.toml exists, legacy config.toml is ignored."""
+        legacy = tmp_path / "config.toml"
+        with open(legacy, "wb") as f:
+            tomli_w.dump({"transcription": {"gemini_api_key": "old-key"}}, f)
+
+        secrets_file = tmp_path / "secrets.toml"
+        with open(secrets_file, "wb") as f:
+            tomli_w.dump({"transcription": {"gemini_api_key": "new-key"}}, f)
+
+        bundled = tmp_path / "bundled.toml"
+        with open(bundled, "wb") as f:
+            tomli_w.dump({"recording": {"user_name": "A"}}, f)
+
+        with (
+            mock.patch("meeting_recorder.config.CONFIG_FILE", legacy),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+        ):
+            cfg = Config.load()
+
+        # Uses secrets.toml, not legacy
+        assert cfg.transcription.gemini_api_key == "new-key"
+        # Legacy file untouched
+        assert legacy.exists()
+
+
+# ---------------------------------------------------------------------------
+# Save (split write)
+# ---------------------------------------------------------------------------
+
+class TestConfigSave:
+    """Test Config.save() writes to repo config and secrets file."""
+
+    def test_save_splits_secrets(self, tmp_path: Path):
+        """Save writes non-secret to bundled config, secrets to secrets.toml."""
+        bundled = tmp_path / "config.toml"
+        secrets_file = tmp_path / "secrets.toml"
+
+        cfg = Config()
+        cfg.recording.user_name = "SaveTest"
+        cfg.transcription.gemini_api_key = "sk-save-test"
+        cfg.screen_recording.fps = 20.0
+
+        with (
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
         ):
             cfg.save()
 
-        # Reload
-        with open(config_file, "rb") as f:
-            data = tomllib.load(f)
+        # Bundled config has non-secret values, API keys are empty
+        with open(bundled, "rb") as f:
+            repo_data = tomllib.load(f)
+        assert repo_data["recording"]["user_name"] == "SaveTest"
+        assert repo_data["screen_recording"]["fps"] == 20.0
+        assert repo_data["transcription"]["gemini_api_key"] == ""
 
-        assert data["recording"]["user_name"] == "RoundTrip"
-        assert data["screen_recording"]["fps"] == 8.0
-        assert data["transcription"]["backend"] == "cloud"
+        # Secrets file has the API key
+        with open(secrets_file, "rb") as f:
+            secrets = tomllib.load(f)
+        assert secrets["transcription"]["gemini_api_key"] == "sk-save-test"
+
+    def test_save_and_reload_roundtrip(self, tmp_path: Path):
+        """Save then load preserves all values."""
+        bundled = tmp_path / "config.toml"
+        secrets_file = tmp_path / "secrets.toml"
+
+        cfg = Config()
+        cfg.recording.user_name = "RoundTrip"
+        cfg.transcription.backend = "gemini"
+        cfg.transcription.gemini_api_key = "sk-round"
+        cfg.diarization.huggingface_token = "hf-round"
+        cfg.screen_recording.fps = 8.0
+        cfg.audio.mic_device = "hw:3"
+
+        patches = (
+            mock.patch("meeting_recorder.config.BUNDLED_CONFIG", bundled),
+            mock.patch("meeting_recorder.config.SECRETS_FILE", secrets_file),
+            mock.patch("meeting_recorder.config.CONFIG_DIR", tmp_path),
+            mock.patch("meeting_recorder.config.CONFIG_FILE", tmp_path / "no_legacy.toml"),
+        )
+
+        with patches[0], patches[1], patches[2], patches[3]:
+            cfg.save()
+            loaded = Config.load()
+
+        assert loaded.recording.user_name == "RoundTrip"
+        assert loaded.transcription.backend == "gemini"
+        assert loaded.transcription.gemini_api_key == "sk-round"
+        assert loaded.diarization.huggingface_token == "hf-round"
+        assert loaded.screen_recording.fps == 8.0
+        assert loaded.audio.mic_device == "hw:3"
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +470,42 @@ class TestConfigOutputDir:
         cfg = Config()
         cfg.recording.output_dir = "/tmp/my_recordings"
         assert cfg.output_dir == Path("/tmp/my_recordings")
+
+
+class TestConfigValidation:
+    def test_valid_config_no_warnings(self):
+        cfg = Config()
+        assert cfg.validate() == []
+
+    def test_invalid_backend_warns(self):
+        cfg = Config()
+        cfg.transcription.backend = "invalid"
+        warnings = cfg.validate()
+        assert len(warnings) == 1
+        assert "backend" in warnings[0]
+
+    def test_invalid_summary_provider_warns(self):
+        cfg = Config()
+        cfg.summary.enabled = True
+        cfg.summary.provider = "bad"
+        warnings = cfg.validate()
+        assert any("provider" in w for w in warnings)
+
+    def test_invalid_fps_warns(self):
+        cfg = Config()
+        cfg.screen_recording.fps = -5
+        warnings = cfg.validate()
+        assert any("fps" in w for w in warnings)
+
+    def test_invalid_vad_threshold_warns(self):
+        cfg = Config()
+        cfg.vad.threshold = 2.0
+        warnings = cfg.validate()
+        assert any("vad" in w.lower() or "threshold" in w for w in warnings)
+
+    def test_multiple_issues(self):
+        cfg = Config()
+        cfg.transcription.backend = "bad"
+        cfg.screen_recording.fps = 0
+        warnings = cfg.validate()
+        assert len(warnings) >= 2

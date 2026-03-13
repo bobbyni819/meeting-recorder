@@ -1,7 +1,19 @@
-"""Configuration management for Meeting Recorder."""
+"""Configuration management for Meeting Recorder.
+
+Config is split into two layers:
+- **Bundled config** (``config.toml`` in the repo) — non-secret settings
+  that sync across machines via git (model choices, FPS, features, etc.).
+- **Local secrets** (``~/.meeting_recorder/secrets.toml``) — API keys,
+  tokens, and machine-specific settings that never leave the machine.
+
+On load, the bundled config is read first, then local secrets are overlaid.
+On save, secrets are extracted and written to the local file while
+everything else goes back to the repo's config.toml.
+"""
 
 from __future__ import annotations
 
+import logging
 import sys
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -15,16 +27,59 @@ else:
 
 import tomli_w
 
+_logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / ".meeting_recorder"
-CONFIG_FILE = CONFIG_DIR / "config.toml"
+CONFIG_FILE = CONFIG_DIR / "config.toml"  # legacy — kept for migration
+SECRETS_FILE = CONFIG_DIR / "secrets.toml"
 BUNDLED_CONFIG = Path(__file__).parent.parent / "config.toml"
+
+# Fields that stay local (secrets + machine-specific hardware).
+# These are stripped from the repo config and written to secrets.toml.
+# Structure: {section_name: {field_name: default_value, ...}}
+_LOCAL_ONLY_FIELDS: dict[str, dict[str, object]] = {
+    "transcription": {"openai_api_key": "", "gemini_api_key": ""},
+    "diarization": {"huggingface_token": ""},
+    "summary": {"api_key": ""},
+    "audio": {"mic_device": ""},
+    "dashboard": {"position_x": -1, "position_y": -1},
+}
 
 
 def _safe_init(cls, data: dict, section: str):
     """Create a dataclass instance from a dict, ignoring unknown keys."""
     raw = data.get(section, {})
     return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
+
+
+def _deep_merge(base: dict, overlay: dict) -> None:
+    """Merge *overlay* into *base* in-place (one level deep for TOML sections)."""
+    for key, value in overlay.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+
+
+def _split_secrets(data: dict) -> dict:
+    """Extract local-only fields from *data* (in-place) and return them.
+
+    Replaces secret/local values in *data* with their empty defaults so the
+    repo config retains the field names for discoverability.  Returns a dict
+    containing only the non-default secret/local values.
+    """
+    secrets: dict = {}
+    for section, fields in _LOCAL_ONLY_FIELDS.items():
+        if section not in data:
+            continue
+        for key, default_val in fields.items():
+            if key not in data[section]:
+                continue
+            actual_val = data[section][key]
+            if actual_val != default_val:
+                secrets.setdefault(section, {})[key] = actual_val
+            data[section][key] = default_val
+    return secrets
 
 
 @dataclass
@@ -150,23 +205,73 @@ class Config:
 
     @classmethod
     def load(cls) -> Config:
-        """Load config from user config file, falling back to defaults."""
-        if not CONFIG_FILE.exists():
-            cls._init_config_dir()
+        """Load config: bundled repo config + local secrets overlay.
 
-        if CONFIG_FILE.exists():
-            with open(CONFIG_FILE, "rb") as f:
+        Load order:
+        1. Read ``config.toml`` from the repo (non-secret settings).
+        2. Overlay ``~/.meeting_recorder/secrets.toml`` (API keys, tokens,
+           machine-specific values).
+
+        On first run after upgrade, automatically migrates secrets from the
+        legacy single-file ``~/.meeting_recorder/config.toml``.
+        """
+        # One-time migration from legacy single-file config
+        if not SECRETS_FILE.exists() and CONFIG_FILE.exists():
+            cls._migrate_to_split_config()
+
+        # Read non-secret config from repo
+        data: dict = {}
+        if BUNDLED_CONFIG.exists():
+            with open(BUNDLED_CONFIG, "rb") as f:
                 data = tomllib.load(f)
-            return cls._from_dict(data)
 
-        return cls()
+        # Overlay local secrets + machine-specific settings
+        if SECRETS_FILE.exists():
+            with open(SECRETS_FILE, "rb") as f:
+                secrets = tomllib.load(f)
+            _deep_merge(data, secrets)
+
+        return cls._from_dict(data) if data else cls()
 
     @classmethod
-    def _init_config_dir(cls) -> None:
-        """Create config directory and copy default config."""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        if BUNDLED_CONFIG.exists():
-            shutil.copy2(BUNDLED_CONFIG, CONFIG_FILE)
+    def _migrate_to_split_config(cls) -> None:
+        """Migrate legacy ``~/.meeting_recorder/config.toml`` to split config.
+
+        Extracts secrets/local fields into ``secrets.toml`` and writes
+        the remaining non-secret settings to the bundled ``config.toml``
+        so they sync via git.  Renames the old file to ``config.toml.bak``.
+        """
+        try:
+            with open(CONFIG_FILE, "rb") as f:
+                data = tomllib.load(f)
+
+            secrets = _split_secrets(data)
+
+            # Write secrets to local file
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _atomic_write(SECRETS_FILE, secrets)
+            _logger.info("Migrated secrets to %s", SECRETS_FILE)
+
+            # Update bundled config with user's non-secret settings
+            if BUNDLED_CONFIG.exists():
+                try:
+                    _atomic_write(BUNDLED_CONFIG, data)
+                    _logger.info("Updated repo config: %s", BUNDLED_CONFIG)
+                except OSError:
+                    _logger.debug(
+                        "Could not update bundled config (read-only install?)",
+                        exc_info=True,
+                    )
+
+            # Rename old config so migration doesn't re-run
+            backup = CONFIG_FILE.with_suffix(".toml.bak")
+            CONFIG_FILE.rename(backup)
+            _logger.info("Legacy config backed up to %s", backup)
+
+        except Exception:
+            _logger.exception(
+                "Config migration failed (non-fatal, will retry next launch)"
+            )
 
     @classmethod
     def _from_dict(cls, data: dict) -> Config:
@@ -188,19 +293,79 @@ class Config:
         )
 
     def save(self) -> None:
-        """Save current config to file.
+        """Save config: non-secret settings to repo, secrets to local file.
 
-        Uses atomic write (write to temp file then rename) to prevent
+        Uses atomic writes (write to temp file then rename) to prevent
         corruption if the process crashes during the write.
         """
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
-        tmp_path = CONFIG_FILE.with_suffix(".toml.tmp")
-        with open(tmp_path, "wb") as f:
-            tomli_w.dump(data, f)
-        tmp_path.replace(CONFIG_FILE)  # atomic on NTFS
+        secrets = _split_secrets(data)
+
+        # Write non-secret config to repo file
+        if BUNDLED_CONFIG.parent.exists():
+            try:
+                _atomic_write(BUNDLED_CONFIG, data)
+            except OSError:
+                _logger.debug(
+                    "Could not update bundled config (read-only?)", exc_info=True
+                )
+
+        # Write secrets to local file
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(SECRETS_FILE, secrets)
+
+    def validate(self) -> list[str]:
+        """Validate config values, returning a list of warning messages.
+
+        Does not raise — just logs warnings for invalid values so the user
+        can fix them before hitting runtime errors.
+        """
+        warnings: list[str] = []
+
+        valid_backends = {"local", "cloud", "gemini"}
+        if self.transcription.backend not in valid_backends:
+            warnings.append(
+                f"transcription.backend = '{self.transcription.backend}' "
+                f"is not valid (expected one of: {', '.join(sorted(valid_backends))})"
+            )
+
+        valid_providers = {"openai", "anthropic", "gemini"}
+        if self.summary.enabled and self.summary.provider not in valid_providers:
+            warnings.append(
+                f"summary.provider = '{self.summary.provider}' "
+                f"is not valid (expected one of: {', '.join(sorted(valid_providers))})"
+            )
+
+        if self.screen_recording.fps <= 0 or self.screen_recording.fps > 120:
+            warnings.append(
+                f"screen_recording.fps = {self.screen_recording.fps} "
+                f"is out of range (expected 1-120)"
+            )
+
+        if self.retention.enabled and self.retention.max_age_days < 0:
+            warnings.append(
+                f"retention.max_age_days = {self.retention.max_age_days} "
+                f"must be >= 0"
+            )
+
+        if self.vad.threshold < 0 or self.vad.threshold > 1:
+            warnings.append(
+                f"vad.threshold = {self.vad.threshold} must be between 0.0 and 1.0"
+            )
+
+        for w in warnings:
+            _logger.warning("Config validation: %s", w)
+        return warnings
 
     @property
     def output_dir(self) -> Path:
         """Get resolved output directory path."""
         return Path(self.recording.output_dir).expanduser()
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    """Write *data* as TOML to *path* atomically (temp + rename)."""
+    tmp = path.with_suffix(".toml.tmp")
+    with open(tmp, "wb") as f:
+        tomli_w.dump(data, f)
+    tmp.replace(path)

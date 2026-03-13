@@ -328,3 +328,96 @@ class TestGeminiTranscriberInit:
     def test_custom_model(self):
         t = GeminiTranscriber(api_key="test-key", model="gemini-2.5-pro")
         assert t.model == "gemini-2.5-pro"
+
+
+# ---------------------------------------------------------------------------
+# Retry logic tests
+# ---------------------------------------------------------------------------
+
+class TestGeminiRetry:
+    """Test _transcribe_with_retry for transient error handling."""
+
+    def test_succeeds_on_first_try(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+        client.models.generate_content.return_value = MagicMock(text="[00:00] A: Hi")
+
+        result = transcriber._transcribe_with_retry(client, uploaded)
+        assert result == "[00:00] A: Hi"
+        assert client.models.generate_content.call_count == 1
+
+    def test_retries_on_rate_limit(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+
+        # First call raises rate limit, second succeeds
+        client.models.generate_content.side_effect = [
+            Exception("429 Resource exhausted"),
+            MagicMock(text="[00:00] A: Hi"),
+        ]
+
+        with patch("time.sleep"):
+            result = transcriber._transcribe_with_retry(client, uploaded)
+
+        assert result == "[00:00] A: Hi"
+        assert client.models.generate_content.call_count == 2
+
+    def test_retries_on_server_error(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+
+        client.models.generate_content.side_effect = [
+            Exception("503 Service Unavailable"),
+            Exception("502 Bad Gateway"),
+            MagicMock(text="[00:00] A: Done"),
+        ]
+
+        with patch("time.sleep"):
+            result = transcriber._transcribe_with_retry(client, uploaded, max_retries=3)
+
+        assert result == "[00:00] A: Done"
+        assert client.models.generate_content.call_count == 3
+
+    def test_raises_non_retryable_error(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+
+        client.models.generate_content.side_effect = ValueError("Invalid API key")
+
+        with pytest.raises(ValueError, match="Invalid API key"):
+            transcriber._transcribe_with_retry(client, uploaded)
+
+        # Should NOT retry non-retryable errors
+        assert client.models.generate_content.call_count == 1
+
+    def test_raises_after_max_retries(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+
+        client.models.generate_content.side_effect = Exception("429 rate limit")
+
+        with patch("time.sleep"):
+            with pytest.raises(Exception, match="429 rate limit"):
+                transcriber._transcribe_with_retry(client, uploaded, max_retries=2)
+
+        assert client.models.generate_content.call_count == 2
+
+    def test_retries_on_timeout(self):
+        transcriber = GeminiTranscriber(api_key="test-key")
+        client = MagicMock()
+        uploaded = MagicMock()
+
+        client.models.generate_content.side_effect = [
+            Exception("connection timeout"),
+            MagicMock(text="[00:00] A: Works"),
+        ]
+
+        with patch("time.sleep"):
+            result = transcriber._transcribe_with_retry(client, uploaded)
+
+        assert result == "[00:00] A: Works"

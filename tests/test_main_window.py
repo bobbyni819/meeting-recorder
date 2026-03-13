@@ -726,6 +726,112 @@ class TestHistoryFilter:
 
 
 # ---------------------------------------------------------------------------
+# Keyboard navigation
+# ---------------------------------------------------------------------------
+
+class TestKeyboardNavigation:
+    def test_nav_down_selects_first(self):
+        """Down arrow with no selection selects first card."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [Path("a"), Path("b"), Path("c")]
+        mw._select_card = mock.Mock()
+        mw._nav_history(1)
+        mw._select_card.assert_called_once_with(0)
+
+    def test_nav_up_selects_last(self):
+        """Up arrow with no selection selects last card."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [Path("a"), Path("b"), Path("c")]
+        mw._select_card = mock.Mock()
+        mw._nav_history(-1)
+        mw._select_card.assert_called_once_with(2)
+
+    def test_nav_down_advances(self):
+        """Down arrow from index 0 moves to index 1."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [Path("a"), Path("b"), Path("c")]
+        mw._selected_card_idx = 0
+        mw._select_card = mock.Mock()
+        mw._nav_history(1)
+        mw._select_card.assert_called_once_with(1)
+
+    def test_nav_clamps_at_end(self):
+        """Down arrow at last item stays at last."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [Path("a"), Path("b")]
+        mw._selected_card_idx = 1
+        mw._select_card = mock.Mock()
+        mw._nav_history(1)
+        mw._select_card.assert_called_once_with(1)
+
+    def test_nav_clamps_at_start(self):
+        """Up arrow at first item stays at first."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [Path("a"), Path("b")]
+        mw._selected_card_idx = 0
+        mw._select_card = mock.Mock()
+        mw._nav_history(-1)
+        mw._select_card.assert_called_once_with(0)
+
+    def test_nav_ignored_when_recording(self):
+        """Navigation does nothing during recording."""
+        mw = MainWindow()
+        mw._is_recording = True
+        mw._history_card_paths = [Path("a")]
+        mw._select_card = mock.Mock()
+        mw._nav_history(1)
+        mw._select_card.assert_not_called()
+
+    def test_nav_ignored_when_empty(self):
+        """Navigation does nothing with no cards."""
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = []
+        mw._select_card = mock.Mock()
+        mw._nav_history(1)
+        mw._select_card.assert_not_called()
+
+    def test_open_selected_card(self):
+        """Enter key opens the selected card's detail view."""
+        mw = MainWindow()
+        mw._selected_card_idx = 1
+        mw._history_card_paths = [Path("a"), Path("b")]
+        mw._show_recording_detail = mock.Mock()
+        mw._open_selected_card()
+        mw._show_recording_detail.assert_called_once_with(Path("b"))
+
+    def test_open_selected_no_selection(self):
+        """Enter key does nothing with no selection."""
+        mw = MainWindow()
+        mw._selected_card_idx = -1
+        mw._history_card_paths = [Path("a")]
+        mw._show_recording_detail = mock.Mock()
+        mw._open_selected_card()
+        mw._show_recording_detail.assert_not_called()
+
+    def test_refresh_resets_selection(self, tmp_path):
+        """Refreshing history resets selection index."""
+        rec = tmp_path / "2026-03-01_rec"
+        rec.mkdir()
+        (rec / "metadata.json").write_text("{}", encoding="utf-8")
+
+        mw = MainWindow(on_list_recent=lambda: [rec])
+        mw._history_frame = mock.Mock()
+        mw._history_frame.winfo_children.return_value = []
+        mw._stats_label = mock.Mock()
+        mw._selected_card_idx = 5
+        mw._build_history_card = mock.Mock()
+        mw._refresh_history()
+        assert mw._selected_card_idx == -1
+        assert len(mw._history_card_paths) == 1
+
+
+# ---------------------------------------------------------------------------
 # Window geometry persistence
 # ---------------------------------------------------------------------------
 
@@ -747,6 +853,40 @@ class TestGeometryPersistence:
         geo_file = tmp_path / "nonexistent.txt"
         monkeypatch.setattr(MainWindow, "_GEOMETRY_FILE", geo_file)
         assert MainWindow._load_geometry() == ""
+
+    def test_validate_geometry_on_screen(self):
+        """On-screen geometry is returned unchanged."""
+        # Mock ctypes to report a 1920x1080 virtual screen
+        with mock.patch("ctypes.windll") as mock_windll:
+            metrics = {76: 0, 77: 0, 78: 1920, 79: 1080}
+            mock_windll.user32.GetSystemMetrics.side_effect = lambda x: metrics[x]
+            result = MainWindow._validate_geometry_on_screen("560x700+100+50")
+            assert result == "560x700+100+50"
+
+    def test_validate_geometry_off_screen_right(self):
+        """Window far to the right of all monitors returns size only."""
+        with mock.patch("ctypes.windll") as mock_windll:
+            metrics = {76: 0, 77: 0, 78: 1920, 79: 1080}
+            mock_windll.user32.GetSystemMetrics.side_effect = lambda x: metrics[x]
+            result = MainWindow._validate_geometry_on_screen("560x700+5000+200")
+            assert result == "560x700"
+
+    def test_validate_geometry_off_screen_above(self):
+        """Window above all monitors returns size only."""
+        with mock.patch("ctypes.windll") as mock_windll:
+            metrics = {76: 0, 77: 0, 78: 1920, 79: 1080}
+            mock_windll.user32.GetSystemMetrics.side_effect = lambda x: metrics[x]
+            result = MainWindow._validate_geometry_on_screen("560x700+100+-2000")
+            assert result == "560x700"
+
+    def test_validate_geometry_multi_monitor(self):
+        """Position valid on second monitor (negative x) passes."""
+        with mock.patch("ctypes.windll") as mock_windll:
+            # Two monitors: -1920 to 1920 wide
+            metrics = {76: -1920, 77: 0, 78: 3840, 79: 1080}
+            mock_windll.user32.GetSystemMetrics.side_effect = lambda x: metrics[x]
+            result = MainWindow._validate_geometry_on_screen("560x700+-1500+200")
+            assert result == "560x700+-1500+200"
 
     def test_load_invalid_content(self, tmp_path, monkeypatch):
         geo_file = tmp_path / "window_geometry.txt"

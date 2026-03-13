@@ -230,6 +230,7 @@ class ScreenCapture:
             interval = 1.0 / self.fps
             frame_count = 0
             last_good_frame = None  # Cache for gap-filling dropped frames
+            flicker_drops = 0  # Count of dropped glitch frames
 
             # current_hwnd tracks the active window (can be changed by switch_window())
             current_hwnd = hwnd
@@ -308,7 +309,7 @@ class ScreenCapture:
                         if frame is None:
                             # PrintWindow failed — repeat last good frame instead
                             # of skipping, which causes timing gaps and flicker.
-                            if last_good_frame is not None:
+                            if last_good_frame is not None and not self.paused:
                                 writer.write(last_good_frame)
                                 frame_count += 1
                             _sleep_remaining(frame_start, interval)
@@ -327,14 +328,25 @@ class ScreenCapture:
                     if cur_w != init_width or cur_h != init_height:
                         frame = cv2.resize(frame, (init_width, init_height))
 
+                    # Anti-flicker: detect glitch frames (blank, flash, or torn)
+                    # from PrintWindow DWM composition artifacts and drop them.
+                    if last_good_frame is not None and _is_glitch_frame(frame, last_good_frame):
+                        flicker_drops += 1
+                        if flicker_drops % 50 == 1:
+                            logger.debug(
+                                "Dropped glitch frame (%d total drops)", flicker_drops
+                            )
+                        frame = last_good_frame
+                    else:
+                        last_good_frame = frame
+
                     if not self.paused:
                         writer.write(frame)
                         frame_count += 1
                     self._latest_frame = frame
-                    last_good_frame = frame
                 except Exception:
                     # Capture exception — repeat last good frame to avoid gap
-                    if last_good_frame is not None:
+                    if last_good_frame is not None and not self.paused:
                         writer.write(last_good_frame)
                         frame_count += 1
                     logger.debug("Frame capture failed, repeating last frame", exc_info=True)
@@ -342,10 +354,11 @@ class ScreenCapture:
                 _sleep_remaining(frame_start, interval)
 
             logger.info(
-                "Screen capture complete: %d frames (%.1fs at %.0f FPS)",
+                "Screen capture complete: %d frames (%.1fs at %.0f FPS), %d glitch frames dropped",
                 frame_count,
                 frame_count / self.fps if self.fps > 0 else 0,
                 self.fps,
+                flicker_drops,
             )
 
         except ImportError as e:
@@ -370,6 +383,42 @@ class ScreenCapture:
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+
+def _is_glitch_frame(frame: np.ndarray, last_good: np.ndarray) -> bool:
+    """Detect probable capture glitch frames from PrintWindow.
+
+    PrintWindow + DWM can produce partially-rendered, blank, or flash
+    frames during composition transitions.  Detects these cheaply by
+    sampling ~1000 pixels and comparing brightness to the last known-good
+    frame.  Returns True if the frame should be dropped.
+    """
+    # Sample every Nth pixel to keep cost <0.1ms per frame
+    step = max(1, frame.size // 3000)
+    sample = frame.flat[::step]
+    mean_val = float(sample.mean())
+
+    # Near-black frame (PrintWindow returned blank)
+    if mean_val < 3:
+        return True
+
+    # Near-white frame (DWM flash)
+    if mean_val > 252:
+        return True
+
+    # Compare to last good frame — a sudden large brightness shift
+    # across the whole image is almost certainly a capture artifact,
+    # not a real content change.
+    ref_sample = last_good.flat[::step]
+    ref_mean = float(ref_sample.mean())
+
+    if ref_mean > 5:
+        ratio = abs(mean_val - ref_mean) / ref_mean
+        # >60% mean brightness change in a single frame = glitch
+        if ratio > 0.60:
+            return True
+
+    return False
 
 
 def _sleep_remaining(frame_start: float, interval: float) -> None:

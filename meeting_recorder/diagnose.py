@@ -86,10 +86,15 @@ def _check_config() -> int:
     print(_header("Configuration"))
     failures = 0
     try:
-        from meeting_recorder.config import Config, CONFIG_FILE
+        from meeting_recorder.config import Config, BUNDLED_CONFIG, SECRETS_FILE
 
         config = Config.load()
-        print(_ok(f"Config loaded from {CONFIG_FILE if CONFIG_FILE.exists() else 'defaults'}"))
+        sources = []
+        if BUNDLED_CONFIG.exists():
+            sources.append(f"repo: {BUNDLED_CONFIG}")
+        if SECRETS_FILE.exists():
+            sources.append(f"secrets: {SECRETS_FILE}")
+        print(_ok(f"Config loaded from {'; '.join(sources) or 'defaults'}"))
 
         # Output dir writable
         output_dir = config.output_dir

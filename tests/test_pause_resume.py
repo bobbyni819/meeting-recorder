@@ -230,16 +230,25 @@ class TestHotkeyConfig:
         config = Config()
         config.hotkey.toggle_pause = "ctrl+alt+space"
 
-        # Save to a temp file and reload
-        tmp = Path(tempfile.mktemp(suffix=".toml"))
+        # Save to temp files and reload
+        tmp_dir = Path(tempfile.mkdtemp())
         try:
             import meeting_recorder.config as cfg_mod
-            orig_file = cfg_mod.CONFIG_FILE
-            cfg_mod.CONFIG_FILE = tmp
+            orig_bundled = cfg_mod.BUNDLED_CONFIG
+            orig_secrets = cfg_mod.SECRETS_FILE
+            orig_config = cfg_mod.CONFIG_FILE
+            orig_dir = cfg_mod.CONFIG_DIR
+            cfg_mod.BUNDLED_CONFIG = tmp_dir / "config.toml"
+            cfg_mod.SECRETS_FILE = tmp_dir / "secrets.toml"
+            cfg_mod.CONFIG_FILE = tmp_dir / "legacy.toml"
+            cfg_mod.CONFIG_DIR = tmp_dir
             config.save()
             loaded = Config.load()
             assert loaded.hotkey.toggle_pause == "ctrl+alt+space"
         finally:
-            cfg_mod.CONFIG_FILE = orig_file
-            if tmp.exists():
-                tmp.unlink()
+            cfg_mod.BUNDLED_CONFIG = orig_bundled
+            cfg_mod.SECRETS_FILE = orig_secrets
+            cfg_mod.CONFIG_FILE = orig_config
+            cfg_mod.CONFIG_DIR = orig_dir
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
