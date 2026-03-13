@@ -163,6 +163,12 @@ class MainWindow:
         self._history_card_paths: list[Path] = []
         self._selected_card_idx: int = -1
 
+        # Bulk selection mode
+        self._bulk_mode: bool = False
+        self._bulk_selected: set[Path] = set()
+        self._bulk_bar: Optional[tk.Frame] = None
+        self._bulk_toggle_btn: Optional[tk.Label] = None
+
     def show(self) -> None:
         """Show the main window. Creates it in a dedicated thread if needed."""
         if self._window is not None:
@@ -560,6 +566,21 @@ class MainWindow:
             section_row, text="Recent Recordings", font=("Segoe UI", 10, "bold"),
             fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
         ).pack(side=tk.LEFT)
+
+        # Bulk select toggle
+        self._bulk_toggle_btn = tk.Label(
+            section_row, text="  Select  ", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2",
+        )
+        self._bulk_toggle_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._bulk_toggle_btn.bind("<Button-1>", lambda e: self._toggle_bulk_mode())
+        self._bulk_toggle_btn.bind(
+            "<Enter>", lambda e: self._bulk_toggle_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        self._bulk_toggle_btn.bind(
+            "<Leave>", lambda e: self._bulk_toggle_btn.configure(
+                fg=TEXT_BRIGHT if self._bulk_mode else TEXT_DIM,
+                bg=BLUE_DARK if self._bulk_mode else BUTTON_BG))
+
         # Re-process failed link (shown dynamically when failures exist)
         self._reprocess_failed_label = tk.Label(
             section_row, text="", font=("Segoe UI", 8),
@@ -1149,8 +1170,19 @@ class MainWindow:
 
     def _build_history_card(self, rec_path: Path) -> None:
         """Build a single recording card in the history list."""
-        card = tk.Frame(self._history_frame, bg=BG_CARD, cursor="hand2")
+        is_selected = rec_path in self._bulk_selected
+        card_bg = BLUE_DARK if (self._bulk_mode and is_selected) else BG_CARD
+        card = tk.Frame(self._history_frame, bg=card_bg, cursor="hand2")
         card.pack(fill=tk.X, pady=2, ipady=6)
+
+        # Bulk selection checkbox indicator
+        if self._bulk_mode:
+            check_text = "\u2611" if is_selected else "\u2610"
+            check_lbl = tk.Label(
+                card, text=check_text, font=("Segoe UI", 12),
+                fg=BLUE_ACCENT if is_selected else TEXT_DIM, bg=card_bg,
+            )
+            check_lbl.pack(side=tk.LEFT, padx=(8, 0))
 
         # Parse name for display
         name = rec_path.name
@@ -1281,22 +1313,27 @@ class MainWindow:
             ).pack(side=tk.RIGHT, padx=(0, 12))
 
         # Hover effects
-        def _enter(e):
-            card.configure(bg=BG_CARD_HOVER)
-            for child in card.winfo_children():
-                child.configure(bg=BG_CARD_HOVER)
-                for grandchild in child.winfo_children():
-                    grandchild.configure(bg=BG_CARD_HOVER)
+        base_bg = card_bg
 
-        def _leave(e):
-            card.configure(bg=BG_CARD)
+        def _enter(e, bg=BG_CARD_HOVER):
+            card.configure(bg=bg)
             for child in card.winfo_children():
-                child.configure(bg=BG_CARD)
+                child.configure(bg=bg)
                 for grandchild in child.winfo_children():
-                    grandchild.configure(bg=BG_CARD)
+                    grandchild.configure(bg=bg)
+
+        def _leave(e, bg=base_bg):
+            card.configure(bg=bg)
+            for child in card.winfo_children():
+                child.configure(bg=bg)
+                for grandchild in child.winfo_children():
+                    grandchild.configure(bg=bg)
 
         def _click(e, path=rec_path):
-            self._show_recording_detail(path)
+            if self._bulk_mode:
+                self._toggle_bulk_select(path)
+            else:
+                self._show_recording_detail(path)
 
         def _right_click(e, path=rec_path):
             menu = tk.Menu(card, tearoff=0, bg=BG_CARD, fg=TEXT_COLOR,
@@ -1426,6 +1463,205 @@ class MainWindow:
                 and self._selected_card_idx < len(self._history_card_paths)):
             self._show_recording_detail(
                 self._history_card_paths[self._selected_card_idx])
+
+    # ------------------------------------------------------------------
+    # Bulk selection mode
+    # ------------------------------------------------------------------
+
+    def _toggle_bulk_mode(self) -> None:
+        """Toggle bulk selection mode on/off."""
+        self._bulk_mode = not self._bulk_mode
+        if not self._bulk_mode:
+            self._bulk_selected.clear()
+            self._hide_bulk_bar()
+        # Update toggle button appearance
+        if self._bulk_toggle_btn:
+            if self._bulk_mode:
+                self._bulk_toggle_btn.configure(
+                    text="  Cancel  ", fg=TEXT_BRIGHT, bg=BLUE_DARK)
+            else:
+                self._bulk_toggle_btn.configure(
+                    text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
+        self._refresh_history()
+
+    def _toggle_bulk_select(self, path: Path) -> None:
+        """Toggle selection of a recording path in bulk mode."""
+        if path in self._bulk_selected:
+            self._bulk_selected.discard(path)
+        else:
+            self._bulk_selected.add(path)
+        if self._bulk_selected:
+            self._show_bulk_bar()
+        else:
+            self._hide_bulk_bar()
+        self._refresh_history()
+
+    def _show_bulk_bar(self) -> None:
+        """Show the bulk action bar at the bottom of the window."""
+        if self._bulk_bar is not None:
+            self._update_bulk_bar()
+            return
+        if not self._window:
+            return
+        self._bulk_bar = tk.Frame(self._window, bg=BG_CONTROLS, height=40)
+        self._bulk_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self._bulk_bar.pack_propagate(False)
+        self._update_bulk_bar()
+
+    def _update_bulk_bar(self) -> None:
+        """Refresh the bulk action bar contents."""
+        if not self._bulk_bar:
+            return
+        for w in self._bulk_bar.winfo_children():
+            w.destroy()
+        count = len(self._bulk_selected)
+        tk.Label(
+            self._bulk_bar, text=f"{count} selected", font=("Segoe UI", 9, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_HEADER,
+        ).pack(side=tk.LEFT, padx=(12, 8), pady=6)
+
+        for text, cmd in [
+            ("Delete", self._bulk_delete),
+            ("Export", self._bulk_export),
+            ("Re-process", self._bulk_reprocess),
+            ("Select All", self._bulk_select_all),
+            ("Deselect All", self._bulk_deselect_all),
+        ]:
+            btn = tk.Label(
+                self._bulk_bar, text=f"  {text}  ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4,
+            )
+            btn.pack(side=tk.LEFT, padx=2, pady=6)
+            btn.bind("<Button-1>", lambda e, c=cmd: c())
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
+    def _hide_bulk_bar(self) -> None:
+        """Remove the bulk action bar."""
+        if self._bulk_bar:
+            self._bulk_bar.destroy()
+            self._bulk_bar = None
+
+    def _bulk_select_all(self) -> None:
+        """Select all visible recordings."""
+        self._bulk_selected = set(self._history_card_paths)
+        self._show_bulk_bar()
+        self._refresh_history()
+
+    def _bulk_deselect_all(self) -> None:
+        """Deselect all recordings."""
+        self._bulk_selected.clear()
+        self._hide_bulk_bar()
+        self._refresh_history()
+
+    def _bulk_delete(self) -> None:
+        """Delete all selected recordings after confirmation."""
+        count = len(self._bulk_selected)
+        if count == 0:
+            return
+        # Use a simple confirmation dialog
+        confirm = tk.Toplevel(self._window)
+        confirm.title("Confirm Delete")
+        confirm.geometry("350x120")
+        confirm.configure(bg=BG_COLOR)
+        confirm.resizable(False, False)
+        confirm.attributes("-topmost", True)
+        confirm.transient(self._window)
+        confirm.grab_set()
+
+        tk.Label(
+            confirm, text=f"Delete {count} recording{'s' if count != 1 else ''}?",
+            font=("Segoe UI", 11, "bold"), fg=TEXT_BRIGHT, bg=BG_COLOR,
+        ).pack(pady=(16, 4))
+        tk.Label(
+            confirm, text="This cannot be undone.",
+            font=("Segoe UI", 9), fg=AMBER, bg=BG_COLOR,
+        ).pack(pady=(0, 12))
+
+        btn_row = tk.Frame(confirm, bg=BG_COLOR)
+        btn_row.pack(pady=4)
+
+        def _do_delete():
+            confirm.destroy()
+            deleted = 0
+            for path in list(self._bulk_selected):
+                try:
+                    shutil.rmtree(path)
+                    deleted += 1
+                except Exception:
+                    logger.exception("Failed to delete %s", path)
+            self._bulk_selected.clear()
+            self._bulk_mode = False
+            self._hide_bulk_bar()
+            if self._bulk_toggle_btn:
+                self._bulk_toggle_btn.configure(
+                    text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
+            self._refresh_history()
+            self.add_notification("info", f"Deleted {deleted} recording(s)", source="bulk")
+
+        cancel_btn = tk.Label(
+            btn_row, text="  Cancel  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=12, pady=4,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=8)
+        cancel_btn.bind("<Button-1>", lambda e: confirm.destroy())
+
+        delete_btn = tk.Label(
+            btn_row, text="  Delete  ", font=("Segoe UI", 9, "bold"),
+            fg=TEXT_BRIGHT, bg="#5c1a1a", cursor="hand2", padx=12, pady=4,
+        )
+        delete_btn.pack(side=tk.LEFT, padx=8)
+        delete_btn.bind("<Button-1>", lambda e: _do_delete())
+
+    def _bulk_export(self) -> None:
+        """Export transcripts from all selected recordings to a folder."""
+        if not self._bulk_selected:
+            return
+        from tkinter import filedialog
+        dest_dir = filedialog.askdirectory(
+            parent=self._window, title="Export Transcripts To...")
+        if not dest_dir:
+            return
+        dest = Path(dest_dir)
+        exported = 0
+        for path in sorted(self._bulk_selected):
+            for fname in ("transcript.txt", "summary.md"):
+                src = path / fname
+                if src.exists():
+                    try:
+                        target = dest / f"{path.name}_{fname}"
+                        shutil.copy2(src, target)
+                        exported += 1
+                    except Exception:
+                        logger.exception("Failed to export %s", src)
+        self.add_notification(
+            "success", f"Exported {exported} file(s) to {dest.name}", source="bulk")
+
+    def _bulk_reprocess(self) -> None:
+        """Re-process all selected recordings."""
+        if not self._bulk_selected or not self._on_reprocess:
+            return
+        paths = sorted(self._bulk_selected)
+        count = len(paths)
+        self._bulk_selected.clear()
+        self._bulk_mode = False
+        self._hide_bulk_bar()
+        if self._bulk_toggle_btn:
+            self._bulk_toggle_btn.configure(
+                text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
+        self._refresh_history()
+        self.add_notification(
+            "info", f"Re-processing {count} recording(s)...", source="bulk")
+
+        def _reprocess_batch():
+            for i, path in enumerate(paths, 1):
+                self.update_status_bar(f"Re-processing {i}/{count}: {path.name}")
+                self._on_reprocess(path)
+                # Wait briefly for the post thread to start and finish
+                import time
+                time.sleep(0.5)
+
+        threading.Thread(target=_reprocess_batch, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Recording detail view
@@ -2923,10 +3159,12 @@ class MainWindow:
             self._show_warning_banner("Export failed — check logs.", duration_ms=5000)
 
     def _on_escape(self) -> None:
-        """Handle Escape key: close detail view, dismiss help, or hide window."""
+        """Handle Escape key: close detail view, dismiss help, exit bulk, or hide window."""
         if hasattr(self, "_help_overlay") and self._help_overlay:
             self._help_overlay.destroy()
             self._help_overlay = None
+        elif self._bulk_mode:
+            self._toggle_bulk_mode()
         elif self._detail_frame:
             self._close_detail()
         else:
