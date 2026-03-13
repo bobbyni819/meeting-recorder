@@ -193,6 +193,14 @@ def main(argv: list[str] | None = None) -> int:
         "--health", action="store_true",
         help="Show recording health summary",
     )
+    parser.add_argument(
+        "--weekly", action="store_true",
+        help="Show weekly meeting report",
+    )
+    parser.add_argument(
+        "--week-offset", type=int, default=0,
+        help="Week offset (0=current, 1=last week, etc.)",
+    )
     args = parser.parse_args(argv)
 
     config = Config.load()
@@ -201,6 +209,20 @@ def main(argv: list[str] | None = None) -> int:
         from meeting_recorder.storage.health_summary import analyze_health, format_health
         hs = analyze_health(config.output_dir)
         print(format_health(hs))
+        return 0
+
+    if args.weekly:
+        from meeting_recorder.storage.weekly_report import generate_weekly_report, format_weekly_report
+        report = generate_weekly_report(config.output_dir, week_offset=args.week_offset)
+        if report is None:
+            print("No recordings found for the selected week.")
+            return 0
+        if args.json:
+            import json as json_mod
+            from dataclasses import asdict
+            print(json_mod.dumps(asdict(report), indent=2, default=str))
+        else:
+            print(format_weekly_report(report))
         return 0
 
     stats = compute_stats(config.output_dir)
