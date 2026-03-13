@@ -754,6 +754,11 @@ class MeetingRecorderApp:
                 notify_parts.append(f"{metadata.speaker_count} speaker{'s' if metadata.speaker_count != 1 else ''}")
             if metadata.segment_count:
                 notify_parts.append(f"{metadata.segment_count} segments")
+            q_scores = metadata.quality_scores
+            if q_scores and q_scores.get("overall_score") is not None:
+                from meeting_recorder.storage.quality import quality_label
+                qs = q_scores["overall_score"]
+                notify_parts.append(f"Quality: {qs}/100 ({quality_label(qs)})")
             summary_line = " \u2022 ".join(notify_parts) if notify_parts else ""
             notifications.notify_transcription_complete(str(recording_dir), summary_line)
             logger.info("Post-processing complete: %s", recording_dir)

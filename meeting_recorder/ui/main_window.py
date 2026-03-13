@@ -1049,6 +1049,7 @@ class MainWindow:
         # Compute stats from metadata
         total_duration = 0.0
         failed_count = 0
+        quality_scores: list[int] = []
         shown = 0
         for rec_path in recordings[:50]:  # Check up to 50
             meta = {}
@@ -1062,6 +1063,10 @@ class MainWindow:
 
             if meta.get("status") == "error":
                 failed_count += 1
+
+            qs = meta.get("quality_scores", {})
+            if qs and qs.get("overall_score") is not None:
+                quality_scores.append(qs["overall_score"])
 
             # Filter: match against folder name, subject, app name, attendees
             if filter_text:
@@ -1080,9 +1085,12 @@ class MainWindow:
                 self._history_card_paths.append(rec_path)
                 shown += 1
             total_duration += meta.get("duration_seconds", 0)
-        self._update_stats_label(len(recordings), total_duration, failed_count)
 
-    def _update_stats_label(self, count: int, total_seconds: float, failed: int = 0) -> None:
+        avg_quality = round(sum(quality_scores) / len(quality_scores)) if quality_scores else None
+        self._update_stats_label(len(recordings), total_duration, failed_count, avg_quality)
+
+    def _update_stats_label(self, count: int, total_seconds: float,
+                           failed: int = 0, avg_quality: int | None = None) -> None:
         """Update the stats label next to 'Recent Recordings'."""
         if not hasattr(self, '_stats_label') or not self._stats_label:
             return
@@ -1095,6 +1103,8 @@ class MainWindow:
         else:
             time_str = f"{total_seconds / 60:.0f}m"
         text = f"{count} recordings  \u2022  {time_str} total"
+        if avg_quality is not None:
+            text += f"  \u2022  Avg quality: {avg_quality}"
         if failed > 0:
             text += f"  \u2022  {failed} failed"
         self._stats_label.configure(text=text)
