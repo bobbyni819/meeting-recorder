@@ -517,6 +517,30 @@ class MainWindow:
             self._auto_label.bind("<Leave>", lambda e: self._auto_label.configure(
                 fg=GREEN if self._auto_start else TEXT_DIM))
 
+        # Disk space indicator in idle view
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            base.mkdir(parents=True, exist_ok=True)
+            free_gb = shutil.disk_usage(base).free / (1024 ** 3)
+            if free_gb < 1.0:
+                disk_color = RED_DOT
+                disk_text = f"\u26a0 Low disk space: {free_gb:.1f} GB free"
+            elif free_gb < 5.0:
+                disk_color = AMBER
+                disk_text = f"{free_gb:.1f} GB free"
+            else:
+                disk_color = TEXT_DIM
+                disk_text = f"{free_gb:.0f} GB free"
+            tk.Label(
+                parent, text=disk_text, font=("Segoe UI", 8),
+                fg=disk_color, bg=BG_COLOR,
+            ).pack(pady=(0, 2))
+        except Exception:
+            pass
+
         # Big start button
         btn_frame = tk.Frame(parent, bg=BG_COLOR)
         btn_frame.pack(pady=(4, 8))
