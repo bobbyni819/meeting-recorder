@@ -691,6 +691,46 @@ class TestBuildDetailsText:
         assert "ATTENDANCE" not in text
 
 
+class TestMeetingNotes:
+    def test_basic_notes(self, tmp_path):
+        rec = tmp_path / "2026-03-12_14-30-00_Standup"
+        rec.mkdir()
+        meta = {
+            "meeting_subject": "Daily Standup",
+            "duration_seconds": 1800,
+            "app_name": "Zoom",
+            "meeting_organizer": "Alice",
+            "meeting_attendees": ["Alice", "Bob", "Charlie"],
+        }
+        (rec / "summary.md").write_text("Key discussion points here.", encoding="utf-8")
+
+        notes = MainWindow._generate_meeting_notes(rec, meta)
+        assert "# Daily Standup" in notes
+        assert "2026-03-12" in notes
+        assert "30m" in notes
+        assert "Zoom" in notes
+        assert "Alice" in notes
+        assert "(organizer)" in notes
+        assert "Bob" in notes
+        assert "Key discussion points" in notes
+        assert "Meeting Recorder" in notes
+
+    def test_notes_without_summary(self, tmp_path):
+        rec = tmp_path / "2026-03-12_10-00-00_Test"
+        rec.mkdir()
+        meta = {"meeting_subject": "Test Meeting"}
+        notes = MainWindow._generate_meeting_notes(rec, meta)
+        assert "# Test Meeting" in notes
+        assert "Summary" not in notes
+
+    def test_notes_without_subject(self, tmp_path):
+        rec = tmp_path / "2026-03-12_10-00-00_ProjectReview"
+        rec.mkdir()
+        meta = {}
+        notes = MainWindow._generate_meeting_notes(rec, meta)
+        assert "# ProjectReview" in notes
+
+
 # ---------------------------------------------------------------------------
 # History filter
 # ---------------------------------------------------------------------------
