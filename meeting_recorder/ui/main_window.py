@@ -1099,7 +1099,26 @@ class MainWindow:
         failed_count = 0
         quality_scores: list[int] = []
         shown = 0
-        for rec_path in recordings[:50]:  # Check up to 50
+
+        # Sort pinned recordings to the top
+        pinned: list[Path] = []
+        unpinned: list[Path] = []
+        for rec_path in recordings[:50]:
+            meta = {}
+            try:
+                meta_path = rec_path / "metadata.json"
+                if meta_path.exists():
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+            except Exception:
+                pass
+            if meta.get("pinned"):
+                pinned.append(rec_path)
+            else:
+                unpinned.append(rec_path)
+        sorted_recordings = pinned + unpinned
+
+        for rec_path in sorted_recordings:
             meta = {}
             try:
                 meta_path = rec_path / "metadata.json"
@@ -1244,9 +1263,11 @@ class MainWindow:
         if len(title) > 40:
             title = title[:37] + "..."
 
+        is_pinned = meta.get("pinned", False)
+        pin_prefix = "\U0001f4cc " if is_pinned else ""
         tk.Label(
-            left, text=f"{status_icon}  {title}",
-            font=("Segoe UI", 9, "bold"), fg=TEXT_COLOR, bg=BG_CARD,
+            left, text=f"{pin_prefix}{status_icon}  {title}",
+            font=("Segoe UI", 9, "bold"), fg=TEXT_COLOR, bg=card_bg,
             anchor=tk.W,
         ).pack(fill=tk.X)
 
@@ -1340,6 +1361,9 @@ class MainWindow:
                            activebackground=BG_CONTROLS, activeforeground=TEXT_BRIGHT,
                            font=("Segoe UI", 9))
             menu.add_command(label="Open Details", command=lambda: self._show_recording_detail(path))
+            # Pin / Unpin
+            pin_label = "Unpin" if is_pinned else "Pin to Top"
+            menu.add_command(label=pin_label, command=lambda: self._toggle_pin(path))
             menu.add_command(label="Open in Explorer",
                              command=lambda: threading.Thread(
                                  target=lambda: open_in_explorer(str(path)), daemon=True).start())
@@ -1463,6 +1487,25 @@ class MainWindow:
                 and self._selected_card_idx < len(self._history_card_paths)):
             self._show_recording_detail(
                 self._history_card_paths[self._selected_card_idx])
+
+    # ------------------------------------------------------------------
+    # Pin/unpin recordings
+    # ------------------------------------------------------------------
+
+    def _toggle_pin(self, rec_path: Path) -> None:
+        """Toggle the pinned state of a recording."""
+        try:
+            meta_path = rec_path / "metadata.json"
+            meta = {}
+            if meta_path.exists():
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            meta["pinned"] = not meta.get("pinned", False)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+        except Exception:
+            logger.exception("Failed to toggle pin for %s", rec_path)
+        self._refresh_history()
 
     # ------------------------------------------------------------------
     # Bulk selection mode
