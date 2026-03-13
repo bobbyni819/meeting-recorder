@@ -1120,6 +1120,56 @@ class TestDetailNavigation:
         assert len(shown) == 0
 
 
+class TestActionOnSelected:
+    def test_action_no_selection(self):
+        """Should do nothing when no card is selected."""
+        mw = MainWindow()
+        mw._selected_card_idx = -1
+        mw._action_on_selected("pin")  # Should not raise
+
+    def test_action_pin_selected(self, tmp_path):
+        """Should toggle pin on selected card."""
+        rec = tmp_path / "2026-03-10_09-00-00_Test"
+        rec.mkdir()
+        (rec / "metadata.json").write_text("{}", encoding="utf-8")
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [rec]
+        mw._selected_card_idx = 0
+        mw._detail_frame = None
+        # Mock _toggle_pin so we can verify it's called
+        pinned = []
+        mw._toggle_pin = lambda p: pinned.append(p)
+        mw._action_on_selected("pin")
+        assert rec in pinned
+
+    def test_action_copy_selected(self, tmp_path):
+        """Should copy transcript text for 'copy' action."""
+        rec = tmp_path / "2026-03-10_09-00-00_Test"
+        rec.mkdir()
+        (rec / "transcript.txt").write_text("Hello world", encoding="utf-8")
+        mw = MainWindow()
+        mw._is_recording = False
+        mw._history_card_paths = [rec]
+        mw._selected_card_idx = 0
+        mw._detail_frame = None
+        # Mock clipboard
+        clipboard = []
+        mw._window = mock.Mock()
+        mw._window.clipboard_clear = mock.Mock()
+        mw._window.clipboard_append = lambda t: clipboard.append(t)
+        mw._action_on_selected("copy")
+        assert "Hello world" in clipboard
+
+    def test_action_while_recording(self):
+        """Should do nothing while recording."""
+        mw = MainWindow()
+        mw._is_recording = True
+        mw._selected_card_idx = 0
+        mw._history_card_paths = [Path("/test")]
+        mw._action_on_selected("pin")  # Should not raise
+
+
 class TestWeekStrip:
     def test_week_strip_no_crash_empty(self):
         """Week strip should handle empty meta cache."""

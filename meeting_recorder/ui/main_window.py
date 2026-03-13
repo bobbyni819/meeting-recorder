@@ -451,6 +451,12 @@ class MainWindow:
         self._window.bind("<Right>", lambda e: self._navigate_detail(1))
         self._window.bind("<Control-question>", lambda e: self._show_hotkey_help())
         self._window.bind("<F1>", lambda e: self._show_hotkey_help())
+        # Card action shortcuts (only when a card is selected in idle view)
+        self._window.bind("p", lambda e: self._action_on_selected("pin"))
+        self._window.bind("d", lambda e: self._action_on_selected("delete"))
+        self._window.bind("h", lambda e: self._action_on_selected("html"))
+        self._window.bind("c", lambda e: self._action_on_selected("copy"))
+        self._window.bind("o", lambda e: self._action_on_selected("open"))
 
     def _build_header(self) -> None:
         header = tk.Frame(self._window, bg=BG_HEADER, height=52)
@@ -1545,6 +1551,46 @@ class MainWindow:
     # ------------------------------------------------------------------
     # History keyboard navigation
     # ------------------------------------------------------------------
+
+    def _action_on_selected(self, action: str) -> None:
+        """Perform an action on the currently selected history card."""
+        if self._is_recording or self._selected_card_idx < 0:
+            return
+        if self._detail_frame:
+            return  # Don't act while in detail view
+        if self._selected_card_idx >= len(self._history_card_paths):
+            return
+        path = self._history_card_paths[self._selected_card_idx]
+        if action == "pin":
+            self._toggle_pin(path)
+        elif action == "delete":
+            import shutil
+            try:
+                shutil.rmtree(path)
+            except Exception:
+                logger.exception("Failed to delete %s", path)
+                return
+            self._refresh_history()
+        elif action == "html":
+            try:
+                from meeting_recorder.storage.html_export import generate_html_report
+                html_content = generate_html_report(path)
+                dest = path / f"{path.name}.html"
+                dest.write_text(html_content, encoding="utf-8")
+                self.add_notification("success", f"HTML saved: {dest.name}", source="export")
+            except Exception:
+                logger.exception("HTML export failed for %s", path.name)
+        elif action == "copy":
+            txt = self._read_file(path / "transcript.txt")
+            if not txt:
+                txt = self._read_file(path / "summary.md")
+            if txt and self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(txt)
+        elif action == "open":
+            threading.Thread(
+                target=lambda: open_in_explorer(str(path)), daemon=True
+            ).start()
 
     def _nav_history(self, delta: int) -> None:
         """Move selection up or down in history list."""
@@ -3471,6 +3517,13 @@ class MainWindow:
                 ("Escape", "Close / Hide"),
                 ("\u2191 / \u2193", "Navigate history"),
                 ("Enter", "Open selected recording"),
+            ]),
+            ("Selected Card", [
+                ("P", "Pin / Unpin"),
+                ("C", "Copy transcript"),
+                ("H", "Export HTML"),
+                ("O", "Open in Explorer"),
+                ("D", "Delete"),
             ]),
             ("Detail View", [
                 ("\u25c0 / \u25b6", "Previous / Next recording"),
