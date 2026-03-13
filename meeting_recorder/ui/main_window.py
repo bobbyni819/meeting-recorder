@@ -3505,6 +3505,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Sentiment ---
+        try:
+            from meeting_recorder.storage.sentiment import analyze_recording_sentiment, format_sentiment
+            sent = analyze_recording_sentiment(rec_path)
+            if sent is not None and (sent.positive_count + sent.negative_count) > 0:
+                lines.append(format_sentiment(sent))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
