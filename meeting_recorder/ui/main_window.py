@@ -577,6 +577,7 @@ class MainWindow:
             ("\U0001f4ca Stats", self._show_stats),
             ("\U0001f464 Profiles", self._show_voice_profiles),
             ("\U0001f4c5 Calendar", self._show_calendar),
+            ("\u2611 Follow-ups", self._show_followups_panel),
             ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
             btn = tk.Label(
@@ -3999,6 +4000,146 @@ class MainWindow:
         if not hasattr(self, "_diagnostics_window"):
             self._diagnostics_window = DiagnosticsWindow()
         self._diagnostics_window.show(self._window)
+
+    def _show_followups_panel(self) -> None:
+        """Show a popup panel listing all pending follow-up items."""
+        if not self._window:
+            return
+        # Toggle: dismiss if already showing
+        if hasattr(self, "_followups_overlay") and self._followups_overlay:
+            self._followups_overlay.destroy()
+            self._followups_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.followups import gather_followups, mark_completed, format_followups
+            followups = gather_followups(base)
+        except Exception:
+            logger.exception("Failed to gather follow-ups")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._followups_overlay = overlay
+
+        # Title bar
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Pending Follow-ups",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        # Copy all button
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        def _copy_all():
+            text = format_followups(followups)
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+
+        copy_btn.bind("<Button-1>", lambda e: _copy_all())
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_followups_overlay", None)))
+
+        if not followups:
+            tk.Label(
+                overlay, text="No pending follow-ups! \u2705",
+                font=("Segoe UI", 9), fg=GREEN, bg=BG_PANEL,
+            ).pack(padx=20, pady=16)
+            return
+
+        # Scrollable list
+        list_canvas = tk.Canvas(overlay, bg=BG_PANEL, highlightthickness=0,
+                                width=420, height=min(len(followups) * 32 + 40, 350))
+        list_frame = tk.Frame(list_canvas, bg=BG_PANEL)
+        list_canvas.pack(fill=tk.BOTH, padx=8, pady=(4, 10))
+        list_canvas.create_window((0, 0), window=list_frame, anchor=tk.NW)
+        list_frame.bind("<Configure>",
+                        lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
+
+        # Group by meeting
+        from collections import OrderedDict
+        groups: OrderedDict[str, list] = OrderedDict()
+        for fu in followups:
+            key = f"{fu.meeting_date} — {fu.meeting_subject}"
+            groups.setdefault(key, []).append(fu)
+
+        for group_key, items in groups.items():
+            tk.Label(
+                list_frame, text=group_key,
+                font=("Segoe UI", 8, "bold"), fg=AMBER, bg=BG_PANEL,
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=8, pady=(6, 1))
+
+            for fu in items:
+                item_frame = tk.Frame(list_frame, bg=BG_PANEL)
+                item_frame.pack(fill=tk.X, padx=8, pady=1)
+
+                check_text = "\u2611" if fu.completed else "\u2610"
+                check_lbl = tk.Label(
+                    item_frame, text=check_text, font=("Segoe UI", 10),
+                    fg=GREEN if fu.completed else TEXT_DIM, bg=BG_PANEL,
+                    cursor="hand2",
+                )
+                check_lbl.pack(side=tk.LEFT, padx=(0, 4))
+
+                desc_color = TEXT_DIM if fu.completed else TEXT_COLOR
+                desc_text = fu.description[:60]
+                if len(fu.description) > 60:
+                    desc_text += "..."
+                if fu.assignee and fu.assignee != "me":
+                    desc_text += f" @{fu.assignee}"
+                tk.Label(
+                    item_frame, text=desc_text,
+                    font=("Segoe UI", 8), fg=desc_color, bg=BG_PANEL,
+                    anchor=tk.W,
+                ).pack(side=tk.LEFT, fill=tk.X)
+
+                # Toggle completion on click
+                def _toggle(e, f=fu, lbl=check_lbl, frame=item_frame):
+                    new_state = not f.completed
+                    f.completed = new_state
+                    try:
+                        mark_completed(Path(f.recording_dir), f.description, new_state)
+                    except Exception:
+                        pass
+                    lbl.configure(
+                        text="\u2611" if new_state else "\u2610",
+                        fg=GREEN if new_state else TEXT_DIM,
+                    )
+                    # Update desc color
+                    for child in frame.winfo_children():
+                        if isinstance(child, tk.Label) and child is not lbl:
+                            child.configure(fg=TEXT_DIM if new_state else TEXT_COLOR)
+
+                check_lbl.bind("<Button-1>", _toggle)
+
+        # Summary
+        pending = sum(1 for f in followups if not f.completed)
+        tk.Label(
+            overlay, text=f"{pending} pending across {len(groups)} meeting(s)",
+            font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
+        ).pack(pady=(0, 8))
 
     def _show_recurring_panel(self) -> None:
         """Show a popup panel listing recurring meeting series."""
