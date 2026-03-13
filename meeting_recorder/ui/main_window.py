@@ -3701,6 +3701,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Engagement Score ---
+        try:
+            from meeting_recorder.storage.engagement_score import compute_engagement, format_engagement
+            eng = compute_engagement(rec_path, meta=meta)
+            if eng is not None:
+                lines.append(format_engagement(eng))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Meeting Type Classification ---
         try:
             from meeting_recorder.storage.meeting_classifier import classify_recording, format_classification
