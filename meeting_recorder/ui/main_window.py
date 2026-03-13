@@ -518,6 +518,7 @@ class MainWindow:
             ("\U0001f4e6 Export All", self._export_transcripts),
             ("\U0001f4ca Stats", self._show_stats),
             ("\U0001f464 Profiles", self._show_voice_profiles),
+            ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
             btn = tk.Label(
                 sec_frame, text=f"  {text}  ", font=("Segoe UI", 9),
@@ -2712,6 +2713,15 @@ class MainWindow:
         if not hasattr(self, "_voice_profiles_window"):
             self._voice_profiles_window = VoiceProfilesWindow()
         self._voice_profiles_window.show(self._window)
+
+    def _show_diagnostics(self) -> None:
+        """Open the system diagnostics window."""
+        if not self._window:
+            return
+        from meeting_recorder.ui.diagnostics_window import DiagnosticsWindow
+        if not hasattr(self, "_diagnostics_window"):
+            self._diagnostics_window = DiagnosticsWindow()
+        self._diagnostics_window.show(self._window)
 
     def _export_transcripts(self) -> None:
         """Export all transcripts as a ZIP file."""

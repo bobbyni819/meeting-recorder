@@ -12,12 +12,51 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 # ANSI color codes (used only when terminal supports it)
 _SUPPORTS_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+@dataclass
+class CheckResult:
+    """Result of a single diagnostic check item."""
+    status: str  # "ok", "warn", "fail"
+    message: str
+
+
+@dataclass
+class CheckCategory:
+    """Results for a named diagnostic category."""
+    name: str
+    results: list[CheckResult] = field(default_factory=list)
+
+    @property
+    def status(self) -> str:
+        """Overall status: fail if any fail, warn if any warn, else ok."""
+        if any(r.status == "fail" for r in self.results):
+            return "fail"
+        if any(r.status == "warn" for r in self.results):
+            return "warn"
+        return "ok"
+
+
+def run_diagnostics_structured() -> list[CheckCategory]:
+    """Run all diagnostic checks and return structured results."""
+    categories = []
+    categories.append(_check_config_structured())
+    categories.append(_check_gpu_structured())
+    categories.append(_check_vad_structured())
+    categories.append(_check_meeting_processes_structured())
+    categories.append(_check_app_audio_structured())
+    categories.append(_check_mic_structured())
+    categories.append(_check_api_structured())
+    categories.append(_check_screen_capture_structured())
+    return categories
 
 
 def _ok(msg: str) -> str:
@@ -414,3 +453,270 @@ def _check_screen_capture() -> int:
         failures += 1
 
     return failures
+
+
+# ---------------------------------------------------------------------------
+# Structured check variants (return CheckCategory instead of printing)
+# ---------------------------------------------------------------------------
+
+def _check_config_structured() -> CheckCategory:
+    cat = CheckCategory(name="Configuration")
+    try:
+        from meeting_recorder.config import Config, BUNDLED_CONFIG, SECRETS_FILE
+        config = Config.load()
+        sources = []
+        if BUNDLED_CONFIG.exists():
+            sources.append(f"repo: {BUNDLED_CONFIG}")
+        if SECRETS_FILE.exists():
+            sources.append(f"secrets: {SECRETS_FILE}")
+        cat.results.append(CheckResult("ok", f"Config loaded from {'; '.join(sources) or 'defaults'}"))
+
+        output_dir = config.output_dir
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            test_file = output_dir / ".diagnose_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            cat.results.append(CheckResult("ok", f"Output dir writable: {output_dir}"))
+        except Exception as e:
+            cat.results.append(CheckResult("fail", f"Output dir not writable: {output_dir} ({e})"))
+
+        tc = config.transcription
+        if tc.backend == "gemini" and not tc.gemini_api_key:
+            cat.results.append(CheckResult("fail", "Gemini transcription selected but gemini_api_key is empty"))
+        elif tc.backend == "cloud" and not tc.openai_api_key:
+            cat.results.append(CheckResult("fail", "Cloud transcription selected but openai_api_key is empty"))
+        else:
+            cat.results.append(CheckResult("ok", f"Transcription backend: {tc.backend}"))
+
+        sc = config.summary
+        if sc.enabled and not sc.api_key:
+            if sc.provider == "gemini" and tc.gemini_api_key:
+                cat.results.append(CheckResult("ok", "Summary provider: gemini (using transcription API key)"))
+            else:
+                cat.results.append(CheckResult("warn", f"Summary enabled ({sc.provider}) but api_key is empty"))
+        elif sc.enabled:
+            cat.results.append(CheckResult("ok", f"Summary provider: {sc.provider}"))
+        else:
+            cat.results.append(CheckResult("ok", "Summary: disabled"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"Config load failed: {e}"))
+    return cat
+
+
+def _check_gpu_structured() -> CheckCategory:
+    cat = CheckCategory(name="GPU / CUDA")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            vram = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            cat.results.append(CheckResult("ok", f"CUDA available: {name} ({vram:.1f} GB VRAM)"))
+        else:
+            cat.results.append(CheckResult("warn", "CUDA not available — transcription will use CPU (much slower)"))
+    except ImportError:
+        cat.results.append(CheckResult("fail", "PyTorch not installed"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"GPU check failed: {e}"))
+    return cat
+
+
+def _check_vad_structured() -> CheckCategory:
+    cat = CheckCategory(name="Voice Activity Detection")
+    try:
+        from meeting_recorder.audio.vad import VoiceActivityDetector
+        vad = VoiceActivityDetector(threshold=0.5)
+        vad.load()
+        cat.results.append(CheckResult("ok", "Silero VAD model loaded"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"VAD model failed to load: {e}"))
+    return cat
+
+
+def _check_meeting_processes_structured() -> CheckCategory:
+    cat = CheckCategory(name="Meeting Processes")
+    try:
+        from meeting_recorder.audio.process_finder import find_meeting_processes
+        processes = find_meeting_processes()
+        if processes:
+            for p in processes:
+                cat.results.append(CheckResult("ok", f"Found {p.display_name} (PID {p.pid}, {p.name})"))
+        else:
+            cat.results.append(CheckResult("warn", "No meeting processes found (Zoom, Teams, Webex not running)"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"Process scan failed: {e}"))
+    return cat
+
+
+def _check_app_audio_structured() -> CheckCategory:
+    cat = CheckCategory(name="App Audio Capture")
+    try:
+        from meeting_recorder.audio.process_finder import find_primary_meeting_process
+        process = find_primary_meeting_process()
+        if process is None:
+            cat.results.append(CheckResult("warn", "No meeting process to probe (skipping audio test)"))
+            return cat
+
+        from meeting_recorder.audio.app_audio import AppAudioCapture
+        from meeting_recorder.audio.ring_buffer import RingBuffer
+        import struct
+
+        buf = RingBuffer(max_chunks=500)
+        capture = AppAudioCapture(
+            pid=process.pid, ring_buffer=buf,
+            sample_rate=16000, channels=1, chunk_duration_ms=30,
+        )
+        capture.start()
+        time.sleep(2.0)
+        capture.stop()
+
+        chunks = buf.get_all()
+        total_samples = 0
+        sum_sq = 0.0
+        for chunk in chunks:
+            samples = struct.unpack(f"<{len(chunk) // 2}h", chunk)
+            total_samples += len(samples)
+            sum_sq += sum(s * s for s in samples)
+
+        if total_samples > 0:
+            rms = (sum_sq / total_samples) ** 0.5
+            cat.results.append(CheckResult("ok", f"Captured {total_samples} samples from PID {process.pid}, RMS={rms:.0f}"))
+            if rms < 10:
+                cat.results.append(CheckResult("warn", "RMS very low — meeting may be silent or wrong PID"))
+        else:
+            cat.results.append(CheckResult("warn", f"No audio data captured from PID {process.pid}"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"App audio probe failed: {e}"))
+    return cat
+
+
+def _check_mic_structured() -> CheckCategory:
+    cat = CheckCategory(name="Microphone Capture")
+    try:
+        import pyaudiowpatch as pyaudio
+        p = pyaudio.PyAudio()
+        device_info = p.get_default_input_device_info()
+        cat.results.append(CheckResult("ok", f"Default mic: {device_info['name']} ({int(device_info['defaultSampleRate'])}Hz)"))
+
+        native_rate = int(device_info["defaultSampleRate"])
+        native_channels = min(int(device_info["maxInputChannels"]), 2)
+        chunk_size = int(native_rate * 0.1)
+
+        stream = p.open(
+            format=pyaudio.paInt16, channels=native_channels,
+            rate=native_rate, input=True, frames_per_buffer=chunk_size,
+        )
+
+        import struct
+        total_samples = 0
+        sum_sq = 0.0
+        for _ in range(10):
+            data = stream.read(chunk_size, exception_on_overflow=False)
+            samples = struct.unpack(f"<{len(data) // 2}h", data)
+            total_samples += len(samples)
+            sum_sq += sum(s * s for s in samples)
+
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+        if total_samples > 0:
+            rms = (sum_sq / total_samples) ** 0.5
+            cat.results.append(CheckResult("ok", f"Mic capture OK: {total_samples} samples, RMS={rms:.0f}"))
+        else:
+            cat.results.append(CheckResult("warn", "No mic data captured"))
+    except ImportError:
+        cat.results.append(CheckResult("fail", "PyAudioWPatch not installed"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"Mic probe failed: {e}"))
+    return cat
+
+
+def _check_api_structured() -> CheckCategory:
+    cat = CheckCategory(name="API Connectivity")
+    try:
+        from meeting_recorder.config import Config
+        config = Config.load()
+
+        gemini_key = config.transcription.gemini_api_key
+        if gemini_key:
+            try:
+                from google import genai
+                client = genai.Client(api_key=gemini_key)
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents="Say 'ok' and nothing else.",
+                )
+                if response.text:
+                    cat.results.append(CheckResult("ok", "Gemini API: connected"))
+                else:
+                    cat.results.append(CheckResult("warn", "Gemini API: empty response"))
+            except Exception as e:
+                cat.results.append(CheckResult("fail", f"Gemini API: {e}"))
+        else:
+            cat.results.append(CheckResult("ok", "Gemini API: not configured (skipped)"))
+
+        openai_key = config.transcription.openai_api_key or (
+            config.summary.api_key if config.summary.provider == "openai" else ""
+        )
+        if openai_key:
+            try:
+                import openai
+                client = openai.OpenAI(api_key=openai_key)
+                client.models.list()
+                cat.results.append(CheckResult("ok", "OpenAI API: connected"))
+            except Exception as e:
+                cat.results.append(CheckResult("fail", f"OpenAI API: {e}"))
+        else:
+            cat.results.append(CheckResult("ok", "OpenAI API: not configured (skipped)"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"API check failed: {e}"))
+    return cat
+
+
+def _check_screen_capture_structured() -> CheckCategory:
+    cat = CheckCategory(name="Screen Capture")
+    try:
+        from meeting_recorder.audio.process_finder import find_primary_meeting_process
+        from meeting_recorder.video.window_finder import (
+            find_window_by_pid, get_window_rect, list_visible_windows,
+        )
+        from meeting_recorder.video.screen_capture import ScreenCapture
+
+        hwnd = None
+        source = ""
+        process = find_primary_meeting_process()
+        if process is not None:
+            hwnd = find_window_by_pid(process.pid)
+            source = f"meeting ({process.display_name})"
+
+        if hwnd is None:
+            windows = list_visible_windows()
+            if windows:
+                hwnd = windows[0][0]
+                source = f"window: {windows[0][1][:40]}"
+
+        if hwnd is None:
+            cat.results.append(CheckResult("warn", "No visible window found for screen capture test (skipped)"))
+            return cat
+
+        rect = get_window_rect(hwnd)
+        if rect is None:
+            cat.results.append(CheckResult("warn", "Window minimized or invalid (skipped)"))
+            return cat
+
+        _, _, width, height = rect
+        frame = ScreenCapture._capture_printwindow(hwnd, width, height)
+        if frame is not None:
+            import numpy as np
+            if np.max(frame) >= 5:
+                cat.results.append(CheckResult("ok", f"Screen capture OK: {width}x{height} from {source} (PrintWindow)"))
+            else:
+                cat.results.append(CheckResult("warn", f"PrintWindow returned blank ({width}x{height}) — will fall back to mss"))
+        else:
+            cat.results.append(CheckResult("warn", "PrintWindow failed — will fall back to mss"))
+    except ImportError as e:
+        cat.results.append(CheckResult("warn", f"Screen capture deps missing: {e}"))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"Screen capture probe failed: {e}"))
+    return cat
