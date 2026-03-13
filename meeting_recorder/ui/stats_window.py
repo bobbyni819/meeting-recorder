@@ -598,6 +598,33 @@ class StatsWindow:
         except Exception:
             pass
 
+        # Meeting ROI
+        try:
+            from meeting_recorder.storage.meeting_roi import aggregate_roi
+            roi_data = aggregate_roi(self._recordings_dir)
+            if roi_data.get("meeting_count", 0) > 0:
+                self._section(content, "Meeting ROI")
+                roi_frame = tk.Frame(content, bg=BG_COLOR)
+                roi_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                avg_score = roi_data["avg_roi_score"]
+                score_color = GREEN if avg_score >= 60 else AMBER if avg_score >= 40 else RED_DOT
+                tk.Label(roi_frame,
+                         text=f"Avg ROI: {avg_score:.0f}/100  |  "
+                              f"Total invested: ${roi_data['total_cost']:,.0f}  |  "
+                              f"{roi_data['total_outputs']} outputs",
+                         font=("Segoe UI", 9), fg=score_color, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X)
+                if roi_data["total_outputs"] > 0:
+                    tk.Label(roi_frame,
+                             text=f"Cost per output: ${roi_data['cost_per_output']:,.0f}  |  "
+                                  f"Best: {roi_data['best_meeting']} ({roi_data['best_roi']})  |  "
+                                  f"Worst: {roi_data['worst_meeting']} ({roi_data['worst_roi']})",
+                             font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR,
+                             anchor=tk.W).pack(fill=tk.X, pady=(2, 0))
+        except Exception:
+            pass
+
         # Duration Predictions
         try:
             from meeting_recorder.storage.duration_predict import (

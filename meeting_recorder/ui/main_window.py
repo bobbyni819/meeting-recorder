@@ -3516,6 +3516,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Meeting ROI ---
+        try:
+            from meeting_recorder.storage.meeting_roi import calculate_roi, format_roi
+            roi = calculate_roi(rec_path, meta)
+            if roi is not None:
+                lines.append(format_roi(roi))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Participation Equity ---
         try:
             from meeting_recorder.storage.participation import analyze_participation, format_participation
