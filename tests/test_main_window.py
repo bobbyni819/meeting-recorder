@@ -737,6 +737,24 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {"duration_seconds": 0})
         assert "MEETING COST" not in text
 
+    def test_bookmarks_in_details(self, tmp_path):
+        """BOOKMARKS section shown when bookmarks exist."""
+        import json as _json
+        bm_data = [{"timestamp": 60.0, "label": "Intro", "color": "blue"},
+                    {"timestamp": 300.0, "label": "Q&A", "color": "green"}]
+        (tmp_path / "bookmarks.json").write_text(
+            _json.dumps(bm_data), encoding="utf-8"
+        )
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "BOOKMARKS" in text
+        assert "Intro" in text
+        assert "Q&A" in text
+
+    def test_bookmarks_absent_when_none(self, tmp_path):
+        """No BOOKMARKS section when no bookmarks exist."""
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "BOOKMARKS" not in text
+
     def test_attendance_verification(self, tmp_path):
         """Attendance section shows who spoke and who didn't."""
         meta = {

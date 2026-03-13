@@ -2951,6 +2951,26 @@ class MainWindow:
         else:
             sa_btn = None
 
+        # Bookmarks tab
+        bookmarks_text = ""
+        try:
+            from meeting_recorder.storage.bookmarks import BookmarkStore
+            bm_store = BookmarkStore(rec_path)
+            if len(bm_store) > 0:
+                bookmarks_text = bm_store.format_bookmarks()
+        except Exception:
+            pass
+
+        if bookmarks_text:
+            bm_btn = tk.Label(
+                tab_frame, text="  Bookmarks  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            bm_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(bm_btn)
+        else:
+            bm_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -2984,6 +3004,8 @@ class MainWindow:
             actions_btn.bind("<Button-1>", lambda e: _switch_tab("actions", actions_text, actions_btn))
         if sa_btn:
             sa_btn.bind("<Button-1>", lambda e: _switch_tab("speakers_analytics", speakers_analytics_text, sa_btn))
+        if bm_btn:
+            bm_btn.bind("<Button-1>", lambda e: _switch_tab("bookmarks", bookmarks_text, bm_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)
@@ -3439,6 +3461,16 @@ class MainWindow:
                 lines.append("-" * 40)
                 lines.append(f"  Estimated:  {format_cost(cost)}")
                 lines.append(f"  Per minute: ${cost.cost_per_minute:.2f}")
+                lines.append("")
+        except Exception:
+            pass
+
+        # --- Bookmarks ---
+        try:
+            from meeting_recorder.storage.bookmarks import BookmarkStore
+            bm_store = BookmarkStore(rec_path)
+            if len(bm_store) > 0:
+                lines.append(bm_store.format_bookmarks())
                 lines.append("")
         except Exception:
             pass
