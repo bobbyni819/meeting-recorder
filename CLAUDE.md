@@ -52,6 +52,16 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/cost_budget.py` — weekly cost tracking, budget alerts, trends
 - `meeting_recorder/storage/agenda_extract.py` — transcript agenda extraction via vocabulary shift
 - `meeting_recorder/storage/effectiveness.py` — cross-recording effectiveness analysis
+- `meeting_recorder/storage/duration_optimizer.py` — meeting duration optimizer with schedule suggestions
+- `meeting_recorder/storage/quick_summary.py` — compact shareable meeting summary cards
+- `meeting_recorder/storage/decision_log.py` — extract decisions from transcripts (distinct from action items)
+- `meeting_recorder/storage/meeting_classifier.py` — auto-classify meetings into 10 types
+- `meeting_recorder/storage/daily_summary.py` — daily meeting overview with timeline
+- `meeting_recorder/storage/talk_balance.py` — entropy-based talk-time balance scoring
+- `meeting_recorder/storage/transcript_search.py` — full-text search across all transcripts
+- `meeting_recorder/storage/engagement_score.py` — composite 0-100 engagement score
+- `meeting_recorder/storage/keyword_alerts.py` — watched keyword monitoring and alerting
+- `meeting_recorder/storage/time_patterns.py` — meeting time-of-day distribution analysis
 - `meeting_recorder/stats_cli.py` — CLI stats command
 - `meeting_recorder/search/cli.py` — CLI search command
 - `SETUP.md` — full install guide for a new Windows machine
@@ -190,8 +200,10 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - **Weekly activity heatmap**: Mon-Sun colored strip showing recording frequency
 - **Similar recordings**: collapsible section in detail view showing related meetings
 - **Stats enhancements**: collaborator frequency, time-of-day, day-of-week, common tags
-- **Idle view analytics panels**: Weekly Report (with week navigation), Streaks, Costs, Heatmap, Effectiveness, Focus Time, Insights, Trends, Digest, Follow-ups, Prep (subject search → prep sheet)
+- **Idle view analytics panels**: Today, Weekly Report (with week navigation), Follow-ups, Digest, Insights, Trends, Focus, Streaks, Costs, Heatmap, Effectiveness, Optimizer, Network, Balance, Alerts, Times, Prep
 - **Agenda tab**: detail view tab showing extracted topic agenda from transcript (vocabulary shift detection)
+- **Decisions tab**: detail view tab showing extracted decisions (distinct from action items)
+- **Detail view analytics**: engagement score, meeting type classification, talk balance, sentiment, ROI — all in Details tab
 - All analytics panels: centered overlay with close button, copy button, text display
 
 ## Config validation
@@ -245,6 +257,11 @@ python -m meeting_recorder stats --health # recording health summary
 python -m meeting_recorder stats --streaks # recording streaks and habits
 python -m meeting_recorder stats --costs  # weekly cost tracking and budget
 python -m meeting_recorder stats --effectiveness # meeting effectiveness analysis
+python -m meeting_recorder stats --optimizer  # meeting duration optimizer suggestions
+python -m meeting_recorder stats --sentiment  # sentiment analysis across recordings
+python -m meeting_recorder stats --balance    # talk-time balance analysis
+python -m meeting_recorder stats --alerts     # keyword watchlist alerts
+python -m meeting_recorder stats --search "query"  # full-text transcript search
 python -m meeting_recorder stats --all    # comprehensive report (all of the above)
 python -m meeting_recorder archive [days] # compress old recordings (default: 30 days)
 python -m meeting_recorder export-config  # export secrets for multi-machine
