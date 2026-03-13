@@ -47,6 +47,11 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/error_classifier.py` — error categorization with fix suggestions
 - `meeting_recorder/storage/archive.py` — compress old recordings to save disk space
 - `meeting_recorder/storage/transcript_export.py` — SRT/VTT/TXT transcript export
+- `meeting_recorder/storage/health_summary.py` — recording health scoring with issue detection
+- `meeting_recorder/storage/weekly_report.py` — weekly meeting report generator
+- `meeting_recorder/storage/cost_budget.py` — weekly cost tracking, budget alerts, trends
+- `meeting_recorder/storage/agenda_extract.py` — transcript agenda extraction via vocabulary shift
+- `meeting_recorder/storage/effectiveness.py` — cross-recording effectiveness analysis
 - `meeting_recorder/stats_cli.py` — CLI stats command
 - `meeting_recorder/search/cli.py` — CLI search command
 - `SETUP.md` — full install guide for a new Windows machine
@@ -185,6 +190,9 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - **Weekly activity heatmap**: Mon-Sun colored strip showing recording frequency
 - **Similar recordings**: collapsible section in detail view showing related meetings
 - **Stats enhancements**: collaborator frequency, time-of-day, day-of-week, common tags
+- **Idle view analytics panels**: Weekly Report (with week navigation), Streaks, Costs, Heatmap, Effectiveness, Focus Time, Insights, Trends, Digest, Follow-ups, Prep (subject search → prep sheet)
+- **Agenda tab**: detail view tab showing extracted topic agenda from transcript (vocabulary shift detection)
+- All analytics panels: centered overlay with close button, copy button, text display
 
 ## Config validation
 - `Config.validate()` checks backend, provider, fps, vad threshold, retention, API keys, model size, device, speaker counts, output dir
@@ -232,6 +240,12 @@ pythonw launch.pyw                # background (tray only)
 python -m meeting_recorder diagnose       # system health checks
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)
+python -m meeting_recorder stats --weekly # weekly meeting report (--week-offset N)
+python -m meeting_recorder stats --health # recording health summary
+python -m meeting_recorder stats --streaks # recording streaks and habits
+python -m meeting_recorder stats --costs  # weekly cost tracking and budget
+python -m meeting_recorder stats --effectiveness # meeting effectiveness analysis
+python -m meeting_recorder stats --all    # comprehensive report (all of the above)
 python -m meeting_recorder archive [days] # compress old recordings (default: 30 days)
 python -m meeting_recorder export-config  # export secrets for multi-machine
 python -m meeting_recorder import-config <file>  # import secrets
