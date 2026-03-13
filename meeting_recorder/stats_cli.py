@@ -205,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
         "--streaks", action="store_true",
         help="Show recording streaks and habit tracking",
     )
+    parser.add_argument(
+        "--costs", action="store_true",
+        help="Show meeting cost budget tracker",
+    )
     args = parser.parse_args(argv)
 
     config = Config.load()
@@ -213,6 +217,15 @@ def main(argv: list[str] | None = None) -> int:
         from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
         info = analyze_streaks(config.output_dir)
         print(format_streaks(info))
+        return 0
+
+    if args.costs:
+        from meeting_recorder.storage.cost_budget import analyze_cost_budget, format_cost_budget
+        cb = analyze_cost_budget(config.output_dir, weeks=8)
+        if cb is None:
+            print("No meeting cost data available.")
+        else:
+            print(format_cost_budget(cb))
         return 0
 
     if args.health:
