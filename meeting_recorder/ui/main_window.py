@@ -512,6 +512,7 @@ class MainWindow:
             ("\u29bf Record Window...", self._on_record_window),
             ("\U0001f50d Search", self._on_search),
             ("\U0001f4c2 Open Folder", self._on_open_recordings),
+            ("\U0001f4e6 Export All", self._export_transcripts),
         ]:
             btn = tk.Label(
                 sec_frame, text=f"  {text}  ", font=("Segoe UI", 9),
@@ -1241,6 +1242,15 @@ class MainWindow:
                 menu.add_command(label="Re-process",
                                  command=lambda: self._fire(
                                      lambda: self._on_reprocess(path)))
+            # Copy transcript to clipboard
+            def _copy_single_transcript(p=path):
+                txt = self._read_file(p / "transcript.txt")
+                if not txt:
+                    txt = self._read_file(p / "summary.md")
+                if txt and self._window:
+                    self._window.clipboard_clear()
+                    self._window.clipboard_append(txt)
+            menu.add_command(label="Copy Transcript", command=_copy_single_transcript)
             menu.add_separator()
             menu.add_command(label="Copy Path",
                              command=lambda: (
@@ -2249,6 +2259,70 @@ class MainWindow:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _export_transcripts(self) -> None:
+        """Export all transcripts as a ZIP file."""
+        if not self._window or not hasattr(self, "_history_card_paths"):
+            return
+
+        from tkinter import filedialog
+        import zipfile
+
+        # Gather all recording dirs with transcripts
+        base = self.config.output_dir if hasattr(self, "config") else None
+        if base is None:
+            from meeting_recorder.config import Config
+            base = Config.load().output_dir
+
+        if not base.exists():
+            return
+
+        recordings = sorted(
+            [d for d in base.iterdir() if d.is_dir()],
+            key=lambda p: p.name, reverse=True,
+        )
+
+        # Count available transcripts
+        transcript_paths = []
+        for rec in recordings:
+            txt = rec / "transcript.txt"
+            summary = rec / "summary.md"
+            if txt.exists():
+                transcript_paths.append((rec.name, txt, summary if summary.exists() else None))
+            elif summary.exists():
+                transcript_paths.append((rec.name, None, summary))
+
+        if not transcript_paths:
+            self._show_warning_banner("No transcripts found to export.", duration_ms=3000)
+            return
+
+        dest = filedialog.asksaveasfilename(
+            title=f"Export {len(transcript_paths)} Transcripts",
+            defaultextension=".zip",
+            filetypes=[("ZIP archive", "*.zip"), ("All files", "*.*")],
+            initialfile="meeting_transcripts.zip",
+            parent=self._window,
+        )
+        if not dest:
+            return
+
+        try:
+            with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name, txt_path, sum_path in transcript_paths:
+                    if txt_path:
+                        zf.write(txt_path, f"{name}/transcript.txt")
+                    if sum_path:
+                        zf.write(sum_path, f"{name}/summary.md")
+
+            file_count = len(transcript_paths)
+            self._show_warning_banner(
+                f"Exported {file_count} recording(s) to {Path(dest).name}",
+                duration_ms=4000,
+            )
+            logger.info("Exported %d transcripts to %s", file_count, dest)
+        except Exception:
+            logger.exception("Failed to export transcripts")
+            self._show_warning_banner("Export failed — check logs.", duration_ms=5000)
 
     def _on_escape(self) -> None:
         """Handle Escape key: close detail view, dismiss help, or hide window."""
