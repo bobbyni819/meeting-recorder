@@ -535,6 +535,7 @@ class MainWindow:
             ("\U0001f4e6 Export All", self._export_transcripts),
             ("\U0001f4ca Stats", self._show_stats),
             ("\U0001f464 Profiles", self._show_voice_profiles),
+            ("\U0001f4c5 Calendar", self._show_calendar),
             ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
             btn = tk.Label(
@@ -2774,6 +2775,26 @@ class MainWindow:
         if not hasattr(self, "_voice_profiles_window"):
             self._voice_profiles_window = VoiceProfilesWindow()
         self._voice_profiles_window.show(self._window)
+
+    def _show_calendar(self) -> None:
+        """Open the recording calendar view."""
+        if not self._window:
+            return
+        base = self.config.output_dir if hasattr(self, "config") else None
+        if base is None:
+            from meeting_recorder.config import Config
+            base = Config.load().output_dir
+        from meeting_recorder.ui.calendar_view import CalendarWindow
+
+        def _on_date_click(date_str: str):
+            """Filter history to the selected date."""
+            if hasattr(self, "_filter_var") and self._filter_var:
+                self._filter_var.set(date_str)
+                self._refresh_history()
+
+        if not hasattr(self, "_calendar_window"):
+            self._calendar_window = CalendarWindow(base, on_date_click=_on_date_click)
+        self._calendar_window.show(self._window)
 
     def _show_diagnostics(self) -> None:
         """Open the system diagnostics window."""
