@@ -1419,6 +1419,17 @@ class MainWindow:
                     self._window.clipboard_clear()
                     self._window.clipboard_append(txt)
             menu.add_command(label="Copy Transcript", command=_copy_single_transcript)
+            # Export as HTML
+            def _export_single_html(p=path):
+                from meeting_recorder.storage.html_export import generate_html_report
+                try:
+                    html_content = generate_html_report(p)
+                    dest = p / f"{p.name}.html"
+                    dest.write_text(html_content, encoding="utf-8")
+                    self.add_notification("success", f"HTML saved to {dest.name}", source="export")
+                except Exception:
+                    logger.exception("HTML export failed for %s", p.name)
+            menu.add_command(label="Export as HTML", command=_export_single_html)
             menu.add_separator()
             menu.add_command(label="Copy Path",
                              command=lambda: (
@@ -1960,6 +1971,42 @@ class MainWindow:
         notes_btn.bind("<Button-1>", lambda e: _copy_meeting_notes())
         notes_btn.bind("<Enter>", lambda e: notes_btn.configure(fg=TEXT_COLOR))
         notes_btn.bind("<Leave>", lambda e: notes_btn.configure(fg=TEXT_DIM))
+
+        # Export HTML button
+        html_btn = tk.Label(
+            top_bar, text="\U0001f310  HTML", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+        )
+        html_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+        def _export_html():
+            from tkinter import filedialog
+            default_name = f"{rec_path.name}.html"
+            dest = filedialog.asksaveasfilename(
+                parent=self._window,
+                title="Export as HTML",
+                defaultextension=".html",
+                filetypes=[("HTML file", "*.html"), ("All files", "*.*")],
+                initialfile=default_name,
+            )
+            if not dest:
+                return
+            try:
+                from meeting_recorder.storage.html_export import generate_html_report
+                html_content = generate_html_report(rec_path, meta)
+                Path(dest).write_text(html_content, encoding="utf-8")
+                html_btn.configure(text="\u2713  Saved!", fg=GREEN)
+                self._window.after(2000, lambda: html_btn.configure(
+                    text="\U0001f310  HTML", fg=TEXT_DIM))
+            except Exception:
+                logger.exception("Failed to export HTML for %s", rec_path.name)
+                html_btn.configure(text="\u2717  Error", fg=RED_DOT)
+                self._window.after(2000, lambda: html_btn.configure(
+                    text="\U0001f310  HTML", fg=TEXT_DIM))
+
+        html_btn.bind("<Button-1>", lambda e: _export_html())
+        html_btn.bind("<Enter>", lambda e: html_btn.configure(fg=TEXT_COLOR))
+        html_btn.bind("<Leave>", lambda e: html_btn.configure(fg=TEXT_DIM))
 
         # Timeline + Speaker editor buttons (only if transcript.json exists)
         if (rec_path / "transcript.json").exists():
