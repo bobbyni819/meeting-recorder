@@ -612,6 +612,7 @@ class MainWindow:
             ("\u2696 Balance", self._show_balance_panel),
             ("\U0001f514 Alerts", self._show_alerts_panel),
             ("\U0001f552 Times", self._show_times_panel),
+            ("\u2705 Actions", self._show_action_tracker_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
         ]:
             btn = tk.Label(
@@ -5672,6 +5673,71 @@ class MainWindow:
             overlay, text=f"{pending} pending across {len(groups)} meeting(s)",
             font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(0, 8))
+
+    def _show_action_tracker_panel(self) -> None:
+        """Show a popup panel with cross-recording action item tracking."""
+        if not self._window:
+            return
+        if hasattr(self, "_action_tracker_overlay") and self._action_tracker_overlay:
+            self._action_tracker_overlay.destroy()
+            self._action_tracker_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.action_tracker import track_actions, format_action_tracker
+            report = track_actions(base, weeks=8)
+            text = format_action_tracker(report)
+        except Exception:
+            logger.exception("Failed to track actions")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._action_tracker_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Action Item Tracker",
+            font=("Segoe UI", 11, "bold"), fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        def _copy():
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        copy_btn.bind("<Button-1>", lambda e: _copy())
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_action_tracker_overlay", None)))
+
+        tw = tk.Text(
+            overlay, wrap=tk.WORD, font=("Consolas", 9),
+            bg=BG_PANEL, fg=TEXT_COLOR, bd=0, highlightthickness=0,
+            width=60, height=min(24, max(8, text.count("\n") + 2)),
+            padx=16, pady=8,
+        )
+        tw.pack(fill=tk.BOTH, expand=True)
+        tw.insert("1.0", text)
+        tw.configure(state=tk.DISABLED)
 
     def _show_times_panel(self) -> None:
         """Show a popup panel with meeting time-of-day patterns."""
