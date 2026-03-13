@@ -2411,6 +2411,33 @@ class MainWindow:
             reprocess_btn.bind("<Enter>", lambda e: reprocess_btn.configure(fg=TEXT_COLOR))
             reprocess_btn.bind("<Leave>", lambda e: reprocess_btn.configure(fg=TEXT_DIM))
 
+        # Archive/Unarchive button
+        try:
+            from meeting_recorder.storage.archive import is_archived, archive_recording, unarchive_recording
+            _is_arch = is_archived(rec_path)
+            arch_text = "\U0001f4e6  Unarchive" if _is_arch else "\U0001f4e6  Archive"
+            arch_btn = tk.Label(
+                top_bar, text=arch_text, font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            arch_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+            def _toggle_archive(btn=arch_btn, path=rec_path):
+                if is_archived(path):
+                    unarchive_recording(path)
+                    btn.configure(text="\u2713  Restored!", fg=GREEN)
+                else:
+                    archive_recording(path)
+                    btn.configure(text="\u2713  Archived!", fg=GREEN)
+                if self._window:
+                    self._window.after(1500, lambda: self._show_detail(path))
+
+            arch_btn.bind("<Button-1>", lambda e: _toggle_archive())
+            arch_btn.bind("<Enter>", lambda e: arch_btn.configure(fg=TEXT_COLOR))
+            arch_btn.bind("<Leave>", lambda e: arch_btn.configure(fg=TEXT_DIM))
+        except Exception:
+            pass
+
         # Share Notes button
         notes_btn = tk.Label(
             top_bar, text="\U0001f4dd  Notes", font=("Segoe UI", 9),
@@ -3028,6 +3055,26 @@ class MainWindow:
         else:
             bm_btn = None
 
+        # Keywords tab (word frequency analysis)
+        keywords_text = ""
+        try:
+            from meeting_recorder.storage.word_frequency import analyze_word_frequency, format_word_frequency
+            wf = analyze_word_frequency(rec_path)
+            if wf and wf.top_words:
+                keywords_text = format_word_frequency(wf)
+        except Exception:
+            pass
+
+        if keywords_text:
+            kw_btn = tk.Label(
+                tab_frame, text="  Keywords  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            kw_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(kw_btn)
+        else:
+            kw_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -3063,6 +3110,8 @@ class MainWindow:
             sa_btn.bind("<Button-1>", lambda e: _switch_tab("speakers_analytics", speakers_analytics_text, sa_btn))
         if bm_btn:
             bm_btn.bind("<Button-1>", lambda e: _switch_tab("bookmarks", bookmarks_text, bm_btn))
+        if kw_btn:
+            kw_btn.bind("<Button-1>", lambda e: _switch_tab("keywords", keywords_text, kw_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)
