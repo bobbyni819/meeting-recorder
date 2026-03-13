@@ -576,6 +576,7 @@ class MainWindow:
             ("\U0001f4e6 Export All", self._export_transcripts),
             ("\U0001f4ca Stats", self._show_stats),
             ("\U0001f464 Profiles", self._show_voice_profiles),
+            ("\U0001f465 People", self._show_attendee_directory),
             ("\U0001f4c5 Calendar", self._show_calendar),
             ("\u2611 Follow-ups", self._show_followups_panel),
             ("\U0001f4dd Digest", self._show_digest_panel),
@@ -4001,6 +4002,132 @@ class MainWindow:
         if not hasattr(self, "_diagnostics_window"):
             self._diagnostics_window = DiagnosticsWindow()
         self._diagnostics_window.show(self._window)
+
+    def _show_attendee_directory(self) -> None:
+        """Show a popup listing all people you've met with."""
+        if not self._window:
+            return
+        if hasattr(self, "_attendee_overlay") and self._attendee_overlay:
+            self._attendee_overlay.destroy()
+            self._attendee_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.attendee_directory import build_directory, format_directory
+            profiles = build_directory(base)
+        except Exception:
+            logger.exception("Failed to build attendee directory")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._attendee_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="People You Meet With",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        # Copy button
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        copy_btn.bind("<Button-1>", lambda e: self._copy_to_clipboard(
+            format_directory(profiles), copy_btn, "\U0001f4cb Copy"))
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_attendee_overlay", None)))
+
+        if not profiles:
+            tk.Label(
+                overlay, text="No attendee data found yet.",
+                font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_PANEL,
+            ).pack(padx=20, pady=16)
+            return
+
+        # List
+        list_frame = tk.Frame(overlay, bg=BG_PANEL)
+        list_frame.pack(fill=tk.BOTH, padx=8, pady=(4, 10))
+
+        for p in profiles[:15]:
+            card = tk.Frame(list_frame, bg=BG_CARD)
+            card.pack(fill=tk.X, pady=2, ipady=3)
+
+            hours = p.total_minutes / 60
+            tk.Label(
+                card, text=p.name,
+                font=("Segoe UI", 9, "bold"), fg=TEXT_COLOR, bg=BG_CARD,
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=(10, 4))
+
+            stats = f"{p.meeting_count} meetings  \u2022  {hours:.1f}h"
+            if p.last_seen:
+                stats += f"  \u2022  last: {p.last_seen}"
+            tk.Label(
+                card, text=stats,
+                font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_CARD,
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=(10, 4))
+
+            if p.common_subjects:
+                tk.Label(
+                    card, text=", ".join(p.common_subjects),
+                    font=("Segoe UI", 7), fg="#607080", bg=BG_CARD,
+                    anchor=tk.W,
+                ).pack(fill=tk.X, padx=(10, 4))
+
+            # Hover
+            def _enter(e, c=card):
+                c.configure(bg=BG_CARD_HOVER)
+                for ch in c.winfo_children():
+                    ch.configure(bg=BG_CARD_HOVER)
+
+            def _leave(e, c=card):
+                c.configure(bg=BG_CARD)
+                for ch in c.winfo_children():
+                    ch.configure(bg=BG_CARD)
+
+            card.bind("<Enter>", _enter)
+            card.bind("<Leave>", _leave)
+
+            # Click to filter history by this person's name
+            def _on_click(e, name=p.name):
+                overlay.destroy()
+                self._attendee_overlay = None
+                if hasattr(self, "_filter_var"):
+                    self._filter_var.set(name)
+
+            card.bind("<Button-1>", _on_click)
+            for child in card.winfo_children():
+                child.bind("<Button-1>", _on_click)
+
+        tk.Label(
+            overlay, text=f"{len(profiles)} people total • Click to filter",
+            font=("Segoe UI", 7), fg=TEXT_DIM, bg=BG_PANEL,
+        ).pack(pady=(0, 8))
+
+    def _copy_to_clipboard(self, text: str, btn: tk.Label, original_text: str) -> None:
+        """Copy text to clipboard and briefly flash confirmation on a label."""
+        if self._window and text:
+            self._window.clipboard_clear()
+            self._window.clipboard_append(text)
+            btn.configure(text="\u2713 Copied!", fg=GREEN)
+            self._window.after(1500, lambda: btn.configure(
+                text=original_text, fg=TEXT_DIM))
 
     def _show_digest_panel(self) -> None:
         """Show a popup with daily/weekly digest options."""
