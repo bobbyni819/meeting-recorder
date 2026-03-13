@@ -670,6 +670,48 @@ class MainWindow:
         self._tag_filter_frame = tk.Frame(parent, bg=BG_COLOR)
         self._tag_filter_frame.pack(fill=tk.X, padx=20, pady=(0, 2))
 
+        # Quick filter shortcuts
+        quick_filter_row = tk.Frame(parent, bg=BG_COLOR)
+        quick_filter_row.pack(fill=tk.X, padx=20, pady=(0, 2))
+        self._active_quick_filter = ""
+
+        from datetime import datetime as _dt, timedelta as _td
+        today_str = _dt.now().strftime("%Y-%m-%d")
+        week_ago = (_dt.now() - _td(days=7)).strftime("%Y-%m-%d")
+
+        quick_filters = [
+            ("Today", today_str),
+            ("This Week", week_ago),
+            ("Failed", "ERROR"),
+        ]
+
+        def _set_quick_filter(text: str, label: str):
+            if self._active_quick_filter == label:
+                # Toggle off
+                self._active_quick_filter = ""
+                self._filter_var.set("")
+            else:
+                self._active_quick_filter = label
+                self._filter_var.set(text)
+            # Update button styles
+            for child in quick_filter_row.winfo_children():
+                is_active = child.cget("text").strip() == self._active_quick_filter
+                child.configure(
+                    fg=TEXT_BRIGHT if is_active else TEXT_DIM,
+                    bg=BLUE_DARK if is_active else BUTTON_BG,
+                )
+
+        for label, filter_text in quick_filters:
+            qbtn = tk.Label(
+                quick_filter_row, text=f" {label} ", font=("Segoe UI", 7),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2",
+            )
+            qbtn.pack(side=tk.LEFT, padx=(0, 4))
+            qbtn.bind("<Button-1>", lambda e, t=filter_text, l=label: _set_quick_filter(t, l))
+            qbtn.bind("<Enter>", lambda e, b=qbtn: b.configure(fg=TEXT_BRIGHT))
+            qbtn.bind("<Leave>", lambda e, b=qbtn: b.configure(
+                fg=TEXT_BRIGHT if b.cget("text").strip() == self._active_quick_filter else TEXT_DIM))
+
         # Inline filter
         filter_row = tk.Frame(parent, bg=BG_COLOR)
         filter_row.pack(fill=tk.X, padx=20, pady=(0, 4))
