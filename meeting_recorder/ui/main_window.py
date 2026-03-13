@@ -3864,6 +3864,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Topic Timeline ---
+        try:
+            from meeting_recorder.storage.topic_timeline import analyze_topic_timeline, format_topic_timeline
+            tt = analyze_topic_timeline(rec_path)
+            if tt is not None:
+                lines.append(format_topic_timeline(tt))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
