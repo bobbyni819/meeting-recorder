@@ -1592,10 +1592,77 @@ class MainWindow:
         summary_text = self._read_file(rec_path / "summary.md")
         details_text = self._build_details_text(rec_path, meta)
 
+        # Edit mode state
+        edit_state = {"active": False, "current_tab": "transcript"}
+        edit_bar = tk.Frame(parent, bg=BG_CONTROLS)
+        # Not packed until edit mode is entered
+
+        def _enter_edit_mode():
+            if edit_state["active"]:
+                return
+            edit_state["active"] = True
+            text_widget.configure(state=tk.NORMAL, bg="#0f1a2e")
+            text_widget.focus_set()
+            edit_bar.pack(fill=tk.X, padx=16, pady=(0, 2), before=content_frame)
+            edit_btn.configure(text="Editing...", fg=AMBER)
+
+        def _save_edit():
+            if not edit_state["active"]:
+                return
+            new_text = text_widget.get("1.0", tk.END).rstrip("\n")
+            tab = edit_state["current_tab"]
+            if tab == "transcript":
+                target = rec_path / "transcript.txt"
+            elif tab == "summary":
+                target = rec_path / "summary.md"
+            else:
+                _cancel_edit()
+                return
+            try:
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(new_text)
+                if tab == "transcript":
+                    nonlocal transcript_text
+                    transcript_text = new_text
+                elif tab == "summary":
+                    nonlocal summary_text
+                    summary_text = new_text
+                logger.info("Saved edited %s for %s", tab, rec_path.name)
+            except Exception:
+                logger.exception("Failed to save edited %s", tab)
+            _cancel_edit()
+
+        def _cancel_edit():
+            edit_state["active"] = False
+            text_widget.configure(state=tk.DISABLED, bg=BG_PANEL)
+            edit_bar.pack_forget()
+            edit_btn.configure(text="\u270e Edit", fg=TEXT_DIM)
+
+        save_btn = tk.Label(
+            edit_bar, text=" \u2713 Save ", font=("Segoe UI", 9, "bold"),
+            fg=GREEN, bg=BG_CONTROLS, cursor="hand2", padx=8, pady=2,
+        )
+        save_btn.pack(side=tk.LEFT, padx=(8, 4), pady=4)
+        save_btn.bind("<Button-1>", lambda e: _save_edit())
+
+        cancel_edit_btn = tk.Label(
+            edit_bar, text=" \u2717 Cancel ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_CONTROLS, cursor="hand2", padx=8, pady=2,
+        )
+        cancel_edit_btn.pack(side=tk.LEFT, padx=4, pady=4)
+        cancel_edit_btn.bind("<Button-1>", lambda e: _cancel_edit())
+
+        tk.Label(
+            edit_bar, text="Editing transcript — changes saved to disk",
+            font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_CONTROLS,
+        ).pack(side=tk.LEFT, padx=8, pady=4)
+
         # Tab buttons (N-tab system)
         tab_buttons: list[tk.Label] = []
 
         def _show_tab(content: str, active_btn: tk.Label):
+            if edit_state["active"]:
+                _cancel_edit()
             text_widget.configure(state=tk.NORMAL)
             text_widget.delete("1.0", tk.END)
             text_widget.insert("1.0", content or "(not available)")
@@ -1627,9 +1694,31 @@ class MainWindow:
         details_btn.pack(side=tk.LEFT, padx=(0, 4))
         tab_buttons.append(details_btn)
 
-        transcript_btn.bind("<Button-1>", lambda e: _show_tab(transcript_text, transcript_btn))
-        summary_btn.bind("<Button-1>", lambda e: _show_tab(summary_text, summary_btn))
-        details_btn.bind("<Button-1>", lambda e: _show_tab(details_text, details_btn))
+        def _switch_tab(tab_name, content, btn):
+            edit_state["current_tab"] = tab_name
+            _show_tab(content, btn)
+            # Show/hide edit button based on tab
+            if tab_name in ("transcript", "summary") and content:
+                edit_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+            else:
+                edit_btn.pack_forget()
+
+        # Edit button (in tab bar, right side)
+        edit_btn = tk.Label(
+            tab_frame, text="\u270e Edit", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+        )
+        edit_btn.bind("<Button-1>", lambda e: _enter_edit_mode())
+        edit_btn.bind("<Enter>", lambda e: edit_btn.configure(fg=TEXT_COLOR))
+        edit_btn.bind("<Leave>", lambda e: edit_btn.configure(
+            fg=AMBER if edit_state["active"] else TEXT_DIM))
+        # Only show edit btn for transcript/summary tabs with content
+        if transcript_text:
+            edit_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+
+        transcript_btn.bind("<Button-1>", lambda e: _switch_tab("transcript", transcript_text, transcript_btn))
+        summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
+        details_btn.bind("<Button-1>", lambda e: _switch_tab("details", details_text, details_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)

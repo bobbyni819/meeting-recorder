@@ -646,6 +646,30 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {})
         assert "SPEAKER STATS" not in text
 
+    def test_quality_scores_displayed(self, tmp_path):
+        """Quality scores section shows when metadata has scores."""
+        meta = {
+            "quality_scores": {
+                "overall_score": 85,
+                "audio_score": 90,
+                "audio_details": {"app_rms_db": -18.5, "app_peak_db": -3.0, "app_silence_ratio": 0.1},
+                "transcript_score": 80,
+                "transcript_details": {"word_count": 500, "wpm": 130, "large_gaps": 1},
+                "video_score": 100,
+                "video_details": {},
+            }
+        }
+        text = MainWindow._build_details_text(tmp_path, meta)
+        assert "QUALITY" in text
+        assert "85/100" in text
+        assert "90/100" in text
+        assert "Excellent" in text or "Good" in text
+
+    def test_quality_scores_absent_when_empty(self, tmp_path):
+        """No QUALITY section when no scores in metadata."""
+        text = MainWindow._build_details_text(tmp_path, {})
+        assert "QUALITY" not in text
+
 
 # ---------------------------------------------------------------------------
 # History filter
