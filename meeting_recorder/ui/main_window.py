@@ -2192,7 +2192,7 @@ class MainWindow:
         cancel_btn.bind("<Button-1>", lambda e: popup.destroy())
 
     def _bulk_compare(self) -> None:
-        """Compare two selected recordings side by side."""
+        """Compare two selected recordings side by side in a visual window."""
         if len(self._bulk_selected) != 2:
             return
         paths = sorted(self._bulk_selected)
@@ -2204,20 +2204,9 @@ class MainWindow:
                 text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
 
         try:
-            from meeting_recorder.storage.comparison import compare_recordings
-            result = compare_recordings(paths[0], paths[1])
-            # Copy comparison text to clipboard and show notification
-            text = result.format_text()
-            if self._window:
-                self._window.clipboard_clear()
-                self._window.clipboard_append(text)
-            self.add_notification(
-                "success",
-                f"Comparison copied to clipboard ({result.name_a} vs {result.name_b})",
-                source="compare",
-            )
-            self._show_warning_banner(
-                "Comparison copied to clipboard!", duration_ms=3000)
+            from meeting_recorder.ui.comparison_window import ComparisonWindow
+            cw = ComparisonWindow(paths[0], paths[1])
+            cw.show(self._window)
         except Exception:
             logger.exception("Comparison failed")
             self.add_notification("error", "Comparison failed", source="compare")
