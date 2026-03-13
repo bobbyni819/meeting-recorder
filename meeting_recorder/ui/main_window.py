@@ -2938,6 +2938,29 @@ class MainWindow:
         else:
             actions_btn = None
 
+        # Speaker analytics tab (only if transcript.json exists)
+        speakers_analytics_text = ""
+        try:
+            from meeting_recorder.storage.speaker_analytics import (
+                analyze_speakers,
+                format_speaker_analytics,
+            )
+            sa_result = analyze_speakers(rec_path, meta)
+            if sa_result:
+                speakers_analytics_text = format_speaker_analytics(sa_result)
+        except Exception:
+            logger.debug("Speaker analytics failed for %s", rec_path.name)
+
+        if speakers_analytics_text:
+            sa_btn = tk.Label(
+                tab_frame, text="  Speakers  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            sa_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(sa_btn)
+        else:
+            sa_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -2969,6 +2992,8 @@ class MainWindow:
         notes_btn.bind("<Button-1>", lambda e: _switch_tab("notes", notes_text, notes_btn))
         if actions_btn:
             actions_btn.bind("<Button-1>", lambda e: _switch_tab("actions", actions_text, actions_btn))
+        if sa_btn:
+            sa_btn.bind("<Button-1>", lambda e: _switch_tab("speakers_analytics", speakers_analytics_text, sa_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)
