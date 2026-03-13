@@ -1517,6 +1517,20 @@ class MainWindow:
         detail_parts = [f"{date_str}  {time_str}"]
         if app_label:
             detail_parts.append(app_label)
+        # Attendee count badge
+        attendees = meta.get("meeting_attendees", [])
+        if attendees:
+            detail_parts.append(f"\U0001f465 {len(attendees)}")
+        # Action item count badge
+        ai_path = rec_path / "action_items.json"
+        if ai_path.exists():
+            try:
+                with open(ai_path, "r", encoding="utf-8") as _aif:
+                    ai_count = len(json.load(_aif))
+                if ai_count:
+                    detail_parts.append(f"\u2611 {ai_count}")
+            except Exception:
+                pass
         # Show status for non-completed recordings
         if status and status not in ("completed", ""):
             detail_parts.append(status.upper())
