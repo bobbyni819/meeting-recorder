@@ -1204,6 +1204,25 @@ class MainWindow:
             anchor=tk.W,
         ).pack(fill=tk.X)
 
+        # Transcript preview (first ~80 chars of transcript.txt)
+        preview = ""
+        try:
+            txt_path = rec_path / "transcript.txt"
+            if txt_path.exists():
+                raw = txt_path.read_text(encoding="utf-8")[:200]
+                # Strip speaker labels and timestamps, get just text
+                preview = " ".join(raw.split())[:80]
+                if len(preview) >= 80:
+                    preview = preview[:77] + "..."
+        except Exception:
+            pass
+        if preview:
+            tk.Label(
+                left, text=preview,
+                font=("Segoe UI", 8), fg="#607080", bg=BG_CARD,
+                anchor=tk.W,
+            ).pack(fill=tk.X)
+
         # Quality indicator + duration badge on right side
         quality = meta.get("quality_scores", {})
         q_score = quality.get("overall_score") if quality else None
