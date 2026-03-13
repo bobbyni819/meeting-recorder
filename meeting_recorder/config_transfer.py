@@ -122,11 +122,12 @@ def export_config(dest: str | None = None) -> int:
     return 0
 
 
-def import_config(source: str) -> int:
+def import_config(source: str, *, overwrite: bool = False) -> int:
     """Import secrets from a portable bundle file.
 
     Args:
         source: Path to the bundle JSON file.
+        overwrite: If True, skip interactive confirmation prompts (for GUI use).
 
     Returns:
         0 on success, 1 on error.
@@ -177,7 +178,7 @@ def import_config(source: str) -> int:
 
     # Check if secrets file already exists
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if SECRETS_FILE.exists():
+    if SECRETS_FILE.exists() and not overwrite:
         print(f"Existing secrets found at {SECRETS_FILE}")
         resp = input("Overwrite? [y/N] ").strip().lower()
         if resp != "y":
@@ -191,7 +192,7 @@ def import_config(source: str) -> int:
 
     # Import Google token
     if "google_token" in bundle:
-        if TOKEN_FILE.exists():
+        if TOKEN_FILE.exists() and not overwrite:
             resp = input("Google OAuth token already exists. Overwrite? [y/N] ").strip().lower()
             if resp != "y":
                 print("Kept existing Google token.")

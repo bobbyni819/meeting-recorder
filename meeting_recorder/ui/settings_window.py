@@ -566,6 +566,31 @@ class SettingsWindow:
             foreground="gray",
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(2, 10))
 
+        # Config export/import section
+        row += 1
+        ttk.Separator(parent, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=10
+        )
+
+        row += 1
+        ttk.Label(parent, text="Config Transfer", font=("", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(5, 2)
+        )
+
+        row += 1
+        ttk.Label(
+            parent,
+            text="Export API keys & secrets to transfer to another machine.\n"
+                 "Non-secret settings sync via git.",
+            foreground="gray",
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+
+        row += 1
+        transfer_frame = ttk.Frame(parent)
+        transfer_frame.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Button(transfer_frame, text="Export Config...", command=self._export_config).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(transfer_frame, text="Import Config...", command=self._import_config).pack(side=tk.LEFT, padx=(0, 5))
+
         parent.columnconfigure(1, weight=1)
 
     def _get_recording_stats(self) -> str:
@@ -709,6 +734,54 @@ class SettingsWindow:
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
 
         parent.columnconfigure(1, weight=1)
+
+    def _export_config(self) -> None:
+        """Export config secrets to a portable file."""
+        path = filedialog.asksaveasfilename(
+            title="Export Config",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            initialfile="meeting_recorder_config.json",
+        )
+        if not path:
+            return
+        try:
+            from meeting_recorder.config_transfer import export_config
+            result = export_config(path)
+            if result == 0:
+                messagebox.showinfo("Export Complete", f"Config exported to:\n{path}")
+            else:
+                messagebox.showwarning("Export Failed", "No secrets file found. Run the app once first.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
+
+    def _import_config(self) -> None:
+        """Import config secrets from a portable file."""
+        path = filedialog.askopenfilename(
+            title="Import Config",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        if not messagebox.askyesno(
+            "Import Config",
+            "This will overwrite your current API keys and secrets.\n\nContinue?",
+        ):
+            return
+
+        try:
+            from meeting_recorder.config_transfer import import_config
+            result = import_config(path, overwrite=True)
+            if result == 0:
+                messagebox.showinfo(
+                    "Import Complete",
+                    "Config imported successfully.\n\nRestart the app for changes to take effect.",
+                )
+            else:
+                messagebox.showwarning("Import Failed", "Could not import the config file.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Import failed: {e}")
 
     def _browse_gdrive_creds(self) -> None:
         """Open file browser for Google Drive credentials JSON."""
