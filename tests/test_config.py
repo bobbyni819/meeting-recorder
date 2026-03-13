@@ -475,10 +475,12 @@ class TestConfigOutputDir:
 class TestConfigValidation:
     def test_valid_config_no_warnings(self):
         cfg = Config()
+        cfg.diarization.enabled = False  # skip token check
         assert cfg.validate() == []
 
     def test_invalid_backend_warns(self):
         cfg = Config()
+        cfg.diarization.enabled = False  # isolate to backend warning
         cfg.transcription.backend = "invalid"
         warnings = cfg.validate()
         assert len(warnings) == 1
@@ -509,3 +511,78 @@ class TestConfigValidation:
         cfg.screen_recording.fps = 0
         warnings = cfg.validate()
         assert len(warnings) >= 2
+
+    def test_cloud_backend_no_key_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.backend = "cloud"
+        cfg.transcription.openai_api_key = ""
+        warnings = cfg.validate()
+        assert any("openai_api_key" in w for w in warnings)
+
+    def test_gemini_backend_no_key_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.backend = "gemini"
+        cfg.transcription.gemini_api_key = ""
+        warnings = cfg.validate()
+        assert any("gemini_api_key" in w for w in warnings)
+
+    def test_cloud_backend_with_key_ok(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.backend = "cloud"
+        cfg.transcription.openai_api_key = "sk-test123"
+        warnings = cfg.validate()
+        assert not any("openai_api_key" in w for w in warnings)
+
+    def test_summary_no_key_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.summary.enabled = True
+        cfg.summary.api_key = ""
+        warnings = cfg.validate()
+        assert any("api_key" in w for w in warnings)
+
+    def test_diarization_no_token_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = True
+        cfg.diarization.huggingface_token = ""
+        warnings = cfg.validate()
+        assert any("huggingface_token" in w for w in warnings)
+
+    def test_invalid_model_size_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.model_size = "super-large"
+        warnings = cfg.validate()
+        assert any("model" in w.lower() for w in warnings)
+
+    def test_valid_model_size_ok(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.model_size = "large-v3"
+        warnings = cfg.validate()
+        assert not any("model" in w.lower() for w in warnings)
+
+    def test_invalid_device_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.device = "tpu"
+        warnings = cfg.validate()
+        assert any("device" in w for w in warnings)
+
+    def test_min_speakers_zero_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.diarization.min_speakers = 0
+        warnings = cfg.validate()
+        assert any("min_speakers" in w for w in warnings)
+
+    def test_max_less_than_min_speakers_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.diarization.min_speakers = 5
+        cfg.diarization.max_speakers = 2
+        warnings = cfg.validate()
+        assert any("max_speakers" in w for w in warnings)

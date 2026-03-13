@@ -14,6 +14,7 @@ everything else goes back to the repo's config.toml.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -351,6 +352,60 @@ class Config:
         if self.vad.threshold < 0 or self.vad.threshold > 1:
             warnings.append(
                 f"vad.threshold = {self.vad.threshold} must be between 0.0 and 1.0"
+            )
+
+        # API key checks — warn if a cloud backend is selected but no key
+        if self.transcription.backend == "cloud" and not self.transcription.openai_api_key:
+            warnings.append(
+                "transcription.backend = 'cloud' but no openai_api_key set in secrets.toml"
+            )
+        if self.transcription.backend == "gemini" and not self.transcription.gemini_api_key:
+            warnings.append(
+                "transcription.backend = 'gemini' but no gemini_api_key set in secrets.toml"
+            )
+        if self.summary.enabled and not self.summary.api_key:
+            warnings.append(
+                f"summary.enabled = true but no api_key set for provider '{self.summary.provider}'"
+            )
+
+        # Diarization requires HuggingFace token
+        if self.diarization.enabled and not self.diarization.huggingface_token:
+            warnings.append(
+                "diarization.enabled = true but no huggingface_token set in secrets.toml"
+            )
+
+        # Model size validation
+        valid_models = {"tiny", "base", "small", "medium", "large", "large-v1", "large-v2", "large-v3"}
+        if self.transcription.backend == "local" and self.transcription.model_size not in valid_models:
+            warnings.append(
+                f"transcription.model_size = '{self.transcription.model_size}' "
+                f"is not a known Whisper model"
+            )
+
+        # Device validation
+        valid_devices = {"cuda", "cpu", "auto"}
+        if self.transcription.device not in valid_devices:
+            warnings.append(
+                f"transcription.device = '{self.transcription.device}' "
+                f"is not valid (expected one of: {', '.join(sorted(valid_devices))})"
+            )
+
+        # Diarization speaker count
+        if self.diarization.min_speakers < 1:
+            warnings.append(
+                f"diarization.min_speakers = {self.diarization.min_speakers} must be >= 1"
+            )
+        if self.diarization.max_speakers < self.diarization.min_speakers:
+            warnings.append(
+                f"diarization.max_speakers ({self.diarization.max_speakers}) "
+                f"< min_speakers ({self.diarization.min_speakers})"
+            )
+
+        # Output dir writability
+        out = self.output_dir
+        if out.exists() and not os.access(out, os.W_OK):
+            warnings.append(
+                f"output directory '{out}' exists but is not writable"
             )
 
         for w in warnings:
