@@ -2660,11 +2660,37 @@ class MainWindow:
         if status == "error" and error_msg:
             err_frame = tk.Frame(parent, bg="#3d1414")
             err_frame.pack(fill=tk.X, padx=16, pady=(2, 4))
+
+            # Classify the error
+            try:
+                from meeting_recorder.storage.error_classifier import classify_error
+                ec = classify_error(error_msg)
+                err_title = f"\u2717  [{ec.category.upper()}] {ec.title}"
+                err_detail = ec.explanation
+                suggestions = ec.suggestions
+            except Exception:
+                err_title = f"\u2717  Error: {error_msg}"
+                err_detail = ""
+                suggestions = []
+
             tk.Label(
-                err_frame, text=f"\u2717  Error: {error_msg}",
-                font=("Segoe UI", 9), fg="#ff6b6b", bg="#3d1414",
+                err_frame, text=err_title,
+                font=("Segoe UI", 9, "bold"), fg="#ff6b6b", bg="#3d1414",
                 anchor=tk.W, wraplength=500, justify=tk.LEFT,
-            ).pack(fill=tk.X, padx=10, pady=6)
+            ).pack(fill=tk.X, padx=10, pady=(6, 0))
+            if err_detail and err_detail != error_msg:
+                tk.Label(
+                    err_frame, text=err_detail,
+                    font=("Segoe UI", 8), fg="#cc8888", bg="#3d1414",
+                    anchor=tk.W, wraplength=500, justify=tk.LEFT,
+                ).pack(fill=tk.X, padx=10, pady=(2, 0))
+            if suggestions:
+                hint = "Try: " + " | ".join(suggestions[:2])
+                tk.Label(
+                    err_frame, text=hint,
+                    font=("Segoe UI", 8), fg="#aa9999", bg="#3d1414",
+                    anchor=tk.W, wraplength=500, justify=tk.LEFT,
+                ).pack(fill=tk.X, padx=10, pady=(2, 6))
 
             if self._on_reprocess:
                 retry_btn = tk.Label(
