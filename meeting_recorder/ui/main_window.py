@@ -587,6 +587,7 @@ class MainWindow:
             ("\u23f0 Focus Time", self._show_focus_panel),
             ("\U0001f525 Streaks", self._show_streaks_panel),
             ("\U0001f4b0 Costs", self._show_costs_panel),
+            ("\U0001f5d3 Heatmap", self._show_heatmap_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
             ("\U0001f9ea Diagnostics", self._show_diagnostics),
         ]:
@@ -4797,6 +4798,80 @@ class MainWindow:
                     text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
 
         copy_btn.bind("<Button-1>", lambda e: _copy_costs())
+        copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
+        result_text.pack(fill=tk.BOTH, padx=8, pady=(0, 10), expand=True)
+
+    def _show_heatmap_panel(self) -> None:
+        """Show a popup panel with meeting time-of-day heatmap."""
+        if not self._window:
+            return
+        if hasattr(self, "_heatmap_overlay") and self._heatmap_overlay:
+            self._heatmap_overlay.destroy()
+            self._heatmap_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.heatmap import build_heatmap, format_heatmap
+            hm = build_heatmap(base, weeks=8)
+            text = format_heatmap(hm)
+        except Exception:
+            logger.exception("Failed to generate heatmap")
+            text = "Failed to generate heatmap."
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._heatmap_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Meeting Heatmap",
+            font=("Segoe UI", 11, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_heatmap_overlay", None)))
+
+        result_text = tk.Text(
+            overlay, wrap=tk.NONE, font=("Consolas", 9),
+            bg=BG_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            bd=0, highlightthickness=0, height=14, width=65,
+            state=tk.DISABLED,
+        )
+        result_text.configure(state=tk.NORMAL)
+        result_text.insert("1.0", text)
+        result_text.configure(state=tk.DISABLED)
+
+        btn_frame = tk.Frame(overlay, bg=BG_PANEL)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(4, 4))
+
+        copy_btn = tk.Label(
+            btn_frame, text="  \U0001f4cb Copy  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=6,
+        )
+        copy_btn.pack(side=tk.RIGHT)
+
+        def _copy_heatmap():
+            content = result_text.get("1.0", tk.END).strip()
+            if content and self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(content)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+
+        copy_btn.bind("<Button-1>", lambda e: _copy_heatmap())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
         copy_btn.bind("<Leave>", lambda e: copy_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
 
