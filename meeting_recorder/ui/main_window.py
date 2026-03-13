@@ -3899,6 +3899,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Silence Gaps ---
+        try:
+            from meeting_recorder.storage.silence_gaps import analyze_silence_gaps, format_silence_report
+            sr = analyze_silence_gaps(rec_path)
+            if sr is not None:
+                lines.append(format_silence_report(sr))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
