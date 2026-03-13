@@ -46,6 +46,12 @@ def main() -> None:
                 sys.exit(1)
             from meeting_recorder.config_transfer import import_config
             sys.exit(import_config(sys.argv[2]))
+        elif cmd == "search":
+            from meeting_recorder.search.cli import main as search_main
+            sys.exit(search_main(sys.argv[2:]))
+        elif cmd == "stats":
+            from meeting_recorder.stats_cli import main as stats_main
+            sys.exit(stats_main(sys.argv[2:]))
 
     # Configure logging
     logging.basicConfig(
