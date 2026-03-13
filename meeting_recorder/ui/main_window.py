@@ -2553,6 +2553,93 @@ class MainWindow:
         text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Highlight support
+        text_widget.tag_configure("highlight_yellow", background="#665500", foreground="#ffffff")
+        text_widget.tag_configure("highlight_green", background="#005500", foreground="#ffffff")
+        text_widget.tag_configure("highlight_blue", background="#003366", foreground="#ffffff")
+
+        try:
+            from meeting_recorder.storage.highlights import HighlightStore
+            highlight_store = HighlightStore(rec_path)
+        except Exception:
+            highlight_store = None
+
+        def _apply_highlights():
+            """Apply saved highlights to the text widget."""
+            if not highlight_store:
+                return
+            for tag_name in ("highlight_yellow", "highlight_green", "highlight_blue"):
+                text_widget.tag_remove(tag_name, "1.0", tk.END)
+            for h in highlight_store.highlights:
+                tag = f"highlight_{h.color}" if f"highlight_{h.color}" in (
+                    "highlight_yellow", "highlight_green", "highlight_blue") else "highlight_yellow"
+                try:
+                    start = f"1.0+{h.start_offset}c"
+                    end = f"1.0+{h.end_offset}c"
+                    text_widget.tag_add(tag, start, end)
+                except tk.TclError:
+                    pass
+
+        def _highlight_selection(color: str = "yellow"):
+            """Highlight the currently selected text."""
+            if not highlight_store:
+                return
+            try:
+                sel_start = text_widget.index(tk.SEL_FIRST)
+                sel_end = text_widget.index(tk.SEL_LAST)
+                selected_text = text_widget.get(sel_start, sel_end)
+                if not selected_text.strip():
+                    return
+                # Convert Tk position to character offset
+                start_offset = len(text_widget.get("1.0", sel_start))
+                end_offset = len(text_widget.get("1.0", sel_end))
+                highlight_store.add(selected_text, start_offset, end_offset, color=color)
+                _apply_highlights()
+            except tk.TclError:
+                pass  # No selection
+
+        def _on_text_right_click(event):
+            """Show highlight context menu."""
+            menu = tk.Menu(text_widget, tearoff=0,
+                          bg=BG_PANEL, fg=TEXT_COLOR, activebackground=BG_CONTROLS)
+            try:
+                text_widget.index(tk.SEL_FIRST)
+                has_selection = True
+            except tk.TclError:
+                has_selection = False
+
+            if has_selection:
+                menu.add_command(label="Highlight Yellow",
+                                command=lambda: _highlight_selection("yellow"))
+                menu.add_command(label="Highlight Green",
+                                command=lambda: _highlight_selection("green"))
+                menu.add_command(label="Highlight Blue",
+                                command=lambda: _highlight_selection("blue"))
+                menu.add_separator()
+
+            if highlight_store and len(highlight_store) > 0:
+                menu.add_command(label=f"Copy {len(highlight_store)} highlights",
+                                command=lambda: _copy_highlights())
+                menu.add_command(label="Clear all highlights",
+                                command=lambda: _clear_highlights())
+
+            if menu.index(tk.END) is not None:
+                menu.tk_popup(event.x_root, event.y_root)
+
+        def _copy_highlights():
+            if highlight_store and self._window:
+                text = highlight_store.format_highlights()
+                if text:
+                    self._window.clipboard_clear()
+                    self._window.clipboard_append(text)
+
+        def _clear_highlights():
+            if highlight_store:
+                highlight_store.clear()
+                _apply_highlights()
+
+        text_widget.bind("<Button-3>", _on_text_right_click)
+
         # Read available content
         transcript_text = self._read_file(rec_path / "transcript.txt")
         summary_text = self._read_file(rec_path / "summary.md")
@@ -2659,6 +2746,9 @@ class MainWindow:
                     btn.configure(fg=TEXT_BRIGHT, bg=BG_CONTROLS)
                 else:
                     btn.configure(fg=TEXT_DIM, bg=BG_COLOR)
+            # Apply highlights on transcript tab
+            if active_btn is transcript_btn:
+                _apply_highlights()
 
         transcript_btn = tk.Label(
             tab_frame, text="  Transcript  ", font=("Segoe UI", 9, "bold"),
