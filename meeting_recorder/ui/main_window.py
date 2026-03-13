@@ -1999,6 +1999,45 @@ class MainWindow:
                 lines.append(f"  Location:   {location}")
             lines.append("")
 
+        # --- Attendance verification ---
+        attendees = meta.get("meeting_attendees", [])
+        speaker_map = meta.get("speaker_map", {})
+        if attendees and speaker_map:
+            lines.append("ATTENDANCE")
+            lines.append("-" * 40)
+            identified_names = set(v.lower() for v in speaker_map.values())
+            # Match attendees to identified speakers
+            spoke = []
+            silent = []
+            for att in attendees:
+                # Match by first name, last name, or full name
+                att_lower = att.lower()
+                att_parts = att_lower.split()
+                matched = any(
+                    part in name or name in att_lower
+                    for part in att_parts
+                    for name in identified_names
+                )
+                if matched:
+                    spoke.append(att)
+                else:
+                    silent.append(att)
+            # Unmatched speakers (not in attendee list)
+            attendee_lower = " ".join(a.lower() for a in attendees)
+            unknown_speakers = [
+                name for name in speaker_map.values()
+                if not any(p in attendee_lower for p in name.lower().split())
+            ]
+            for att in spoke:
+                lines.append(f"  \u2705  {att}")
+            for att in silent:
+                lines.append(f"  \u274c  {att}  (didn't speak)")
+            for name in unknown_speakers:
+                lines.append(f"  \u2753  {name}  (not on invite)")
+            if spoke:
+                lines.append(f"  Spoke: {len(spoke)}/{len(attendees)}")
+            lines.append("")
+
         # --- Quality ---
         quality = meta.get("quality_scores", {})
         if quality and quality.get("overall_score") is not None:

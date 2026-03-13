@@ -670,6 +670,26 @@ class TestBuildDetailsText:
         text = MainWindow._build_details_text(tmp_path, {})
         assert "QUALITY" not in text
 
+    def test_attendance_verification(self, tmp_path):
+        """Attendance section shows who spoke and who didn't."""
+        meta = {
+            "meeting_attendees": ["Alice Smith", "Bob Jones", "Charlie Brown"],
+            "speaker_map": {
+                "SPEAKER_00": "Alice",
+                "SPEAKER_01": "Bob",
+            },
+        }
+        text = MainWindow._build_details_text(tmp_path, meta)
+        assert "ATTENDANCE" in text
+        assert "Alice Smith" in text
+        assert "didn't speak" in text  # Charlie didn't speak
+        assert "2/3" in text  # 2 out of 3 spoke
+
+    def test_attendance_absent_without_data(self, tmp_path):
+        """No ATTENDANCE section without both attendees and speaker map."""
+        text = MainWindow._build_details_text(tmp_path, {"meeting_attendees": ["Alice"]})
+        assert "ATTENDANCE" not in text
+
 
 # ---------------------------------------------------------------------------
 # History filter
