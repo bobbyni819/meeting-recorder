@@ -1039,3 +1039,86 @@ class TestTags:
         meta.save(rec)
         loaded = RecordingMetadata.load(rec)
         assert loaded.tags == ["alpha", "beta"]
+
+
+# ---------------------------------------------------------------------------
+# Detail Navigation
+# ---------------------------------------------------------------------------
+
+class TestDetailNavigation:
+    def test_navigate_forward(self, tmp_path):
+        paths = [tmp_path / f"rec{i}" for i in range(3)]
+        for p in paths:
+            p.mkdir()
+        mw = MainWindow()
+        mw._history_card_paths = paths
+        mw._current_detail_path = paths[0]
+
+        # Track which detail is shown
+        shown = []
+        mw._show_recording_detail = lambda p: (
+            shown.append(p),
+            setattr(mw, "_current_detail_path", p),
+        )
+
+        mw._navigate_detail(1)
+        assert shown[-1] == paths[1]
+
+    def test_navigate_backward(self, tmp_path):
+        paths = [tmp_path / f"rec{i}" for i in range(3)]
+        for p in paths:
+            p.mkdir()
+        mw = MainWindow()
+        mw._history_card_paths = paths
+        mw._current_detail_path = paths[2]
+
+        shown = []
+        mw._show_recording_detail = lambda p: (
+            shown.append(p),
+            setattr(mw, "_current_detail_path", p),
+        )
+
+        mw._navigate_detail(-1)
+        assert shown[-1] == paths[1]
+
+    def test_navigate_at_start_does_nothing(self, tmp_path):
+        paths = [tmp_path / f"rec{i}" for i in range(3)]
+        for p in paths:
+            p.mkdir()
+        mw = MainWindow()
+        mw._history_card_paths = paths
+        mw._current_detail_path = paths[0]
+
+        shown = []
+        mw._show_recording_detail = lambda p: shown.append(p)
+
+        mw._navigate_detail(-1)
+        assert len(shown) == 0
+
+    def test_navigate_at_end_does_nothing(self, tmp_path):
+        paths = [tmp_path / f"rec{i}" for i in range(3)]
+        for p in paths:
+            p.mkdir()
+        mw = MainWindow()
+        mw._history_card_paths = paths
+        mw._current_detail_path = paths[2]
+
+        shown = []
+        mw._show_recording_detail = lambda p: shown.append(p)
+
+        mw._navigate_detail(1)
+        assert len(shown) == 0
+
+    def test_navigate_no_detail_open(self):
+        mw = MainWindow()
+        mw._history_card_paths = []
+        mw._current_detail_path = None
+        mw._navigate_detail(1)  # Should not error
+
+    def test_close_detail_clears_path(self):
+        mw = MainWindow()
+        mw._current_detail_path = Path("/fake")
+        mw._detail_frame = None
+        mw._idle_frame = None
+        mw._close_detail()
+        assert mw._current_detail_path is None

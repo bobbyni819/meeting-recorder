@@ -128,6 +128,7 @@ class MainWindow:
         self._preview_photo = None
         self._history_frame: Optional[tk.Frame] = None
         self._detail_frame: Optional[tk.Frame] = None
+        self._current_detail_path: Optional[Path] = None
         self._help_overlay: Optional[tk.Frame] = None
         self._auto_label: Optional[tk.Label] = None
         self._statusbar_label: Optional[tk.Label] = None
@@ -431,6 +432,8 @@ class MainWindow:
         self._window.bind("<Up>", lambda e: self._nav_history(-1))
         self._window.bind("<Down>", lambda e: self._nav_history(1))
         self._window.bind("<Return>", lambda e: self._open_selected_card())
+        self._window.bind("<Left>", lambda e: self._navigate_detail(-1))
+        self._window.bind("<Right>", lambda e: self._navigate_detail(1))
         self._window.bind("<Control-question>", lambda e: self._show_hotkey_help())
         self._window.bind("<F1>", lambda e: self._show_hotkey_help())
 
@@ -1411,6 +1414,8 @@ class MainWindow:
         if self._is_recording or self._window is None:
             return
 
+        self._current_detail_path = rec_path
+
         # Hide idle frame
         if self._idle_frame:
             self._idle_frame.pack_forget()
@@ -1423,11 +1428,24 @@ class MainWindow:
 
         self._build_detail_content(self._detail_frame, rec_path)
 
+    def _navigate_detail(self, direction: int) -> None:
+        """Navigate to the next (+1) or previous (-1) recording in history."""
+        if not self._current_detail_path or not self._history_card_paths:
+            return
+        try:
+            idx = self._history_card_paths.index(self._current_detail_path)
+        except ValueError:
+            return
+        new_idx = idx + direction
+        if 0 <= new_idx < len(self._history_card_paths):
+            self._show_recording_detail(self._history_card_paths[new_idx])
+
     def _close_detail(self) -> None:
         """Close the detail view and return to idle/history."""
         if self._detail_frame:
             self._detail_frame.destroy()
             self._detail_frame = None
+        self._current_detail_path = None
         if self._idle_frame:
             self._idle_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -1458,6 +1476,41 @@ class MainWindow:
         back_btn.bind("<Button-1>", lambda e: self._close_detail())
         back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=TEXT_BRIGHT))
         back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=TEXT_COLOR))
+
+        # Prev/Next navigation
+        nav_frame = tk.Frame(top_bar, bg=BG_HEADER)
+        nav_frame.pack(side=tk.LEFT, padx=4, pady=6)
+        # Determine if prev/next exist
+        _has_prev = False
+        _has_next = False
+        try:
+            _idx = self._history_card_paths.index(rec_path)
+            _has_prev = _idx > 0
+            _has_next = _idx < len(self._history_card_paths) - 1
+        except (ValueError, AttributeError):
+            pass
+
+        prev_btn = tk.Label(
+            nav_frame, text="\u25c0", font=("Segoe UI", 9),
+            fg=TEXT_DIM if _has_prev else BG_HEADER, bg=BG_HEADER,
+            cursor="hand2" if _has_prev else "", padx=4,
+        )
+        prev_btn.pack(side=tk.LEFT)
+        if _has_prev:
+            prev_btn.bind("<Button-1>", lambda e: self._navigate_detail(-1))
+            prev_btn.bind("<Enter>", lambda e: prev_btn.configure(fg=TEXT_COLOR))
+            prev_btn.bind("<Leave>", lambda e: prev_btn.configure(fg=TEXT_DIM))
+
+        next_btn = tk.Label(
+            nav_frame, text="\u25b6", font=("Segoe UI", 9),
+            fg=TEXT_DIM if _has_next else BG_HEADER, bg=BG_HEADER,
+            cursor="hand2" if _has_next else "", padx=4,
+        )
+        next_btn.pack(side=tk.LEFT)
+        if _has_next:
+            next_btn.bind("<Button-1>", lambda e: self._navigate_detail(1))
+            next_btn.bind("<Enter>", lambda e: next_btn.configure(fg=TEXT_COLOR))
+            next_btn.bind("<Leave>", lambda e: next_btn.configure(fg=TEXT_DIM))
 
         open_btn = tk.Label(
             top_bar, text="\U0001f4c2  Open Folder", font=("Segoe UI", 9),
