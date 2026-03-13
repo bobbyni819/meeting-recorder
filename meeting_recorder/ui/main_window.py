@@ -3516,6 +3516,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Word Frequency ---
+        try:
+            from meeting_recorder.storage.word_frequency import analyze_word_frequency, format_word_frequency
+            wf = analyze_word_frequency(rec_path, top_n=15)
+            if wf and wf.total_words > 10:
+                lines.append(format_word_frequency(wf))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Duration Prediction ---
         try:
             from meeting_recorder.storage.duration_predict import predict_durations, _normalize_subject
