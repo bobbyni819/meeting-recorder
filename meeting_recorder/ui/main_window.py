@@ -2345,6 +2345,21 @@ class MainWindow:
         notes_text = self._read_file(rec_path / "notes.md")
         details_text = self._build_details_text(rec_path, meta)
 
+        # Extract action items
+        actions_text = ""
+        try:
+            from meeting_recorder.storage.action_items import (
+                extract_action_items_for_recording,
+                load_action_items,
+                format_action_items,
+            )
+            items = load_action_items(rec_path)
+            if not items:
+                items = extract_action_items_for_recording(rec_path, meta)
+            actions_text = format_action_items(items)
+        except Exception:
+            logger.debug("Action items extraction failed for %s", rec_path.name)
+
         # Edit mode state
         edit_state = {"active": False, "current_tab": "transcript"}
         edit_bar = tk.Frame(parent, bg=BG_CONTROLS)
@@ -2459,6 +2474,16 @@ class MainWindow:
         notes_btn.pack(side=tk.LEFT, padx=(0, 4))
         tab_buttons.append(notes_btn)
 
+        if actions_text:
+            actions_btn = tk.Label(
+                tab_frame, text="  Actions  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            actions_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(actions_btn)
+        else:
+            actions_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -2488,6 +2513,8 @@ class MainWindow:
         summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
         details_btn.bind("<Button-1>", lambda e: _switch_tab("details", details_text, details_btn))
         notes_btn.bind("<Button-1>", lambda e: _switch_tab("notes", notes_text, notes_btn))
+        if actions_btn:
+            actions_btn.bind("<Button-1>", lambda e: _switch_tab("actions", actions_text, actions_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)

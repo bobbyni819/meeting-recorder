@@ -737,6 +737,9 @@ class MeetingRecorderApp:
                 futures.append(pool.submit(
                     self._auto_tag_recording, recording_dir, metadata,
                 ))
+                futures.append(pool.submit(
+                    self._extract_action_items, recording_dir,
+                ))
                 for f in as_completed(futures):
                     f.result()  # propagate exceptions (each method catches its own)
 
@@ -914,6 +917,22 @@ class MeetingRecorderApp:
                     logger.info("Auto-tagged recording with: %s", ", ".join(new_tags))
         except Exception:
             logger.exception("Auto-tagging failed (non-fatal)")
+
+    @staticmethod
+    def _extract_action_items(recording_dir: Path) -> None:
+        """Extract and save action items from transcript (non-fatal)."""
+        try:
+            from meeting_recorder.storage.action_items import (
+                extract_action_items_for_recording,
+                save_action_items,
+            )
+            items = extract_action_items_for_recording(recording_dir)
+            if items:
+                save_action_items(recording_dir, items)
+                logger.info("Extracted %d action items for %s",
+                            len(items), recording_dir.name)
+        except Exception:
+            logger.exception("Action item extraction failed (non-fatal)")
 
     def _run_retention_cleanup(self, exclude: Path | None = None) -> None:
         """Run recording retention cleanup (non-fatal)."""
