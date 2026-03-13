@@ -613,6 +613,7 @@ class MainWindow:
             ("\U0001f514 Alerts", self._show_alerts_panel),
             ("\U0001f552 Times", self._show_times_panel),
             ("\u2705 Actions", self._show_action_tracker_panel),
+            ("\u2753 Questions", self._show_questions_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
         ]:
             btn = tk.Label(
@@ -3843,6 +3844,16 @@ class MainWindow:
         except Exception:
             pass
 
+        # --- Questions ---
+        try:
+            from meeting_recorder.storage.question_tracker import analyze_questions, format_question_report
+            qr = analyze_questions(rec_path)
+            if qr is not None:
+                lines.append(format_question_report(qr))
+                lines.append("")
+        except Exception:
+            pass
+
         # --- Technical ---
         lines.append("TECHNICAL")
         lines.append("-" * 40)
@@ -6485,6 +6496,110 @@ class MainWindow:
             overlay, text="Press Escape or F1 to dismiss",
             font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_PANEL,
         ).pack(pady=(8, 12))
+
+    def _show_questions_panel(self) -> None:
+        """Show a popup panel with cross-recording question analysis."""
+        if not self._window:
+            return
+        if hasattr(self, "_questions_overlay") and self._questions_overlay:
+            self._questions_overlay.destroy()
+            self._questions_overlay = None
+            return
+
+        try:
+            base = self.config.output_dir if hasattr(self, "config") else None
+            if base is None:
+                from meeting_recorder.config import Config
+                base = Config.load().output_dir
+            from meeting_recorder.storage.question_tracker import (
+                analyze_questions, format_question_report,
+            )
+            # Aggregate questions across recent recordings
+            from datetime import date, timedelta
+            cutoff = date.today() - timedelta(weeks=4)
+            all_questions = []
+            if base.exists():
+                for rec_dir in sorted(base.iterdir(), reverse=True):
+                    if not rec_dir.is_dir() or len(rec_dir.name) < 10:
+                        continue
+                    try:
+                        rec_date = date.fromisoformat(rec_dir.name[:10])
+                    except ValueError:
+                        continue
+                    if rec_date < cutoff:
+                        break
+                    report = analyze_questions(rec_dir)
+                    if report and report.unanswered_questions:
+                        for q in report.unanswered_questions:
+                            q.answer_context = rec_dir.name[20:].replace("_", " ").strip() if len(rec_dir.name) > 20 else rec_dir.name
+                            all_questions.append(q)
+
+            if not all_questions:
+                text = "No unanswered questions found in recent recordings."
+            else:
+                lines = [
+                    "UNANSWERED QUESTIONS (Last 4 Weeks)",
+                    "-" * 40,
+                    f"  {len(all_questions)} unanswered questions across recent meetings",
+                    "",
+                ]
+                for q in all_questions[:20]:
+                    speaker = f"[{q.speaker}] " if q.speaker else ""
+                    meeting = q.answer_context or ""
+                    lines.append(f"  {speaker}{q.text}")
+                    if meeting:
+                        lines.append(f"    from: {meeting}")
+                    lines.append("")
+                if len(all_questions) > 20:
+                    lines.append(f"  ... and {len(all_questions) - 20} more")
+                text = "\n".join(lines)
+        except Exception:
+            logger.exception("Failed to analyze questions")
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._questions_overlay = overlay
+
+        title_row = tk.Frame(overlay, bg=BG_PANEL)
+        title_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(
+            title_row, text="Question Tracker",
+            font=("Segoe UI", 11, "bold"), fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(side=tk.LEFT)
+
+        def _copy():
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+                copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
+                self._window.after(1500, lambda: copy_btn.configure(
+                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+
+        copy_btn = tk.Label(
+            title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        copy_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        copy_btn.bind("<Button-1>", lambda e: _copy())
+
+        close_btn = tk.Label(
+            title_row, text="\u2715", font=("Segoe UI", 10),
+            fg=TEXT_DIM, bg=BG_PANEL, cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT)
+        close_btn.bind("<Button-1>", lambda e: (
+            overlay.destroy(), setattr(self, "_questions_overlay", None)))
+
+        tw = tk.Text(
+            overlay, wrap=tk.WORD, font=("Consolas", 9),
+            bg=BG_PANEL, fg=TEXT_COLOR, bd=0, highlightthickness=0,
+            width=60, height=min(22, max(8, text.count("\n") + 2)),
+            padx=16, pady=8,
+        )
+        tw.pack(fill=tk.BOTH, expand=True)
+        tw.insert("1.0", text)
+        tw.configure(state=tk.DISABLED)
 
     def _fire(self, callback) -> None:
         """Fire a callback in a background thread."""
