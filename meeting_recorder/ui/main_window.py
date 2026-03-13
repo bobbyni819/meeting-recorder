@@ -1748,6 +1748,8 @@ class MainWindow:
         ]
         if count >= 2:
             actions.insert(2, ("Merge", self._bulk_merge))
+        if count == 2:
+            actions.insert(3, ("Compare", self._bulk_compare))
         for text, cmd in actions:
             btn = tk.Label(
                 self._bulk_bar, text=f"  {text}  ", font=("Segoe UI", 8),
@@ -1919,6 +1921,38 @@ class MainWindow:
             logger.exception("Merge failed")
             self.add_notification("error", "Merge failed — check logs", source="merge")
             self._refresh_history()
+
+    def _bulk_compare(self) -> None:
+        """Compare two selected recordings side by side."""
+        if len(self._bulk_selected) != 2:
+            return
+        paths = sorted(self._bulk_selected)
+        self._bulk_selected.clear()
+        self._bulk_mode = False
+        self._hide_bulk_bar()
+        if self._bulk_toggle_btn:
+            self._bulk_toggle_btn.configure(
+                text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
+
+        try:
+            from meeting_recorder.storage.comparison import compare_recordings
+            result = compare_recordings(paths[0], paths[1])
+            # Copy comparison text to clipboard and show notification
+            text = result.format_text()
+            if self._window:
+                self._window.clipboard_clear()
+                self._window.clipboard_append(text)
+            self.add_notification(
+                "success",
+                f"Comparison copied to clipboard ({result.name_a} vs {result.name_b})",
+                source="compare",
+            )
+            self._show_warning_banner(
+                "Comparison copied to clipboard!", duration_ms=3000)
+        except Exception:
+            logger.exception("Comparison failed")
+            self.add_notification("error", "Comparison failed", source="compare")
+        self._refresh_history()
 
     # ------------------------------------------------------------------
     # Recording detail view
@@ -2657,6 +2691,75 @@ class MainWindow:
             _show_tab(summary_text, summary_btn)
         else:
             _show_tab("No transcript or summary available yet.", transcript_btn)
+
+        # --- Similar recordings (loaded lazily) ---
+        similar_frame = tk.Frame(parent, bg=BG_COLOR)
+        similar_frame.pack(fill=tk.X, padx=16, pady=(4, 8))
+
+        similar_toggle = tk.Label(
+            similar_frame, text="\u25b6  Similar recordings",
+            font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_COLOR,
+            cursor="hand2", anchor=tk.W,
+        )
+        similar_toggle.pack(fill=tk.X)
+        similar_content = tk.Frame(similar_frame, bg=BG_COLOR)
+        similar_loaded = [False]
+
+        def _toggle_similar(e=None):
+            if similar_content.winfo_ismapped():
+                similar_content.pack_forget()
+                similar_toggle.configure(text="\u25b6  Similar recordings")
+            else:
+                if not similar_loaded[0]:
+                    similar_loaded[0] = True
+                    _load_similar()
+                similar_content.pack(fill=tk.X, pady=(4, 0))
+                similar_toggle.configure(text="\u25bc  Similar recordings")
+
+        def _load_similar():
+            try:
+                base = self.config.output_dir if hasattr(self, "config") else None
+                if base is None:
+                    from meeting_recorder.config import Config
+                    base = Config.load().output_dir
+                from meeting_recorder.storage.comparison import find_similar_recordings
+                results = find_similar_recordings(rec_path, base, max_results=5)
+                if not results:
+                    tk.Label(
+                        similar_content, text="No similar recordings found.",
+                        font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR,
+                    ).pack(anchor=tk.W, padx=8)
+                    return
+                for sim_path, score in results:
+                    sim_name = sim_path.name
+                    date_part = sim_name[:10] if len(sim_name) >= 10 else sim_name
+                    # Load subject from metadata
+                    sim_subject = ""
+                    try:
+                        sim_meta_path = sim_path / "metadata.json"
+                        if sim_meta_path.exists():
+                            with open(sim_meta_path, "r", encoding="utf-8") as f:
+                                sim_meta = json.load(f)
+                            sim_subject = sim_meta.get("meeting_subject", "")
+                    except Exception:
+                        pass
+                    label_text = sim_subject if sim_subject else sim_name[20:].replace("_", " ") if len(sim_name) > 20 else sim_name
+                    display = f"{date_part}  \u2022  {label_text}  ({score:.0f}%)"
+                    lbl = tk.Label(
+                        similar_content, text=display,
+                        font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR,
+                        cursor="hand2", anchor=tk.W,
+                    )
+                    lbl.pack(fill=tk.X, padx=8, pady=1)
+                    lbl.bind("<Button-1>", lambda e, p=sim_path: self._show_recording_detail(p))
+                    lbl.bind("<Enter>", lambda e, lb=lbl: lb.configure(fg=TEXT_COLOR))
+                    lbl.bind("<Leave>", lambda e, lb=lbl: lb.configure(fg=TEXT_DIM))
+            except Exception:
+                logger.debug("Failed to load similar recordings for %s", rec_path.name)
+
+        similar_toggle.bind("<Button-1>", _toggle_similar)
+        similar_toggle.bind("<Enter>", lambda e: similar_toggle.configure(fg=TEXT_COLOR))
+        similar_toggle.bind("<Leave>", lambda e: similar_toggle.configure(fg=TEXT_DIM))
 
     @staticmethod
     def _build_details_text(rec_path: Path, meta: dict) -> str:
