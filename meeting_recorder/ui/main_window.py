@@ -128,6 +128,7 @@ class MainWindow:
         self._preview_photo = None
         self._history_frame: Optional[tk.Frame] = None
         self._detail_frame: Optional[tk.Frame] = None
+        self._help_overlay: Optional[tk.Frame] = None
         self._auto_label: Optional[tk.Label] = None
         self._statusbar_label: Optional[tk.Label] = None
 
@@ -430,6 +431,8 @@ class MainWindow:
         self._window.bind("<Up>", lambda e: self._nav_history(-1))
         self._window.bind("<Down>", lambda e: self._nav_history(1))
         self._window.bind("<Return>", lambda e: self._open_selected_card())
+        self._window.bind("<Control-question>", lambda e: self._show_hotkey_help())
+        self._window.bind("<F1>", lambda e: self._show_hotkey_help())
 
     def _build_header(self) -> None:
         header = tk.Frame(self._window, bg=BG_HEADER, height=52)
@@ -767,7 +770,7 @@ class MainWindow:
         hotkey_text = (
             f"{self._hotkey_recording} Record  |  "
             f"{self._hotkey_pause} Pause  |  "
-            "Ctrl+F Search  |  Ctrl+, Settings  |  F5 Refresh  |  Esc Hide"
+            "Ctrl+F Search  |  Ctrl+, Settings  |  F1 Help  |  Esc Hide"
         )
         self._statusbar_label = tk.Label(
             bar, text=hotkey_text, font=("Segoe UI", 8),
@@ -2248,11 +2251,75 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _on_escape(self) -> None:
-        """Handle Escape key: close detail view, or hide window."""
-        if self._detail_frame:
+        """Handle Escape key: close detail view, dismiss help, or hide window."""
+        if hasattr(self, "_help_overlay") and self._help_overlay:
+            self._help_overlay.destroy()
+            self._help_overlay = None
+        elif self._detail_frame:
             self._close_detail()
         else:
             self.hide()
+
+    def _show_hotkey_help(self) -> None:
+        """Show a keyboard shortcuts overlay."""
+        if not self._window:
+            return
+        # Toggle: dismiss if already showing
+        if hasattr(self, "_help_overlay") and self._help_overlay:
+            self._help_overlay.destroy()
+            self._help_overlay = None
+            return
+
+        overlay = tk.Frame(self._window, bg=BG_PANEL, bd=2, relief=tk.RAISED)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._help_overlay = overlay
+
+        tk.Label(
+            overlay, text="Keyboard Shortcuts", font=("Segoe UI", 12, "bold"),
+            fg=TEXT_BRIGHT, bg=BG_PANEL,
+        ).pack(padx=20, pady=(12, 8))
+
+        shortcuts = [
+            ("Global", [
+                (self._hotkey_recording, "Start / Stop recording"),
+                (self._hotkey_pause, "Pause / Resume"),
+            ]),
+            ("Window", [
+                ("Ctrl+F", "Search recordings"),
+                ("Ctrl+,", "Open settings"),
+                ("F5", "Refresh history"),
+                ("F1 / Ctrl+?", "This help"),
+                ("Escape", "Close / Hide"),
+                ("\u2191 / \u2193", "Navigate history"),
+                ("Enter", "Open selected recording"),
+            ]),
+            ("Detail View", [
+                ("Ctrl+F", "Search in transcript"),
+                ("Escape", "Close detail / search"),
+            ]),
+        ]
+
+        for section, bindings in shortcuts:
+            tk.Label(
+                overlay, text=section, font=("Segoe UI", 9, "bold"),
+                fg=AMBER, bg=BG_PANEL, anchor=tk.W,
+            ).pack(fill=tk.X, padx=20, pady=(8, 2))
+            for key, desc in bindings:
+                row = tk.Frame(overlay, bg=BG_PANEL)
+                row.pack(fill=tk.X, padx=20, pady=1)
+                tk.Label(
+                    row, text=key, font=("Consolas", 9), fg=TEXT_BRIGHT,
+                    bg=BG_PANEL, width=18, anchor=tk.W,
+                ).pack(side=tk.LEFT)
+                tk.Label(
+                    row, text=desc, font=("Segoe UI", 9), fg=TEXT_COLOR,
+                    bg=BG_PANEL, anchor=tk.W,
+                ).pack(side=tk.LEFT)
+
+        tk.Label(
+            overlay, text="Press Escape or F1 to dismiss",
+            font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_PANEL,
+        ).pack(pady=(8, 12))
 
     def _fire(self, callback) -> None:
         """Fire a callback in a background thread."""
