@@ -38,6 +38,24 @@ def export_recordings_csv(recordings_dir: Path) -> str:
         dur = meta.get("duration_seconds", 0)
         attendees = meta.get("meeting_attendees", [])
 
+        # Quality scores
+        qs = meta.get("quality_scores", {})
+        quality = qs.get("overall_score", "")
+        audio_q = qs.get("audio_score", "")
+        transcript_q = qs.get("transcript_score", "")
+
+        # Sentiment
+        sentiment_score = ""
+        sentiment_label = ""
+        try:
+            from meeting_recorder.storage.sentiment import analyze_recording_sentiment
+            sent = analyze_recording_sentiment(rec_dir)
+            if sent:
+                sentiment_score = sent.score
+                sentiment_label = sent.label
+        except Exception:
+            pass
+
         rows.append({
             "folder": name,
             "date": date_str,
@@ -53,6 +71,11 @@ def export_recordings_csv(recordings_dir: Path) -> str:
             "has_transcript": "yes" if (rec_dir / "transcript.json").exists() else "no",
             "has_summary": "yes" if meta.get("has_summary") else "no",
             "tags": "; ".join(meta.get("tags", [])),
+            "quality": quality,
+            "audio_quality": audio_q,
+            "transcript_quality": transcript_q,
+            "sentiment_score": sentiment_score,
+            "sentiment": sentiment_label,
         })
 
     return _to_csv(rows)
