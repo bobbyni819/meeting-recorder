@@ -161,6 +161,32 @@ def export_focus_time_csv(recordings_dir: Path, weeks: int = 8) -> str:
     return _to_csv(rows)
 
 
+def export_topic_trends_csv(recordings_dir: Path, weeks: int = 8) -> str:
+    """Export topic trends to CSV.
+
+    Columns: week_start, keyword, count.
+    """
+    rows: list[dict] = []
+
+    try:
+        from meeting_recorder.storage.topic_trends import analyze_topic_trends
+        report = analyze_topic_trends(recordings_dir, weeks=weeks)
+        for week in report.weeks:
+            if week.recording_count == 0:
+                continue
+            for keyword, count in week.top_keywords:
+                rows.append({
+                    "week_start": week.week_start,
+                    "keyword": keyword,
+                    "count": count,
+                    "recordings": week.recording_count,
+                })
+    except Exception:
+        pass
+
+    return _to_csv(rows)
+
+
 def export_all(recordings_dir: Path, output_dir: Path) -> list[Path]:
     """Export all data tables to CSV files in output_dir.
 
@@ -174,6 +200,7 @@ def export_all(recordings_dir: Path, output_dir: Path) -> list[Path]:
         ("speakers.csv", export_speakers_csv),
         ("action_items.csv", export_action_items_csv),
         ("focus_time.csv", lambda d: export_focus_time_csv(d, weeks=8)),
+        ("topic_trends.csv", lambda d: export_topic_trends_csv(d, weeks=8)),
     ]
 
     for filename, func in exports:
