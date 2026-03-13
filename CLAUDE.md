@@ -44,6 +44,11 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/participation.py` — participation equity scoring (Gini coefficient)
 - `meeting_recorder/storage/meeting_roi.py` — meeting ROI calculator with recommendations
 - `meeting_recorder/storage/efficiency_trend.py` — meeting efficiency trend tracking across weeks
+- `meeting_recorder/storage/error_classifier.py` — error categorization with fix suggestions
+- `meeting_recorder/storage/archive.py` — compress old recordings to save disk space
+- `meeting_recorder/storage/transcript_export.py` — SRT/VTT/TXT transcript export
+- `meeting_recorder/stats_cli.py` — CLI stats command
+- `meeting_recorder/search/cli.py` — CLI search command
 - `SETUP.md` — full install guide for a new Windows machine
 
 ## Audio pipeline
@@ -182,7 +187,9 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - **Stats enhancements**: collaborator frequency, time-of-day, day-of-week, common tags
 
 ## Config validation
-- `Config.validate()` checks backend, provider, fps, vad threshold, retention values
+- `Config.validate()` checks backend, provider, fps, vad threshold, retention, API keys, model size, device, speaker counts, output dir
+- Warns when cloud/gemini backend selected but no API key, summary enabled without key, diarization without HF token
+- Validates model_size against known Whisper models, device against cuda/cpu/auto
 - Logs warnings for invalid values; does not raise
 - Called automatically in `MeetingRecorderApp.run()` at startup
 
@@ -219,6 +226,38 @@ python -m pytest tests/ -q
 python -m meeting_recorder        # console (shows logs)
 pythonw launch.pyw                # background (tray only)
 ```
+
+## CLI subcommands
+```bash
+python -m meeting_recorder diagnose       # system health checks
+python -m meeting_recorder search <query> # search recordings (FTS5)
+python -m meeting_recorder stats          # aggregate statistics (--json for raw)
+python -m meeting_recorder archive [days] # compress old recordings (default: 30 days)
+python -m meeting_recorder export-config  # export secrets for multi-machine
+python -m meeting_recorder import-config <file>  # import secrets
+```
+
+## Recording archive
+- `storage/archive.py`: compresses audio/video files into ZIP, keeps metadata/transcripts accessible
+- `archive_recording()` / `unarchive_recording()` — per-recording operations
+- `archive_old_recordings(dir, days)` — batch archive by age
+- Archive/Unarchive button in detail view top bar
+- CLI: `python -m meeting_recorder archive 30`
+
+## Error classification
+- `storage/error_classifier.py`: maps error_message strings to known categories
+- Categories: audio, transcription, gpu, diarization, summary, network, storage, video
+- Each classification includes title, explanation, fix suggestions, retryable flag
+- Wired into detail view error banner — shows classified title and suggestions
+
+## Transcript export
+- `storage/transcript_export.py`: reads transcript.json, produces SRT/VTT/TXT
+- Export button in detail view tab bar with format picker menu
+- Saved to recording directory as transcript.srt/.vtt/.txt
+
+## HTML export enhancements
+- `storage/html_export.py` includes: sentiment, participation equity, meeting ROI, key terms
+- Each section gracefully degrades if module/data unavailable (try/except)
 
 ## Dependencies requiring manual steps
 - **PyTorch + CUDA**: `pip install torch --index-url https://download.pytorch.org/whl/cu121`
