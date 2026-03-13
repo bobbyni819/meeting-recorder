@@ -947,6 +947,10 @@ class MainWindow:
             self._warning_frame.pack_forget()
         self._warning_dismiss_id = None
 
+    def _show_warning_banner(self, message: str, duration_ms: int = 5000) -> None:
+        """Show a warning message — works in both idle and recording views."""
+        self.show_warning(message, duration_ms)
+
     def _toggle_auto_start_click(self) -> None:
         """Handle click on auto-record label to toggle."""
         new_state = not self._auto_start
