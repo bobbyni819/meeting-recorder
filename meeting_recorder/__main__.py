@@ -52,6 +52,17 @@ def main() -> None:
         elif cmd == "stats":
             from meeting_recorder.stats_cli import main as stats_main
             sys.exit(stats_main(sys.argv[2:]))
+        elif cmd == "archive":
+            from meeting_recorder.config import Config
+            from meeting_recorder.storage.archive import archive_old_recordings, get_archive_stats
+            config = Config.load()
+            days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+            count, saved = archive_old_recordings(config.output_dir, older_than_days=days)
+            print(f"Archived {count} recordings, saved {saved / (1024*1024):.1f} MB")
+            stats = get_archive_stats(config.output_dir)
+            print(f"Total: {stats['total']}, archived: {stats['archived']}, "
+                  f"unarchived: {stats['unarchived']}")
+            sys.exit(0)
 
     # Configure logging
     logging.basicConfig(
