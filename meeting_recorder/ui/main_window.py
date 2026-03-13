@@ -603,6 +603,26 @@ class MainWindow:
             fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
         ).pack(side=tk.LEFT)
 
+        # Sort toggle
+        self._sort_mode = getattr(self, "_sort_mode", "date")
+        sort_label = tk.Label(
+            section_row, text=f"  Sort: {self._sort_mode}  ", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2",
+        )
+        sort_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        sort_options = ["date", "duration", "quality", "app"]
+
+        def _cycle_sort():
+            idx = sort_options.index(self._sort_mode) if self._sort_mode in sort_options else 0
+            self._sort_mode = sort_options[(idx + 1) % len(sort_options)]
+            sort_label.configure(text=f"  Sort: {self._sort_mode}  ")
+            self._refresh_history()
+
+        sort_label.bind("<Button-1>", lambda e: _cycle_sort())
+        sort_label.bind("<Enter>", lambda e: sort_label.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+        sort_label.bind("<Leave>", lambda e: sort_label.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
         # Bulk select toggle
         self._bulk_toggle_btn = tk.Label(
             section_row, text="  Select  ", font=("Segoe UI", 8),
@@ -1168,6 +1188,18 @@ class MainWindow:
                 pinned.append(rec_path)
             else:
                 unpinned.append(rec_path)
+        # Sort unpinned by user-selected sort mode
+        sort_mode = getattr(self, "_sort_mode", "date")
+        if sort_mode == "duration":
+            unpinned.sort(key=lambda p: meta_cache.get(p, {}).get("duration_seconds", 0), reverse=True)
+        elif sort_mode == "quality":
+            def _quality_key(p: Path) -> int:
+                qs = meta_cache.get(p, {}).get("quality_scores", {})
+                return qs.get("overall_score", -1) if qs else -1
+            unpinned.sort(key=_quality_key, reverse=True)
+        elif sort_mode == "app":
+            unpinned.sort(key=lambda p: meta_cache.get(p, {}).get("app_name", "").lower())
+        # else "date" — already in reverse chronological order from _on_list_recent
         sorted_recordings = pinned + unpinned
 
         total_count = len(sorted_recordings)
