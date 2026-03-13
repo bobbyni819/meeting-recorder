@@ -533,7 +533,8 @@ class TestHealthWarning:
         mw._window = mock.Mock()
         mw._is_visible = True
         mw.show_warning("Audio is silent")
-        mw._window.after.assert_called_once()
+        # Called twice: once for display_warning, once for badge update
+        assert mw._window.after.call_count == 2
 
     def test_show_warning_skips_when_not_visible(self):
         mw = MainWindow()

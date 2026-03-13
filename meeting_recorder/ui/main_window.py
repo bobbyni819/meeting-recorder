@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from meeting_recorder.audio.level_monitor import MIN_DB
 from meeting_recorder.utils import open_in_explorer
+from meeting_recorder.ui.notification_center import NotificationStore, NotificationWindow
 from meeting_recorder.ui.theme import (
     BG_COLOR, BG_HEADER, BG_PANEL, BG_CONTROLS, BG_CARD, BG_CARD_HOVER,
     TEXT_COLOR, TEXT_DIM, TEXT_BRIGHT,
@@ -151,6 +152,10 @@ class MainWindow:
         self._warning_frame: Optional[tk.Frame] = None
         self._warning_label: Optional[tk.Label] = None
         self._warning_dismiss_id: Optional[str] = None
+
+        # Notification center
+        self.notification_store = NotificationStore()
+        self._notification_badge: Optional[tk.Label] = None
 
         # Keyboard navigation for history
         self._history_card_paths: list[Path] = []
@@ -360,10 +365,12 @@ class MainWindow:
 
     def show_warning(self, message: str, duration_ms: int = 8000) -> None:
         """Show a warning banner in the recording view (thread-safe)."""
+        self.notification_store.add("warn", message, source="health")
         if self._window is None or not self._is_visible:
             return
         try:
             self._window.after(0, self._display_warning, message, duration_ms)
+            self._window.after(0, self._update_notification_badge)
         except tk.TclError:
             pass
 
@@ -472,6 +479,16 @@ class MainWindow:
         gear_btn.bind("<Button-1>", lambda e: self._fire(self._on_settings))
         gear_btn.bind("<Enter>", lambda e: gear_btn.configure(fg=TEXT_COLOR))
         gear_btn.bind("<Leave>", lambda e: gear_btn.configure(fg=TEXT_DIM))
+
+        # Notification bell (right side, next to gear)
+        self._notification_badge = tk.Label(
+            header, text="\U0001f514", font=("Segoe UI", 12),
+            fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2",
+        )
+        self._notification_badge.pack(side=tk.RIGHT, padx=(0, 4))
+        self._notification_badge.bind("<Button-1>", lambda e: self._show_notifications())
+        self._notification_badge.bind("<Enter>", lambda e: self._notification_badge.configure(fg=TEXT_COLOR))
+        self._notification_badge.bind("<Leave>", lambda e: self._update_notification_badge())
 
     def _build_idle_view(self, parent: tk.Frame) -> None:
         """Build the idle mode view: big record button + history."""
@@ -2722,6 +2739,34 @@ class MainWindow:
         if not hasattr(self, "_diagnostics_window"):
             self._diagnostics_window = DiagnosticsWindow()
         self._diagnostics_window.show(self._window)
+
+    def _show_notifications(self) -> None:
+        """Open the notification center window."""
+        if not self._window:
+            return
+        if not hasattr(self, "_notification_window"):
+            self._notification_window = NotificationWindow(self.notification_store)
+        self._notification_window.show(self._window)
+        self._update_notification_badge()
+
+    def _update_notification_badge(self) -> None:
+        """Update the notification bell to show unread count."""
+        if not self._notification_badge:
+            return
+        unread = self.notification_store.unread_count
+        if unread > 0:
+            self._notification_badge.configure(fg=AMBER)
+        else:
+            self._notification_badge.configure(fg=TEXT_DIM)
+
+    def add_notification(self, level: str, message: str, source: str = "") -> None:
+        """Add a notification and update badge (thread-safe)."""
+        self.notification_store.add(level, message, source=source)
+        if self._window:
+            try:
+                self._window.after(0, self._update_notification_badge)
+            except tk.TclError:
+                pass
 
     def _export_transcripts(self) -> None:
         """Export all transcripts as a ZIP file."""

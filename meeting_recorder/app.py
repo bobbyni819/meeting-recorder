@@ -530,6 +530,7 @@ class MeetingRecorderApp:
         self._tray.set_state("recording", f"Recording {process.display_name}")
         self._main_window.set_recording_state(True, process.display_name)
         notifications.notify_recording_started(process.display_name)
+        self._main_window.add_notification("info", f"Recording started: {process.display_name}", source="recorder")
         logger.info("Recording started for %s", process.display_name)
 
     def stop_recording(self) -> None:
@@ -567,6 +568,7 @@ class MeetingRecorderApp:
 
         duration_str = _format_duration(elapsed)
         notifications.notify_recording_stopped(duration_str, str(recording_dir))
+        self._main_window.add_notification("info", f"Recording stopped ({duration_str})", source="recorder")
         logger.info("Recording stopped. Duration: %s", duration_str)
 
         self._post_thread = threading.Thread(
@@ -761,6 +763,7 @@ class MeetingRecorderApp:
                 notify_parts.append(f"Quality: {qs}/100 ({quality_label(qs)})")
             summary_line = " \u2022 ".join(notify_parts) if notify_parts else ""
             notifications.notify_transcription_complete(str(recording_dir), summary_line)
+            self._main_window.add_notification("success", f"Transcription complete: {recording_dir.name}", source="pipeline")
             logger.info("Post-processing complete: %s", recording_dir)
 
             # Run retention cleanup after each recording
@@ -771,6 +774,7 @@ class MeetingRecorderApp:
             self._tray.set_state("error", f"Error: {e}")
             self._main_window.update_status_bar(f"Error: {e}")
             notifications.notify_error(f"Transcription failed: {e}")
+            self._main_window.add_notification("error", f"Post-processing failed: {e}", source="pipeline")
             if metadata:
                 metadata.set_error(str(e), recording_dir)
 
