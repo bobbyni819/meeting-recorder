@@ -1882,6 +1882,7 @@ class MainWindow:
         ).pack(side=tk.LEFT, padx=(12, 8), pady=6)
 
         actions = [
+            ("Tag", self._bulk_tag),
             ("Delete", self._bulk_delete),
             ("Export", self._bulk_export),
             ("Re-process", self._bulk_reprocess),
@@ -2063,6 +2064,86 @@ class MainWindow:
             logger.exception("Merge failed")
             self.add_notification("error", "Merge failed — check logs", source="merge")
             self._refresh_history()
+
+    def _bulk_tag(self) -> None:
+        """Apply a tag to all selected recordings."""
+        if not self._bulk_selected or not self._window:
+            return
+
+        # Popup to enter tag name
+        popup = tk.Toplevel(self._window)
+        popup.title("Add Tag")
+        popup.geometry("300x130")
+        popup.configure(bg=BG_COLOR)
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        popup.transient(self._window)
+        popup.grab_set()
+
+        count = len(self._bulk_selected)
+        tk.Label(
+            popup, text=f"Add tag to {count} recording{'s' if count != 1 else ''}",
+            font=("Segoe UI", 10, "bold"), fg=TEXT_BRIGHT, bg=BG_COLOR,
+        ).pack(pady=(12, 6))
+
+        tag_var = tk.StringVar()
+        entry = tk.Entry(
+            popup, textvariable=tag_var, font=("Segoe UI", 10),
+            bg=BG_PANEL, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+            bd=0, highlightthickness=1,
+            highlightcolor=BG_CONTROLS, highlightbackground=BG_HEADER,
+        )
+        entry.pack(padx=20, ipady=4, fill=tk.X)
+        entry.focus_set()
+
+        def _apply_tag():
+            tag = tag_var.get().strip()
+            if not tag:
+                popup.destroy()
+                return
+            tagged = 0
+            for path in self._bulk_selected:
+                meta_path = path / "metadata.json"
+                try:
+                    meta = {}
+                    if meta_path.exists():
+                        with open(meta_path, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                    tags = meta.get("tags", [])
+                    if tag not in tags:
+                        tags.append(tag)
+                        meta["tags"] = tags
+                        with open(meta_path, "w", encoding="utf-8") as f:
+                            json.dump(meta, f, indent=2, ensure_ascii=False)
+                        tagged += 1
+                except Exception:
+                    logger.exception("Failed to tag %s", path.name)
+            popup.destroy()
+            self.add_notification(
+                "success", f"Tagged {tagged} recording(s) with '{tag}'",
+                source="bulk")
+            self._refresh_history()
+
+        entry.bind("<Return>", lambda e: _apply_tag())
+        entry.bind("<Escape>", lambda e: popup.destroy())
+
+        btn_frame = tk.Frame(popup, bg=BG_COLOR)
+        btn_frame.pack(pady=(8, 0))
+        apply_btn = tk.Label(
+            btn_frame, text="  Apply  ", font=("Segoe UI", 9),
+            fg=TEXT_BRIGHT, bg=BUTTON_BG, cursor="hand2", padx=8,
+        )
+        apply_btn.pack(side=tk.LEFT, padx=4)
+        apply_btn.bind("<Button-1>", lambda e: _apply_tag())
+        apply_btn.bind("<Enter>", lambda e: apply_btn.configure(bg=BUTTON_HOVER))
+        apply_btn.bind("<Leave>", lambda e: apply_btn.configure(bg=BUTTON_BG))
+
+        cancel_btn = tk.Label(
+            btn_frame, text="  Cancel  ", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=4)
+        cancel_btn.bind("<Button-1>", lambda e: popup.destroy())
 
     def _bulk_compare(self) -> None:
         """Compare two selected recordings side by side."""
