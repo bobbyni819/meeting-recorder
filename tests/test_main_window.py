@@ -786,7 +786,7 @@ class TestHistoryFilter:
 
         # Track which cards are built
         built = []
-        mw._build_history_card = lambda p: built.append(p)
+        mw._build_history_card = lambda p, m=None: built.append(p)
 
         mw._refresh_history()
         assert len(built) == 1
@@ -807,7 +807,7 @@ class TestHistoryFilter:
         mw._filter_var.get.return_value = "zoom"
 
         built = []
-        mw._build_history_card = lambda p: built.append(p)
+        mw._build_history_card = lambda p, m=None: built.append(p)
         mw._refresh_history()
         assert len(built) == 0  # Teams doesn't match "zoom"
 
@@ -827,7 +827,7 @@ class TestHistoryFilter:
         mw._stats_label = mock.Mock()
 
         built = []
-        mw._build_history_card = lambda p: built.append(p)
+        mw._build_history_card = lambda p, m=None: built.append(p)
 
         mw._refresh_history()
         assert len(built) == 2
@@ -1023,7 +1023,7 @@ class TestTags:
         mw._filter_var.get.return_value = "important"
 
         built = []
-        mw._build_history_card = lambda p: built.append(p)
+        mw._build_history_card = lambda p, m=None: built.append(p)
         mw._refresh_history()
         assert len(built) == 1
 
@@ -1042,7 +1042,7 @@ class TestTags:
         mw._filter_var.get.return_value = "important"
 
         built = []
-        mw._build_history_card = lambda p: built.append(p)
+        mw._build_history_card = lambda p, m=None: built.append(p)
         mw._refresh_history()
         assert len(built) == 0
 

@@ -1130,7 +1130,8 @@ class MainWindow:
         quality_scores: list[int] = []
         shown = 0
 
-        # Sort pinned recordings to the top
+        # Load metadata once for all recordings, then sort pinned to top
+        meta_cache: dict[Path, dict] = {}
         pinned: list[Path] = []
         unpinned: list[Path] = []
         for rec_path in recordings[:50]:
@@ -1142,21 +1143,16 @@ class MainWindow:
                         meta = json.load(f)
             except Exception:
                 pass
+            meta_cache[rec_path] = meta
             if meta.get("pinned"):
                 pinned.append(rec_path)
             else:
                 unpinned.append(rec_path)
         sorted_recordings = pinned + unpinned
 
+        total_count = len(sorted_recordings)
         for rec_path in sorted_recordings:
-            meta = {}
-            try:
-                meta_path = rec_path / "metadata.json"
-                if meta_path.exists():
-                    with open(meta_path, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-            except Exception:
-                pass
+            meta = meta_cache.get(rec_path, {})
 
             if meta.get("status") == "error":
                 failed_count += 1
@@ -1179,16 +1175,23 @@ class MainWindow:
                     continue
 
             if shown < 20:
-                self._build_history_card(rec_path)
+                self._build_history_card(rec_path, meta)
                 self._history_card_paths.append(rec_path)
                 shown += 1
             total_duration += meta.get("duration_seconds", 0)
 
         avg_quality = round(sum(quality_scores) / len(quality_scores)) if quality_scores else None
-        self._update_stats_label(len(recordings), total_duration, failed_count, avg_quality)
+        self._update_stats_label(
+            len(recordings), total_duration, failed_count, avg_quality,
+            shown_count=shown if filter_text else None,
+        )
+        # Scroll to top when filter changes
+        if hasattr(self, "_history_canvas") and self._history_canvas:
+            self._history_canvas.yview_moveto(0)
 
     def _update_stats_label(self, count: int, total_seconds: float,
-                           failed: int = 0, avg_quality: int | None = None) -> None:
+                           failed: int = 0, avg_quality: int | None = None,
+                           shown_count: int | None = None) -> None:
         """Update the stats label next to 'Recent Recordings'."""
         if not hasattr(self, '_stats_label') or not self._stats_label:
             return
@@ -1200,7 +1203,10 @@ class MainWindow:
             time_str = f"{hours:.1f}h"
         else:
             time_str = f"{total_seconds / 60:.0f}m"
-        text = f"{count} recordings  \u2022  {time_str} total"
+        if shown_count is not None:
+            text = f"{shown_count} of {count}  \u2022  {time_str} total"
+        else:
+            text = f"{count} recordings  \u2022  {time_str} total"
         if avg_quality is not None:
             text += f"  \u2022  Avg quality: {avg_quality}"
         if failed > 0:
@@ -1217,7 +1223,7 @@ class MainWindow:
             else:
                 self._reprocess_failed_label.pack_forget()
 
-    def _build_history_card(self, rec_path: Path) -> None:
+    def _build_history_card(self, rec_path: Path, meta: dict | None = None) -> None:
         """Build a single recording card in the history list."""
         is_selected = rec_path in self._bulk_selected
         card_bg = BLUE_DARK if (self._bulk_mode and is_selected) else BG_CARD
@@ -1239,34 +1245,37 @@ class MainWindow:
         date_str = name[:10] if len(name) >= 10 else name
         time_str = name[11:16].replace("-", ":") if len(name) >= 16 else ""
 
-        # Try to get metadata for more info
-        meta = {}
+        # Use provided metadata or load from disk
+        if meta is None:
+            meta = {}
+            try:
+                meta_path = rec_path / "metadata.json"
+                if meta_path.exists():
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+            except Exception:
+                pass
+
+        # Extract display fields from metadata
         duration_str = ""
         subject = ""
         app_label = ""
         status = ""
         status_icon = "\U0001f4c1"  # folder icon
-        try:
-            meta_path = rec_path / "metadata.json"
-            if meta_path.exists():
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                dur = meta.get("duration_seconds", 0)
-                if dur > 0:
-                    duration_str = _format_duration_short(dur)
-                subject = meta.get("meeting_subject", "")
-                app_label = meta.get("app_name", "")
-                status = meta.get("status", "")
-                if status == "completed":
-                    status_icon = "\u2705"  # checkmark
-                elif status == "error":
-                    status_icon = "\u26a0"  # warning
-                elif status == "processing":
-                    status_icon = "\u23f3"  # hourglass
-                elif status == "recording":
-                    status_icon = "\u26a0"  # interrupted
-        except Exception:
-            pass
+        dur = meta.get("duration_seconds", 0)
+        if dur > 0:
+            duration_str = _format_duration_short(dur)
+        subject = meta.get("meeting_subject", "")
+        app_label = meta.get("app_name", "")
+        status = meta.get("status", "")
+        if status == "completed":
+            status_icon = "\u2705"  # checkmark
+        elif status == "error":
+            status_icon = "\u26a0"  # warning
+        elif status == "processing":
+            status_icon = "\u23f3"  # hourglass
+        elif status == "recording":
+            status_icon = "\u26a0"  # interrupted
 
         # Thumbnail (if available)
         thumb_path = rec_path / "thumbnail.jpg"
@@ -1279,14 +1288,14 @@ class MainWindow:
                 th = int(img.height * tw / img.width) if img.width > 0 else 36
                 img = img.resize((tw, th))
                 photo = ImageTk.PhotoImage(img)
-                thumb_label = tk.Label(card, image=photo, bg=BG_CARD, bd=0)
+                thumb_label = tk.Label(card, image=photo, bg=card_bg, bd=0)
                 thumb_label.image = photo  # prevent GC
                 thumb_label.pack(side=tk.LEFT, padx=(8, 0), pady=2)
             except Exception:
                 pass
 
         # Layout: info on left, duration badge on right
-        left = tk.Frame(card, bg=BG_CARD)
+        left = tk.Frame(card, bg=card_bg)
         left.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 4), pady=2)
 
         title = subject if subject else name[20:].replace("_", " ").strip() if len(name) > 20 else "Recording"
@@ -1311,7 +1320,7 @@ class MainWindow:
         detail_color = AMBER if status == "error" else TEXT_DIM
         tk.Label(
             left, text=detail,
-            font=("Segoe UI", 8), fg=detail_color, bg=BG_CARD,
+            font=("Segoe UI", 8), fg=detail_color, bg=card_bg,
             anchor=tk.W,
         ).pack(fill=tk.X)
 
@@ -1330,14 +1339,14 @@ class MainWindow:
         if preview:
             tk.Label(
                 left, text=preview,
-                font=("Segoe UI", 8), fg="#607080", bg=BG_CARD,
+                font=("Segoe UI", 8), fg="#607080", bg=card_bg,
                 anchor=tk.W,
             ).pack(fill=tk.X)
 
         # Tag pills on cards
         card_tags = meta.get("tags", [])
         if card_tags:
-            tag_row = tk.Frame(left, bg=BG_CARD)
+            tag_row = tk.Frame(left, bg=card_bg)
             tag_row.pack(fill=tk.X, pady=(1, 0))
             for tag in card_tags[:5]:  # max 5 visible on card
                 tk.Label(
@@ -1352,14 +1361,14 @@ class MainWindow:
             q_color = GREEN if q_score >= 75 else AMBER if q_score >= 50 else RED_DOT
             tk.Label(
                 card, text=f"{q_score}",
-                font=("Segoe UI", 8), fg=q_color, bg=BG_CARD,
+                font=("Segoe UI", 8), fg=q_color, bg=card_bg,
                 anchor=tk.E,
             ).pack(side=tk.RIGHT, padx=(0, 4))
 
         if duration_str:
             tk.Label(
                 card, text=duration_str,
-                font=("Segoe UI", 9), fg=TEXT_DIM, bg=BG_CARD,
+                font=("Segoe UI", 9), fg=TEXT_DIM, bg=card_bg,
                 anchor=tk.E,
             ).pack(side=tk.RIGHT, padx=(0, 12))
 
