@@ -1731,6 +1731,19 @@ class MainWindow:
                 except Exception:
                     logger.exception("HTML export failed for %s", p.name)
             menu.add_command(label="Export as HTML", command=_export_single_html)
+            # Quick summary card
+            def _copy_quick_card(p=path):
+                try:
+                    from meeting_recorder.storage.quick_summary import generate_quick_card, format_quick_card
+                    card = generate_quick_card(p)
+                    if card and self._window:
+                        text = format_quick_card(card)
+                        self._window.clipboard_clear()
+                        self._window.clipboard_append(text)
+                        self.add_notification("success", "Quick card copied to clipboard", source="export")
+                except Exception:
+                    logger.exception("Quick card generation failed for %s", p.name)
+            menu.add_command(label="Copy Quick Card", command=_copy_quick_card)
             menu.add_separator()
             menu.add_command(label="Copy Path",
                              command=lambda: (
