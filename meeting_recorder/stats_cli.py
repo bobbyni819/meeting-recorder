@@ -209,9 +209,62 @@ def main(argv: list[str] | None = None) -> int:
         "--costs", action="store_true",
         help="Show meeting cost budget tracker",
     )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Show comprehensive report (stats + weekly + health + streaks + costs)",
+    )
     args = parser.parse_args(argv)
 
     config = Config.load()
+
+    if getattr(args, "all", False):
+        sections = []
+        # General stats
+        stats = compute_stats(config.output_dir)
+        if stats and stats.get("total_recordings", 0) > 0:
+            sections.append(format_stats(stats))
+
+        # Weekly report
+        try:
+            from meeting_recorder.storage.weekly_report import generate_weekly_report, format_weekly_report
+            report = generate_weekly_report(config.output_dir, week_offset=args.week_offset)
+            if report:
+                sections.append(format_weekly_report(report))
+        except Exception:
+            pass
+
+        # Health summary
+        try:
+            from meeting_recorder.storage.health_summary import analyze_health, format_health
+            hs = analyze_health(config.output_dir)
+            if hs.total_recordings > 0:
+                sections.append(format_health(hs))
+        except Exception:
+            pass
+
+        # Streaks
+        try:
+            from meeting_recorder.storage.streaks import analyze_streaks, format_streaks
+            info = analyze_streaks(config.output_dir)
+            if info:
+                sections.append(format_streaks(info))
+        except Exception:
+            pass
+
+        # Costs
+        try:
+            from meeting_recorder.storage.cost_budget import analyze_cost_budget, format_cost_budget
+            cb = analyze_cost_budget(config.output_dir, weeks=8)
+            if cb:
+                sections.append(format_cost_budget(cb))
+        except Exception:
+            pass
+
+        if sections:
+            print("\n\n".join(sections))
+        else:
+            print("No recordings found.")
+        return 0
 
     if args.streaks:
         from meeting_recorder.storage.streaks import analyze_streaks, format_streaks

@@ -3081,6 +3081,26 @@ class MainWindow:
         else:
             kw_btn = None
 
+        # Agenda tab (extracted topic agenda)
+        agenda_text = ""
+        try:
+            from meeting_recorder.storage.agenda_extract import extract_agenda, format_agenda
+            ag = extract_agenda(rec_path, meta=meta)
+            if ag and ag.items:
+                agenda_text = format_agenda(ag)
+        except Exception:
+            pass
+
+        if agenda_text:
+            ag_btn = tk.Label(
+                tab_frame, text="  Agenda  ", font=("Segoe UI", 9, "bold"),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            ag_btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_buttons.append(ag_btn)
+        else:
+            ag_btn = None
+
         def _switch_tab(tab_name, content, btn):
             edit_state["current_tab"] = tab_name
             _show_tab(content, btn)
@@ -3155,6 +3175,8 @@ class MainWindow:
             bm_btn.bind("<Button-1>", lambda e: _switch_tab("bookmarks", bookmarks_text, bm_btn))
         if kw_btn:
             kw_btn.bind("<Button-1>", lambda e: _switch_tab("keywords", keywords_text, kw_btn))
+        if ag_btn:
+            ag_btn.bind("<Button-1>", lambda e: _switch_tab("agenda", agenda_text, ag_btn))
 
         # --- In-content search bar (hidden by default) ---
         search_frame = tk.Frame(parent, bg=BG_CONTROLS)
