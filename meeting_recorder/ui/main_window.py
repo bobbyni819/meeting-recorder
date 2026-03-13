@@ -1137,12 +1137,18 @@ class MainWindow:
             raw = self._filter_var.get()
             if raw != placeholder:
                 filter_text = raw.strip().lower()
+                # Reset page size when filter changes
+                last_filter = getattr(self, "_last_filter_text", "")
+                if filter_text != last_filter:
+                    self._history_page_size = 20
+                self._last_filter_text = filter_text
 
         # Compute stats from metadata
         total_duration = 0.0
         failed_count = 0
         quality_scores: list[int] = []
         shown = 0
+        total_matchable = 0
 
         # Load metadata once for all recordings, then sort pinned to top
         meta_cache: dict[Path, dict] = {}
@@ -1188,17 +1194,38 @@ class MainWindow:
                 if filter_text not in searchable:
                     continue
 
-            if shown < 20:
+            page_limit = getattr(self, "_history_page_size", 20)
+            if shown < page_limit:
                 self._build_history_card(rec_path, meta)
                 self._history_card_paths.append(rec_path)
                 shown += 1
             total_duration += meta.get("duration_seconds", 0)
+            total_matchable += 1
 
         avg_quality = round(sum(quality_scores) / len(quality_scores)) if quality_scores else None
         self._update_stats_label(
             len(recordings), total_duration, failed_count, avg_quality,
             shown_count=shown if filter_text else None,
         )
+
+        # "Load More" button if there are more recordings
+        remaining = total_matchable - shown
+        if remaining > 0:
+            load_more_btn = tk.Label(
+                self._history_frame, text=f"  Load {min(remaining, 20)} more ({remaining} remaining)  ",
+                font=("Segoe UI", 9), fg=TEXT_DIM, bg=BUTTON_BG,
+                cursor="hand2", padx=8, pady=6,
+            )
+            load_more_btn.pack(pady=(8, 4))
+
+            def _load_more():
+                self._history_page_size = getattr(self, "_history_page_size", 20) + 20
+                self._refresh_history()
+
+            load_more_btn.bind("<Button-1>", lambda e: _load_more())
+            load_more_btn.bind("<Enter>", lambda e: load_more_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
+            load_more_btn.bind("<Leave>", lambda e: load_more_btn.configure(fg=TEXT_DIM, bg=BUTTON_BG))
+
         # Update weekly activity strip
         self._update_week_strip(meta_cache)
         # Update tag filter pills
