@@ -426,6 +426,65 @@ class StatsWindow:
                 tk.Label(row, text=f"{hours:.1f}h", font=("Segoe UI", 8),
                          fg=TEXT_DIM, bg=BG_COLOR, width=6, anchor=tk.E).pack(side=tk.LEFT)
 
+        # Focus time
+        try:
+            from meeting_recorder.storage.focus_time import analyze_focus_time
+            focus_weeks = analyze_focus_time(self._recordings_dir, weeks=4)
+            if focus_weeks and any(w.meeting_count > 0 for w in focus_weeks):
+                self._section(content, "Focus Time (Last 4 Weeks)")
+
+                for week in focus_weeks:
+                    if week.meeting_count == 0:
+                        continue
+                    row = tk.Frame(content, bg=BG_COLOR)
+                    row.pack(fill=tk.X, padx=20, pady=1)
+
+                    focus_width = int(200 * week.focus_pct / 100)
+                    mtg_width = 200 - focus_width
+
+                    tk.Label(row, text=f"w/{week.week_start[5:]}",
+                             font=("Segoe UI", 8),
+                             fg=TEXT_DIM, bg=BG_COLOR, width=10,
+                             anchor=tk.W).pack(side=tk.LEFT)
+
+                    bar_canvas = tk.Canvas(row, width=200, height=14,
+                                           bg=BG_PANEL, highlightthickness=0)
+                    bar_canvas.pack(side=tk.LEFT, padx=4)
+                    # Focus = green, meetings = amber
+                    bar_canvas.create_rectangle(
+                        0, 0, focus_width, 14, fill="#2ecc71", outline="")
+                    bar_canvas.create_rectangle(
+                        focus_width, 0, 200, 14, fill=AMBER, outline="")
+
+                    tk.Label(row, text=f"{week.focus_pct:.0f}% focus",
+                             font=("Segoe UI", 8),
+                             fg=TEXT_DIM, bg=BG_COLOR, width=10,
+                             anchor=tk.E).pack(side=tk.LEFT)
+        except Exception:
+            pass
+
+        # Meeting cost
+        try:
+            from meeting_recorder.storage.meeting_cost import aggregate_costs
+            cost_data = aggregate_costs(self._recordings_dir)
+            if cost_data.get("meeting_count", 0) > 0:
+                self._section(content, "Estimated Meeting Cost")
+                cost_frame = tk.Frame(content, bg=BG_COLOR)
+                cost_frame.pack(fill=tk.X, padx=20, pady=4)
+
+                total = cost_data["total_cost"]
+                avg = cost_data["avg_cost"]
+                count = cost_data["meeting_count"]
+
+                tk.Label(cost_frame,
+                         text=f"Total: ${total:,.0f}  |  "
+                              f"Average: ${avg:,.0f}/meeting  |  "
+                              f"{count} meetings",
+                         font=("Segoe UI", 9), fg=TEXT_COLOR, bg=BG_COLOR,
+                         anchor=tk.W).pack(fill=tk.X)
+        except Exception:
+            pass
+
         # Bottom padding
         tk.Frame(content, bg=BG_COLOR, height=20).pack()
 
