@@ -977,3 +977,65 @@ class TestGeometryPersistence:
         geo_file.write_text("garbage", encoding="utf-8")
         monkeypatch.setattr(MainWindow, "_GEOMETRY_FILE", geo_file)
         assert MainWindow._load_geometry() == ""
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+class TestTags:
+    def test_filter_matches_tags(self, tmp_path):
+        """Filter should match recordings by tag."""
+        rec1 = tmp_path / "2026-03-01_rec"
+        rec1.mkdir()
+        (rec1 / "metadata.json").write_text(
+            json.dumps({"tags": ["important", "follow-up"]}), encoding="utf-8")
+
+        mw = MainWindow(on_list_recent=lambda: [rec1])
+        mw._history_frame = mock.Mock()
+        mw._history_frame.winfo_children.return_value = []
+        mw._stats_label = mock.Mock()
+        mw._filter_var = mock.Mock()
+        mw._filter_var.get.return_value = "important"
+
+        built = []
+        mw._build_history_card = lambda p: built.append(p)
+        mw._refresh_history()
+        assert len(built) == 1
+
+    def test_filter_excludes_untagged(self, tmp_path):
+        """Filter by tag excludes untagged recordings."""
+        rec1 = tmp_path / "2026-03-01_rec"
+        rec1.mkdir()
+        (rec1 / "metadata.json").write_text(
+            json.dumps({"tags": []}), encoding="utf-8")
+
+        mw = MainWindow(on_list_recent=lambda: [rec1])
+        mw._history_frame = mock.Mock()
+        mw._history_frame.winfo_children.return_value = []
+        mw._stats_label = mock.Mock()
+        mw._filter_var = mock.Mock()
+        mw._filter_var.get.return_value = "important"
+
+        built = []
+        mw._build_history_card = lambda p: built.append(p)
+        mw._refresh_history()
+        assert len(built) == 0
+
+    def test_tags_in_metadata(self):
+        """Tags field should exist in RecordingMetadata."""
+        from meeting_recorder.storage.metadata import RecordingMetadata
+        meta = RecordingMetadata()
+        assert meta.tags == []
+        meta.tags = ["project-x", "urgent"]
+        assert meta.tags == ["project-x", "urgent"]
+
+    def test_tags_serialization(self, tmp_path):
+        """Tags should round-trip through save/load."""
+        from meeting_recorder.storage.metadata import RecordingMetadata
+        rec = tmp_path / "test_rec"
+        rec.mkdir()
+        meta = RecordingMetadata(tags=["alpha", "beta"])
+        meta.save(rec)
+        loaded = RecordingMetadata.load(rec)
+        assert loaded.tags == ["alpha", "beta"]

@@ -1078,6 +1078,7 @@ class MainWindow:
                     meta.get("app_name", "").lower(),
                     meta.get("meeting_organizer", "").lower(),
                     " ".join(meta.get("meeting_attendees", [])).lower(),
+                    " ".join(meta.get("tags", [])).lower(),
                 ])
                 if filter_text not in searchable:
                     continue
@@ -1224,6 +1225,17 @@ class MainWindow:
                 font=("Segoe UI", 8), fg="#607080", bg=BG_CARD,
                 anchor=tk.W,
             ).pack(fill=tk.X)
+
+        # Tag pills on cards
+        card_tags = meta.get("tags", [])
+        if card_tags:
+            tag_row = tk.Frame(left, bg=BG_CARD)
+            tag_row.pack(fill=tk.X, pady=(1, 0))
+            for tag in card_tags[:5]:  # max 5 visible on card
+                tk.Label(
+                    tag_row, text=f" {tag} ", font=("Segoe UI", 7),
+                    fg=TEXT_DIM, bg=BG_CONTROLS,
+                ).pack(side=tk.LEFT, padx=(0, 3))
 
         # Quality indicator + duration badge on right side
         quality = meta.get("quality_scores", {})
@@ -1647,6 +1659,11 @@ class MainWindow:
                 font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_COLOR, anchor=tk.W,
                 wraplength=480,
             ).pack(fill=tk.X, padx=20, pady=(0, 4))
+
+        # --- Tags ---
+        tags_frame = tk.Frame(parent, bg=BG_COLOR)
+        tags_frame.pack(fill=tk.X, padx=20, pady=(0, 4))
+        self._build_tag_bar(tags_frame, rec_path, meta)
 
         # Divider
         tk.Frame(parent, bg=BG_HEADER, height=1).pack(fill=tk.X, padx=16, pady=4)
@@ -2175,6 +2192,87 @@ class MainWindow:
             lines.append(f"  End:           {end}")
 
         return "\n".join(lines)
+
+    def _build_tag_bar(self, parent: tk.Frame, rec_path: Path, meta: dict) -> None:
+        """Build an inline tag display with add/remove."""
+        tags = list(meta.get("tags", []))
+
+        def _redraw():
+            for w in parent.winfo_children():
+                w.destroy()
+
+            for tag in tags:
+                pill = tk.Frame(parent, bg=BLUE_ACCENT, padx=1, pady=1)
+                pill.pack(side=tk.LEFT, padx=(0, 4), pady=1)
+                tk.Label(
+                    pill, text=f" {tag} ", font=("Segoe UI", 8),
+                    fg=TEXT_BRIGHT, bg=BLUE_ACCENT,
+                ).pack(side=tk.LEFT)
+                x_btn = tk.Label(
+                    pill, text="\u00d7", font=("Segoe UI", 8, "bold"),
+                    fg=TEXT_DIM, bg=BLUE_ACCENT, cursor="hand2", padx=2,
+                )
+                x_btn.pack(side=tk.LEFT)
+                x_btn.bind("<Button-1>", lambda e, t=tag: _remove_tag(t))
+                x_btn.bind("<Enter>", lambda e, b=x_btn: b.configure(fg=TEXT_BRIGHT))
+                x_btn.bind("<Leave>", lambda e, b=x_btn: b.configure(fg=TEXT_DIM))
+
+            add_btn = tk.Label(
+                parent, text="+ tag", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2",
+            )
+            add_btn.pack(side=tk.LEFT, padx=2)
+            add_btn.bind("<Button-1>", lambda e: _add_tag_inline())
+            add_btn.bind("<Enter>", lambda e: add_btn.configure(fg=TEXT_COLOR))
+            add_btn.bind("<Leave>", lambda e: add_btn.configure(fg=TEXT_DIM))
+
+        def _add_tag_inline():
+            # Replace "+ tag" with an entry
+            for w in parent.winfo_children():
+                if isinstance(w, tk.Label) and w.cget("text") == "+ tag":
+                    w.destroy()
+                    break
+
+            entry = tk.Entry(
+                parent, font=("Segoe UI", 8), width=12,
+                bg=BG_PANEL, fg=TEXT_BRIGHT, insertbackground=TEXT_BRIGHT,
+                bd=0, highlightthickness=1, highlightcolor=BLUE_ACCENT,
+            )
+            entry.pack(side=tk.LEFT, padx=2, ipady=1)
+            entry.focus_set()
+
+            def _commit(event=None):
+                new_tag = entry.get().strip()
+                if new_tag and new_tag not in tags:
+                    tags.append(new_tag)
+                    _save_tags()
+                entry.destroy()
+                _redraw()
+
+            def _cancel(event=None):
+                entry.destroy()
+                _redraw()
+
+            entry.bind("<Return>", _commit)
+            entry.bind("<Escape>", _cancel)
+            entry.bind("<FocusOut>", _commit)
+
+        def _remove_tag(tag: str):
+            if tag in tags:
+                tags.remove(tag)
+                _save_tags()
+                _redraw()
+
+        def _save_tags():
+            meta["tags"] = tags
+            try:
+                meta_path = rec_path / "metadata.json"
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2, ensure_ascii=False)
+            except Exception:
+                logger.exception("Failed to save tags")
+
+        _redraw()
 
     def _confirm_delete(self, rec_path: Path, trigger_btn: tk.Label) -> None:
         """Show inline delete confirmation."""
