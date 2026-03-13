@@ -1538,8 +1538,23 @@ class MainWindow:
         notes_btn.bind("<Enter>", lambda e: notes_btn.configure(fg=TEXT_COLOR))
         notes_btn.bind("<Leave>", lambda e: notes_btn.configure(fg=TEXT_DIM))
 
-        # Speaker editor button (only if transcript.json exists)
+        # Timeline + Speaker editor buttons (only if transcript.json exists)
         if (rec_path / "transcript.json").exists():
+            timeline_btn = tk.Label(
+                top_bar, text="\u23e9  Timeline", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            timeline_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+
+            def _open_timeline():
+                from meeting_recorder.ui.timeline_view import TimelineWindow
+                tw = TimelineWindow(rec_path)
+                tw.show(self._window)
+
+            timeline_btn.bind("<Button-1>", lambda e: _open_timeline())
+            timeline_btn.bind("<Enter>", lambda e: timeline_btn.configure(fg=TEXT_COLOR))
+            timeline_btn.bind("<Leave>", lambda e: timeline_btn.configure(fg=TEXT_DIM))
+
             speakers_btn = tk.Label(
                 top_bar, text="\U0001f465  Speakers", font=("Segoe UI", 9),
                 fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
