@@ -37,6 +37,13 @@ Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/note_templates.py` — pre-formatted meeting note templates
 - `meeting_recorder/storage/collaboration.py` — attendee co-occurrence analysis
 - `meeting_recorder/storage/summary_diff.py` — compare summaries across recurring meetings
+- `meeting_recorder/storage/sentiment.py` — keyword-based sentiment analysis for transcripts
+- `meeting_recorder/storage/duration_predict.py` — meeting duration prediction and anomaly detection
+- `meeting_recorder/storage/meeting_prep.py` — meeting preparation sheet generator
+- `meeting_recorder/storage/word_frequency.py` — word frequency analysis with per-speaker terms
+- `meeting_recorder/storage/participation.py` — participation equity scoring (Gini coefficient)
+- `meeting_recorder/storage/meeting_roi.py` — meeting ROI calculator with recommendations
+- `meeting_recorder/storage/efficiency_trend.py` — meeting efficiency trend tracking across weeks
 - `SETUP.md` — full install guide for a new Windows machine
 
 ## Audio pipeline
