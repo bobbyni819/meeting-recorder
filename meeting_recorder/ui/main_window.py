@@ -3100,6 +3100,43 @@ class MainWindow:
         if transcript_text:
             edit_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
 
+        # Export transcript button (SRT/VTT)
+        if (rec_path / "transcript.json").exists():
+            export_btn = tk.Label(
+                tab_frame, text="\u2913 Export", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+            )
+            export_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+
+            def _show_export_menu(event):
+                menu = tk.Menu(self._window, tearoff=0, bg=BG_PANEL, fg=TEXT_COLOR,
+                               activebackground=BLUE_ACCENT, activeforeground=TEXT_BRIGHT)
+                for fmt, label in [("srt", "SRT Subtitles (.srt)"), ("vtt", "WebVTT (.vtt)"), ("txt", "Timestamped Text (.txt)")]:
+                    menu.add_command(label=label, command=lambda f=fmt: _export_format(f))
+                menu.post(event.x_root, event.y_root)
+
+            def _export_format(fmt: str):
+                try:
+                    from meeting_recorder.storage.transcript_export import export_transcript
+                    content = export_transcript(rec_path, fmt)
+                    if content:
+                        ext = f".{fmt}"
+                        dest = rec_path / f"transcript{ext}"
+                        dest.write_text(content, encoding="utf-8")
+                        export_btn.configure(text=f"\u2713 Saved {ext}", fg=GREEN)
+                        if self._window:
+                            self._window.after(2000, lambda: export_btn.configure(
+                                text="\u2913 Export", fg=TEXT_DIM))
+                except Exception:
+                    export_btn.configure(text="Export failed", fg=AMBER)
+                    if self._window:
+                        self._window.after(2000, lambda: export_btn.configure(
+                            text="\u2913 Export", fg=TEXT_DIM))
+
+            export_btn.bind("<Button-1>", _show_export_menu)
+            export_btn.bind("<Enter>", lambda e: export_btn.configure(fg=TEXT_COLOR))
+            export_btn.bind("<Leave>", lambda e: export_btn.configure(fg=TEXT_DIM))
+
         transcript_btn.bind("<Button-1>", lambda e: _switch_tab("transcript", transcript_text, transcript_btn))
         summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
         details_btn.bind("<Button-1>", lambda e: _switch_tab("details", details_text, details_btn))
