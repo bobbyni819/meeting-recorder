@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 # GDI constants
 _PW_RENDERFULLCONTENT = 2  # PrintWindow flag: render full content (Win 8.1+)
-_SRCCOPY = 0x00CC0020
 _DIB_RGB_COLORS = 0
 
 
@@ -99,7 +98,9 @@ class ScreenCapture:
         """Stop the screen capture thread and finalize the video."""
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=10.0)
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("Screen capture thread did not exit within 5s")
             self._thread = None
         self._latest_frame = None
         logger.info("Screen capture stopped.")
@@ -124,8 +125,15 @@ class ScreenCapture:
         Captures only the window itself — notifications, overlays, and other
         windows on top are excluded. Returns a BGR numpy array, or None on failure.
         """
+        if width <= 0 or height <= 0:
+            return None
+
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
+
+        # Validate window handle before GDI operations
+        if not user32.IsWindow(hwnd):
+            return None
 
         hdc_window = user32.GetWindowDC(hwnd)
         if not hdc_window:
@@ -142,7 +150,8 @@ class ScreenCapture:
             if not hbm:
                 return None
 
-            gdi32.SelectObject(hdc_mem, hbm)
+            if not gdi32.SelectObject(hdc_mem, hbm):
+                return None
 
             # PW_RENDERFULLCONTENT renders the full window content (Win 8.1+)
             if not user32.PrintWindow(hwnd, hdc_mem, _PW_RENDERFULLCONTENT):
@@ -163,7 +172,10 @@ class ScreenCapture:
                 hdc_mem, hbm, 0, height, buf, ctypes.byref(bmi), _DIB_RGB_COLORS
             )
 
-            frame = np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 4)
+            # Copy immediately: buf is a stack-allocated ctypes array that will
+            # be freed when this function returns. frombuffer creates a view,
+            # so we must .copy() before any operations on the data.
+            frame = np.frombuffer(buf, dtype=np.uint8).copy().reshape(height, width, 4)
             frame = np.flipud(frame)  # bottom-up -> top-down
             return frame[:, :, :3].copy()  # BGRA -> BGR
 
@@ -201,6 +213,9 @@ class ScreenCapture:
                 return
 
             _, _, init_width, init_height = rect
+            if init_width <= 0 or init_height <= 0:
+                logger.warning("Window has zero dimensions. Screen recording disabled.")
+                return
 
             # Initialize video writer — try H.264 first (3-5x smaller), fall back to mp4v
             writer = None
@@ -231,7 +246,11 @@ class ScreenCapture:
             frame_count = 0
             last_good_frame = None  # Cache for gap-filling dropped frames
             flicker_drops = 0  # Count of dropped glitch frames
-            consecutive_glitches = 0  # Reset baseline after too many in a row
+            # Time-based glitch reset: if glitches persist for >2s, the content
+            # has genuinely changed (screen share, slide, theme switch). Using
+            # wall-clock time instead of a frame counter avoids the problem of
+            # a single good frame resetting a consecutive counter.
+            last_non_glitch_time = time.monotonic()
 
             # current_hwnd tracks the active window (can be changed by switch_window())
             current_hwnd = hwnd
@@ -261,30 +280,39 @@ class ScreenCapture:
                 pending = self._override_hwnd
                 if pending is not None and pending != current_hwnd:
                     self._override_hwnd = None  # consume
-                    new_rect = get_window_rect(pending)
-                    if new_rect is not None:
-                        current_hwnd = pending
-                        new_title = get_window_title(pending)
-                        logger.info(
-                            "Switched capture to: '%s' (HWND %d)", new_title, current_hwnd
-                        )
-                        # Re-probe capture method for the new window
-                        probe = self._capture_printwindow(
-                            current_hwnd, new_rect[2], new_rect[3]
-                        )
-                        if probe is not None and np.max(probe) >= 5:
-                            use_printwindow = True
-                            if sct is not None:
-                                sct.close()
-                                sct = None
+                    # Validate the new handle before using it
+                    if ctypes.windll.user32.IsWindow(pending):
+                        new_rect = get_window_rect(pending)
+                        if new_rect is not None and new_rect[2] > 0 and new_rect[3] > 0:
+                            current_hwnd = pending
+                            new_title = get_window_title(pending)
+                            logger.info(
+                                "Switched capture to: '%s' (HWND %d)", new_title, current_hwnd
+                            )
+                            # Re-probe capture method for the new window
+                            probe = self._capture_printwindow(
+                                current_hwnd, new_rect[2], new_rect[3]
+                            )
+                            if probe is not None and np.max(probe) >= 5:
+                                use_printwindow = True
+                                if sct is not None:
+                                    sct.close()
+                                    sct = None
+                            else:
+                                use_printwindow = False
+                                if sct is None:
+                                    import mss
+                                    sct = mss.mss()
+                            # Reset glitch baseline for new window
+                            last_good_frame = None
+                            last_non_glitch_time = time.monotonic()
                         else:
-                            use_printwindow = False
-                            if sct is None:
-                                import mss
-                                sct = mss.mss()
+                            logger.warning(
+                                "Requested HWND %d is not visible; ignoring switch.", pending
+                            )
                     else:
                         logger.warning(
-                            "Requested HWND %d is not visible; ignoring switch.", pending
+                            "Requested HWND %d is no longer valid; ignoring switch.", pending
                         )
 
                 # Get current window position/size
@@ -303,6 +331,14 @@ class ScreenCapture:
                     continue
 
                 left, top, cur_w, cur_h = rect
+
+                # Skip degenerate window dimensions (collapsed, zero-size)
+                if cur_w <= 0 or cur_h <= 0:
+                    if last_good_frame is not None and not self.paused:
+                        writer.write(last_good_frame)
+                        frame_count += 1
+                    _sleep_remaining(frame_start, interval)
+                    continue
 
                 try:
                     if use_printwindow:
@@ -323,6 +359,12 @@ class ScreenCapture:
                             "height": cur_h,
                         }
                         screenshot = sct.grab(monitor)
+                        if screenshot is None:
+                            if last_good_frame is not None and not self.paused:
+                                writer.write(last_good_frame)
+                                frame_count += 1
+                            _sleep_remaining(frame_start, interval)
+                            continue
                         frame = np.array(screenshot)[:, :, :3]  # BGRA -> BGR
 
                     # Resize if window changed size (keep video dimensions consistent)
@@ -331,19 +373,20 @@ class ScreenCapture:
 
                     # Anti-flicker: detect glitch frames (blank, flash, or torn)
                     # from PrintWindow DWM composition artifacts and drop them.
+                    now = time.monotonic()
                     if last_good_frame is not None and _is_glitch_frame(frame, last_good_frame):
-                        consecutive_glitches += 1
                         flicker_drops += 1
-                        if consecutive_glitches >= int(self.fps * 2):
-                            # After ~2 seconds of "glitches", the content has
-                            # genuinely changed (screen share, slide, theme).
-                            # Accept this frame as the new baseline to avoid
-                            # freezing the capture indefinitely.
+                        glitch_duration = now - last_non_glitch_time
+                        if glitch_duration >= 2.0:
+                            # Content has genuinely changed (screen share, slide,
+                            # theme switch). Accept this frame as the new baseline
+                            # to avoid freezing the capture indefinitely.
                             last_good_frame = frame
-                            consecutive_glitches = 0
+                            last_non_glitch_time = now
                             logger.info(
                                 "Glitch detector reset — content change detected "
-                                "(%d total drops)", flicker_drops
+                                "after %.1fs (%d total drops)",
+                                glitch_duration, flicker_drops,
                             )
                         else:
                             if flicker_drops % 50 == 1:
@@ -354,7 +397,7 @@ class ScreenCapture:
                             frame = last_good_frame
                     else:
                         last_good_frame = frame
-                        consecutive_glitches = 0
+                        last_non_glitch_time = now
 
                     if not self.paused:
                         writer.write(frame)
@@ -387,9 +430,15 @@ class ScreenCapture:
             logger.exception("Screen capture error")
         finally:
             if writer is not None:
-                writer.release()
+                try:
+                    writer.release()
+                except Exception:
+                    logger.warning("VideoWriter.release() failed", exc_info=True)
             if sct is not None:
-                sct.close()
+                try:
+                    sct.close()
+                except Exception:
+                    pass
 
     @property
     def latest_frame(self) -> Optional[np.ndarray]:
@@ -424,13 +473,13 @@ def _is_glitch_frame(frame: np.ndarray, last_good: np.ndarray) -> bool:
 
     # Compare to last good frame — a sudden large brightness shift
     # across the whole image is almost certainly a capture artifact,
-    # not a real content change.
+    # not a real content change.  Real content changes are caught by
+    # the time-based glitch reset in the main loop.
     ref_sample = last_good.flat[::step]
     ref_mean = float(ref_sample.mean())
 
     if ref_mean > 5:
         ratio = abs(mean_val - ref_mean) / ref_mean
-        # >60% mean brightness change in a single frame = glitch
         if ratio > 0.60:
             return True
 
