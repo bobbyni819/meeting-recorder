@@ -231,6 +231,7 @@ class ScreenCapture:
             frame_count = 0
             last_good_frame = None  # Cache for gap-filling dropped frames
             flicker_drops = 0  # Count of dropped glitch frames
+            consecutive_glitches = 0  # Reset baseline after too many in a row
 
             # current_hwnd tracks the active window (can be changed by switch_window())
             current_hwnd = hwnd
@@ -331,14 +332,29 @@ class ScreenCapture:
                     # Anti-flicker: detect glitch frames (blank, flash, or torn)
                     # from PrintWindow DWM composition artifacts and drop them.
                     if last_good_frame is not None and _is_glitch_frame(frame, last_good_frame):
+                        consecutive_glitches += 1
                         flicker_drops += 1
-                        if flicker_drops % 50 == 1:
-                            logger.debug(
-                                "Dropped glitch frame (%d total drops)", flicker_drops
+                        if consecutive_glitches >= int(self.fps * 2):
+                            # After ~2 seconds of "glitches", the content has
+                            # genuinely changed (screen share, slide, theme).
+                            # Accept this frame as the new baseline to avoid
+                            # freezing the capture indefinitely.
+                            last_good_frame = frame
+                            consecutive_glitches = 0
+                            logger.info(
+                                "Glitch detector reset — content change detected "
+                                "(%d total drops)", flicker_drops
                             )
-                        frame = last_good_frame
+                        else:
+                            if flicker_drops % 50 == 1:
+                                logger.debug(
+                                    "Dropped glitch frame (%d total drops)",
+                                    flicker_drops,
+                                )
+                            frame = last_good_frame
                     else:
                         last_good_frame = frame
+                        consecutive_glitches = 0
 
                     if not self.paused:
                         writer.write(frame)
