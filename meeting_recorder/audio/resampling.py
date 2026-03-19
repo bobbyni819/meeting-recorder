@@ -17,6 +17,7 @@ def resample_to_16khz_mono(
     source_rate: int,
     target_rate: int = 16000,
     source_channels: int = 1,
+    target_length: int | None = None,
 ) -> np.ndarray:
     """Resample audio to target rate mono int16.
 
@@ -28,6 +29,9 @@ def resample_to_16khz_mono(
         source_rate: Source sample rate in Hz.
         target_rate: Target sample rate in Hz (default 16000).
         source_channels: Number of source channels (1 or 2).
+        target_length: If set, pad or truncate the output to exactly this
+            many samples.  Useful for downstream consumers that need a
+            fixed chunk size (e.g. Silero VAD needs exactly 512 samples).
 
     Returns:
         Resampled audio as 1D int16 numpy array.
@@ -36,6 +40,8 @@ def resample_to_16khz_mono(
     if (source_rate == target_rate
             and source_channels == 1
             and audio.dtype == np.int16):
+        if target_length is not None and len(audio) != target_length:
+            audio = _fix_length(audio, target_length)
         return audio
 
     # Convert int16 to float32 for processing
@@ -54,7 +60,20 @@ def resample_to_16khz_mono(
         audio = resample_poly(audio, up, down).astype(np.float32)
 
     # Convert float32 [-1, 1] to int16
-    return np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+    result = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+
+    if target_length is not None and len(result) != target_length:
+        result = _fix_length(result, target_length)
+
+    return result
+
+
+def _fix_length(audio: np.ndarray, target: int) -> np.ndarray:
+    """Pad with zeros or truncate *audio* to exactly *target* samples."""
+    if len(audio) >= target:
+        return audio[:target]
+    pad = np.zeros(target - len(audio), dtype=audio.dtype)
+    return np.concatenate([audio, pad])
 
 
 class NoiseGate:

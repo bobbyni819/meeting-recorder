@@ -1380,18 +1380,28 @@ class MeetingRecorderApp:
         logger.info("Batch re-processing %d failed recording(s)", len(failed))
         notifications.notify_info(f"Re-processing {len(failed)} failed recording(s)...")
 
+        processed = 0
         for i, rec_path in enumerate(failed, 1):
+            # Wait for any in-flight post-processing to complete first
+            if self._post_thread and self._post_thread.is_alive():
+                self._main_window.update_status_bar(
+                    f"Waiting for previous re-process to finish ({i}/{len(failed)})..."
+                )
+                self._post_thread.join(timeout=600)  # 10 min max per recording
+
             self._main_window.update_status_bar(
                 f"Re-processing {i}/{len(failed)}: {rec_path.name}"
             )
             self.reprocess_recording(rec_path)
-            # Wait for this one to finish before starting the next
-            if self._post_thread and self._post_thread.is_alive():
-                self._post_thread.join(timeout=600)  # 10 min max per recording
+            processed += 1
+
+        # Wait for the last one to finish
+        if self._post_thread and self._post_thread.is_alive():
+            self._post_thread.join(timeout=600)
 
         self._main_window.update_status_bar("Batch re-processing complete.")
         self._main_window.refresh_history()
-        notifications.notify_info(f"Re-processed {len(failed)} recording(s).")
+        notifications.notify_info(f"Re-processed {processed}/{len(failed)} recording(s).")
 
     def import_audio(self, file_path: str | Path) -> None:
         """Import an external audio file and run post-processing on it.

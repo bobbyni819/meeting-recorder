@@ -56,6 +56,38 @@ def _is_buffer_silent(data: bytes) -> bool:
     return bool(rms < _SILENCE_RMS_THRESHOLD)
 
 
+def _patch_wav_header(wav_path: Path) -> None:
+    """Patch a WAV file header so the data size matches the actual file size.
+
+    Python's ``wave`` module writes the RIFF chunk size and data chunk size
+    only when ``close()`` is called.  If the process crashes before that,
+    the header says "0 bytes of data" even though audio samples are present.
+    This function fixes the header in-place based on the real file size.
+    """
+    import struct
+
+    size = wav_path.stat().st_size
+    if size < 44:
+        return  # too small to be a valid WAV
+
+    with open(wav_path, "r+b") as f:
+        # Read the existing header to confirm RIFF/WAVE
+        header = f.read(44)
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            return
+
+        data_size = size - 44  # audio payload
+        riff_size = size - 8  # RIFF chunk size = file size - 8
+
+        # Patch RIFF chunk size (offset 4, little-endian uint32)
+        f.seek(4)
+        f.write(struct.pack("<I", riff_size))
+
+        # Patch data chunk size (offset 40, little-endian uint32)
+        f.seek(40)
+        f.write(struct.pack("<I", data_size))
+
+
 def _check_system_volume() -> Optional[float]:
     """Return the system master volume (0.0 - 1.0), or None if unavailable."""
     return _platform_check_system_volume()
@@ -339,10 +371,10 @@ class CaptureManager:
         # Writers must finish BEFORE stopping the live transcriber,
         # because the app writer thread feeds the transcriber.
         threads_to_join = [
-            (self._app_writer_thread, 10.0, "app WAV writer"),
-            (self._mic_writer_thread, 10.0, "mic WAV writer"),
-            (self._monitor_thread, 5.0, "process monitor"),
-            (self._level_thread, 3.0, "audio level monitor"),
+            (self._app_writer_thread, 5.0, "app WAV writer"),
+            (self._mic_writer_thread, 5.0, "mic WAV writer"),
+            (self._monitor_thread, 2.0, "process monitor"),
+            (self._level_thread, 2.0, "audio level monitor"),
             (self._silence_thread, 1.0, "silence detector"),
         ]
         current = threading.current_thread()
@@ -350,7 +382,9 @@ class CaptureManager:
             if thread is not None and thread is not current:
                 thread.join(timeout=timeout)
                 if thread.is_alive():
-                    logger.warning("%s thread did not terminate (zombie).", label)
+                    logger.warning(
+                        "%s thread did not terminate within %.0fs.", label, timeout
+                    )
 
         # Stop live transcription after writers have drained
         with self._transcriber_lock:
@@ -378,16 +412,31 @@ class CaptureManager:
                 else self._level_monitor.update_mic_level
             )
             is_app = label == "app"
+            # Periodic header flush: WAV header contains the frame count,
+            # which is only written on close(). If the process crashes, the
+            # header is stale and the file appears empty.  We flush by
+            # closing and re-opening in append mode every ~30 seconds.
+            last_flush = time.monotonic()
+            _FLUSH_INTERVAL = 30.0
+            frames_since_flush = 0
 
             while not self._stop_event.is_set():
                 chunks = buffer.get_all()
                 if chunks:
-                    # When paused, drain the buffer but don't write to disk
+                    # When paused, drain the buffer but don't write to disk.
+                    # Still feed the live transcriber so it stays time-aligned.
                     if self._paused:
+                        if is_app:
+                            with self._transcriber_lock:
+                                lt = self._live_transcriber
+                            if lt is not None:
+                                for chunk in chunks:
+                                    lt.feed_audio(chunk)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
                     else:
                         for chunk in chunks:
                             wf.writeframes(chunk)
+                            frames_since_flush += len(chunk) // 2
                             level_update(chunk)
                             if is_app:
                                 with self._transcriber_lock:
@@ -395,14 +444,29 @@ class CaptureManager:
                                 if lt is not None:
                                     lt.feed_audio(chunk)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
+
+                    # Periodic WAV header flush: patch the RIFF/data chunk
+                    # sizes in-place so the file is playable even if the
+                    # process crashes before wave.close() finalizes the header.
+                    now = time.monotonic()
+                    if frames_since_flush > 0 and now - last_flush >= _FLUSH_INTERVAL:
+                        try:
+                            wf._ensure_header_written(0)  # force header
+                            wf._file.flush()
+                            _patch_wav_header(wav_path)
+                        except Exception:
+                            logger.debug("WAV header flush failed (%s)", label, exc_info=True)
+                        last_flush = now
+                        frames_since_flush = 0
                 else:
                     # Wait with event so stop() wakes us immediately
                     self._stop_event.wait(0.01)
 
             # Flush remaining
             remaining = buffer.get_all()
-            for chunk in remaining:
-                wf.writeframes(chunk)
+            if wf is not None:
+                for chunk in remaining:
+                    wf.writeframes(chunk)
 
             logger.info("WAV writer finished: %s", wav_path.name)
 
@@ -420,6 +484,11 @@ class CaptureManager:
                     wf.close()
                 except Exception:
                     logger.debug("Error closing WAV file (%s)", label, exc_info=True)
+            # Final header patch: ensure the WAV header reflects actual data
+            try:
+                _patch_wav_header(wav_path)
+            except Exception:
+                logger.debug("Final WAV header patch failed (%s)", label, exc_info=True)
 
     def _monitor_process(self) -> None:
         """Monitor the target process and auto-stop if it exits.

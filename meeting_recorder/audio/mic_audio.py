@@ -131,15 +131,16 @@ class MicAudioCapture:
                 # Convert to numpy int16
                 audio_raw = np.frombuffer(audio_data, dtype=np.int16)
 
-                # Resample to 16kHz mono int16 using shared utility
+                # Resample to 16kHz mono int16, fixing output to exactly
+                # VAD_CHUNK_SAMPLES so Silero gets the right chunk size.
                 audio_int16 = resample_to_16khz_mono(
                     audio_raw,
                     source_rate=native_rate,
                     target_rate=self.target_sample_rate,
                     source_channels=native_channels,
+                    target_length=VAD_CHUNK_SAMPLES,
                 )
 
-                # Ensure exactly VAD_CHUNK_SAMPLES for Silero
                 chunk_bytes = audio_int16.tobytes()
 
                 # Check meeting app mute state first
