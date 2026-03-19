@@ -420,6 +420,7 @@ class Config:
 
 def _atomic_write(path: Path, data: dict) -> None:
     """Write *data* as TOML to *path* atomically (temp + rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
     with open(tmp, "wb") as f:
         tomli_w.dump(data, f)

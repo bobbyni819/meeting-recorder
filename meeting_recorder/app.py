@@ -1122,7 +1122,10 @@ class MeetingRecorderApp:
                     logger.debug("Failed to persist dashboard position", exc_info=True)
 
             if self.config.dashboard.auto_hide:
-                self._dashboard.close()
+                try:
+                    self._dashboard.close()
+                except Exception:
+                    logger.debug("Dashboard close failed", exc_info=True)
                 self._dashboard = None
 
     def _on_health_warning(self, warning_key: str) -> None:

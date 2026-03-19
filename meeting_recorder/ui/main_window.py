@@ -1760,6 +1760,8 @@ class MainWindow:
                 menu.tk_popup(e.x_root, e.y_root)
             finally:
                 menu.grab_release()
+                if self._window:
+                    self._window.after(100, menu.destroy)
 
         card.bind("<Enter>", _enter)
         card.bind("<Leave>", _leave)
@@ -2510,6 +2512,8 @@ class MainWindow:
             except Exception:
                 menu.add_command(label="Templates unavailable", state=tk.DISABLED)
             menu.tk_popup(event.x_root, event.y_root)
+            if self._window:
+                self._window.after(100, menu.destroy)
 
         def _copy_template(template_name: str):
             try:
@@ -2917,6 +2921,8 @@ class MainWindow:
 
             if menu.index(tk.END) is not None:
                 menu.tk_popup(event.x_root, event.y_root)
+                if self._window:
+                    self._window.after(100, menu.destroy)
 
         def _copy_highlights():
             if highlight_store and self._window:

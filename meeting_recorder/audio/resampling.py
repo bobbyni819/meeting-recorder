@@ -95,6 +95,7 @@ class NoiseGate:
 
         # Smooth gain transition (exponential moving average)
         self._gain += self._smoothing * (target - self._gain)
+        self._gain = min(1.0, max(0.0, self._gain))
 
         # Fast path: gain ~1.0 means no processing needed
         if self._gain > 0.99:

@@ -833,8 +833,9 @@ class CaptureManager:
         """Elapsed recording time, excluding paused duration."""
         if self._start_time is None:
             return 0.0
-        total = time.time() - self._start_time
-        paused = self._total_paused_seconds
-        if self._paused and self._pause_start_time is not None:
-            paused += time.time() - self._pause_start_time
+        with self._pause_lock:
+            total = time.time() - self._start_time
+            paused = self._total_paused_seconds
+            if self._paused and self._pause_start_time is not None:
+                paused += time.time() - self._pause_start_time
         return max(0.0, total - paused)

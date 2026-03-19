@@ -905,6 +905,8 @@ class GameBarDashboard:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+            if self._window:
+                self._window.after(100, menu.destroy)
 
     # ------------------------------------------------------------------
     # Positioning
