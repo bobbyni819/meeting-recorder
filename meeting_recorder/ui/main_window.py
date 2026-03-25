@@ -2657,6 +2657,69 @@ class MainWindow:
         )
         title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Calendar picker button — lets user pick a title from upcoming meetings
+        cal_btn = tk.Label(
+            title_frame, text="\U0001f4c5", font=("Segoe UI", 10),
+            fg=BG_COLOR, bg=BG_COLOR, cursor="hand2",
+        )
+        cal_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        def _pick_from_calendar(e=None):
+            """Show a dropdown of upcoming calendar events to pick a title."""
+            try:
+                from meeting_recorder.integrations.outlook import get_upcoming_meetings
+                events = get_upcoming_meetings(window_minutes=120)
+            except Exception:
+                events = []
+
+            if not events:
+                self.add_notification("info", "No upcoming meetings found in Outlook.", source="calendar")
+                return
+
+            menu = tk.Menu(title_frame, tearoff=0, bg=BG_PANEL, fg=TEXT_COLOR,
+                           activebackground=BLUE_ACCENT, activeforeground=TEXT_BRIGHT,
+                           font=("Segoe UI", 9))
+            for ev in events[:10]:
+                time_part = ""
+                try:
+                    from datetime import datetime as _dt
+                    st = _dt.fromisoformat(ev.start_time)
+                    time_part = st.strftime("%I:%M %p").lstrip("0") + "  "
+                except Exception:
+                    pass
+                label = f"{time_part}{ev.subject}"
+                if len(label) > 60:
+                    label = label[:57] + "..."
+
+                def _set_title(subject=ev.subject, org=ev.organizer,
+                               att=ev.attendees, loc=ev.location,
+                               start=ev.start_time, end=ev.end_time):
+                    try:
+                        meta["meeting_subject"] = subject
+                        if org:
+                            meta["meeting_organizer"] = org
+                        if att:
+                            meta["meeting_attendees"] = att
+                        if loc:
+                            meta["meeting_location"] = loc
+                        with open(rec_path / "metadata.json", "w", encoding="utf-8") as f:
+                            json.dump(meta, f, indent=2, ensure_ascii=False)
+                        title_label.configure(text=subject)
+                        logger.info("Set recording title from calendar: '%s'", subject)
+                    except Exception:
+                        logger.exception("Failed to set title from calendar")
+
+                menu.add_command(label=label, command=_set_title)
+
+            try:
+                menu.tk_popup(cal_btn.winfo_rootx(), cal_btn.winfo_rooty() + 20)
+            finally:
+                menu.grab_release()
+                if self._window:
+                    self._window.after(100, menu.destroy)
+
+        cal_btn.bind("<Button-1>", _pick_from_calendar)
+
         rename_hint = tk.Label(
             title_frame, text="\u270e", font=("Segoe UI", 10),
             fg=BG_COLOR, bg=BG_COLOR, cursor="hand2",
@@ -2665,10 +2728,12 @@ class MainWindow:
 
         def _show_rename_hint(e):
             rename_hint.configure(fg=TEXT_DIM)
+            cal_btn.configure(fg=TEXT_DIM)
             title_label.configure(fg=BLUE_ACCENT)
 
         def _hide_rename_hint(e):
             rename_hint.configure(fg=BG_COLOR)
+            cal_btn.configure(fg=BG_COLOR)
             title_label.configure(fg=TEXT_BRIGHT)
 
         def _start_rename(e=None):
@@ -2715,6 +2780,8 @@ class MainWindow:
         rename_hint.bind("<Enter>", _show_rename_hint)
         rename_hint.bind("<Leave>", _hide_rename_hint)
         rename_hint.bind("<Button-1>", _start_rename)
+        cal_btn.bind("<Enter>", _show_rename_hint)
+        cal_btn.bind("<Leave>", _hide_rename_hint)
 
         # --- Info line ---
         date_str = name[:10] if len(name) >= 10 else name

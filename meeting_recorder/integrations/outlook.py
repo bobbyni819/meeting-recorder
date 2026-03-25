@@ -129,6 +129,63 @@ def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
         return None
 
 
+def get_upcoming_meetings(window_minutes: int = 60) -> list[CalendarEvent]:
+    """Get calendar events happening now or soon.
+
+    Returns events from ``window_minutes`` ago through ``window_minutes``
+    into the future, sorted by start time.  Useful for a UI picker that
+    lets the user choose a meeting title.
+    """
+    try:
+        import win32com.client
+    except ImportError:
+        return []
+
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        namespace = outlook.GetNamespace("MAPI")
+        calendar_folder = namespace.GetDefaultFolder(9)
+    except Exception:
+        logger.debug("Could not connect to Outlook for upcoming meetings")
+        return []
+
+    now = datetime.now()
+    search_start = now - timedelta(minutes=window_minutes)
+    search_end = now + timedelta(minutes=window_minutes)
+
+    start_str = search_start.strftime("%m/%d/%Y %H:%M %p")
+    end_str = search_end.strftime("%m/%d/%Y %H:%M %p")
+
+    events: list[CalendarEvent] = []
+    try:
+        items = calendar_folder.Items
+        items.IncludeRecurrences = True
+        items.Sort("[Start]")
+        restricted = items.Restrict(
+            f"[Start] <= '{end_str}' AND [End] >= '{start_str}'"
+        )
+        for item in restricted:
+            try:
+                item_start = _com_date_to_datetime(item.Start)
+                item_end = _com_date_to_datetime(item.End)
+                events.append(CalendarEvent(
+                    subject=item.Subject or "",
+                    organizer=item.Organizer or "",
+                    attendees=_extract_attendees(item),
+                    start_time=item_start.isoformat(),
+                    end_time=item_end.isoformat(),
+                    location=item.Location or "",
+                    body_preview="",
+                    is_recurring=item.IsRecurring,
+                ))
+            except Exception:
+                continue
+    except Exception:
+        logger.debug("Error querying upcoming meetings", exc_info=True)
+
+    return events
+
+
 def _com_date_to_datetime(com_date) -> datetime:
     """Convert a COM date object to a Python datetime."""
     try:

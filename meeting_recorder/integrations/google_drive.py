@@ -29,7 +29,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path.home() / ".meeting_recorder" / "google_token.json"
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 # File extensions to upload (skip large raw audio)
 UPLOAD_EXTENSIONS = {
@@ -169,23 +169,33 @@ class GoogleDriveUploader:
             return None
 
     def _get_or_create_root_folder(self) -> Optional[str]:
-        """Get or create the MeetingRecordings folder in Drive root."""
+        """Get or create the MeetingRecordings folder in Drive root.
+
+        Searches specifically in the Drive root first (``'root' in parents``),
+        then falls back to a broader search.  This prevents creating a
+        duplicate ``MeetingRecordings (1)`` when the folder already exists
+        but was created by another app/machine/scope.
+        """
         try:
-            # Search for existing folder
-            query = (
-                "name = 'MeetingRecordings' and "
-                "mimeType = 'application/vnd.google-apps.folder' and "
-                "trashed = false"
-            )
-            results = self._service.files().list(
-                q=query, spaces="drive", fields="files(id, name)"
-            ).execute()
+            # Search in Drive root first
+            for parent_filter in ("'root' in parents and ", ""):
+                query = (
+                    f"name = 'MeetingRecordings' and "
+                    f"{parent_filter}"
+                    f"mimeType = 'application/vnd.google-apps.folder' and "
+                    f"trashed = false"
+                )
+                results = self._service.files().list(
+                    q=query, spaces="drive", fields="files(id, name)"
+                ).execute()
 
-            files = results.get("files", [])
-            if files:
-                return files[0]["id"]
+                files = results.get("files", [])
+                if files:
+                    logger.info("Found existing MeetingRecordings folder: %s", files[0]["id"])
+                    return files[0]["id"]
 
-            # Create new folder
+            # Create new folder in Drive root
+            logger.info("Creating new MeetingRecordings folder in Drive root.")
             return self._create_folder("MeetingRecordings")
 
         except Exception:
