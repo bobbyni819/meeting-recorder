@@ -42,11 +42,31 @@ class SpeakerDiarizer:
         import os
         from pyannote.audio import Pipeline
 
-        # Set HF_TOKEN env var — works across all versions of huggingface_hub
-        # and pyannote.audio (the token=/use_auth_token= kwargs are version-
-        # dependent and break across library updates).
+        # Set HF_TOKEN env var so huggingface_hub picks it up automatically.
         if self.huggingface_token:
             os.environ["HF_TOKEN"] = self.huggingface_token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = self.huggingface_token
+
+        # pyannote.audio 3.4.0 internally passes use_auth_token= to
+        # hf_hub_download(), but huggingface_hub >= 1.0 removed that kwarg.
+        # Monkey-patch to strip it so both old and new versions work.
+        try:
+            import huggingface_hub
+            _orig_download = huggingface_hub.hf_hub_download
+            import functools
+
+            @functools.wraps(_orig_download)
+            def _patched_download(*args, **kwargs):
+                kwargs.pop("use_auth_token", None)
+                return _orig_download(*args, **kwargs)
+
+            huggingface_hub.hf_hub_download = _patched_download
+
+            # Also patch file_download module where pyannote imports from
+            if hasattr(huggingface_hub, "file_download"):
+                huggingface_hub.file_download.hf_hub_download = _patched_download
+        except Exception:
+            logger.debug("Could not patch hf_hub_download", exc_info=True)
 
         logger.info("Loading pyannote diarization pipeline...")
         self._pipeline = Pipeline.from_pretrained(
