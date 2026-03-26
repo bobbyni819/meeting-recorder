@@ -39,12 +39,18 @@ class SpeakerDiarizer:
 
     def load(self) -> None:
         """Load the diarization pipeline."""
+        import os
         from pyannote.audio import Pipeline
+
+        # Set HF_TOKEN env var — works across all versions of huggingface_hub
+        # and pyannote.audio (the token=/use_auth_token= kwargs are version-
+        # dependent and break across library updates).
+        if self.huggingface_token:
+            os.environ["HF_TOKEN"] = self.huggingface_token
 
         logger.info("Loading pyannote diarization pipeline...")
         self._pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=self.huggingface_token,
         )
 
         # Move to GPU if available
