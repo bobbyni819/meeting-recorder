@@ -47,24 +47,33 @@ class SpeakerDiarizer:
             os.environ["HF_TOKEN"] = self.huggingface_token
             os.environ["HUGGING_FACE_HUB_TOKEN"] = self.huggingface_token
 
-        # pyannote.audio 3.4.0 internally passes use_auth_token= to
-        # hf_hub_download(), but huggingface_hub >= 1.0 removed that kwarg.
-        # Monkey-patch to strip it so both old and new versions work.
+        # pyannote.audio 3.4.0 passes use_auth_token= throughout its codebase,
+        # but huggingface_hub >= 1.0 removed that kwarg from hf_hub_download.
+        # Patch the raw underlying function so ALL call sites are covered,
+        # regardless of which pyannote module imports it.
         try:
-            import huggingface_hub
-            _orig_download = huggingface_hub.hf_hub_download
             import functools
+            import huggingface_hub.file_download as _fd
 
-            @functools.wraps(_orig_download)
-            def _patched_download(*args, **kwargs):
-                kwargs.pop("use_auth_token", None)
-                return _orig_download(*args, **kwargs)
+            if not getattr(_fd.hf_hub_download, "_patched_use_auth_token", False):
+                _orig = _fd.hf_hub_download
 
-            huggingface_hub.hf_hub_download = _patched_download
+                @functools.wraps(_orig)
+                def _patched(*args, **kwargs):
+                    kwargs.pop("use_auth_token", None)
+                    return _orig(*args, **kwargs)
 
-            # Also patch file_download module where pyannote imports from
-            if hasattr(huggingface_hub, "file_download"):
-                huggingface_hub.file_download.hf_hub_download = _patched_download
+                _patched._patched_use_auth_token = True
+                _fd.hf_hub_download = _patched
+
+                # Propagate to all modules that imported hf_hub_download
+                import sys
+                for mod in list(sys.modules.values()):
+                    try:
+                        if getattr(mod, "hf_hub_download", None) is _orig:
+                            mod.hf_hub_download = _patched
+                    except Exception:
+                        pass
         except Exception:
             logger.debug("Could not patch hf_hub_download", exc_info=True)
 
