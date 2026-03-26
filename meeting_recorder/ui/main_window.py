@@ -2665,10 +2665,21 @@ class MainWindow:
         cal_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         def _pick_from_calendar(e=None):
-            """Show a dropdown of upcoming calendar events to pick a title."""
+            """Show a dropdown of calendar events around the recording's time."""
             try:
                 from meeting_recorder.integrations.outlook import get_upcoming_meetings
-                events = get_upcoming_meetings(window_minutes=120)
+                from datetime import datetime as _dt
+                # Use the recording's start time, not current time
+                rec_time = None
+                start_str = meta.get("start_time", "")
+                if start_str:
+                    try:
+                        rec_time = _dt.fromisoformat(start_str)
+                    except (ValueError, TypeError):
+                        pass
+                events = get_upcoming_meetings(
+                    window_minutes=120, reference_time=rec_time,
+                )
             except Exception:
                 events = []
 

@@ -129,12 +129,18 @@ def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
         return None
 
 
-def get_upcoming_meetings(window_minutes: int = 60) -> list[CalendarEvent]:
-    """Get calendar events happening now or soon.
+def get_upcoming_meetings(
+    window_minutes: int = 60,
+    reference_time: datetime | None = None,
+) -> list[CalendarEvent]:
+    """Get calendar events around a reference time.
 
-    Returns events from ``window_minutes`` ago through ``window_minutes``
-    into the future, sorted by start time.  Useful for a UI picker that
-    lets the user choose a meeting title.
+    Args:
+        window_minutes: Search window size (±minutes from reference).
+        reference_time: Center of the search window.  Defaults to now.
+
+    Returns events from ``reference_time - window_minutes`` through
+    ``reference_time + window_minutes``, sorted by start time.
     """
     try:
         import win32com.client
@@ -149,9 +155,9 @@ def get_upcoming_meetings(window_minutes: int = 60) -> list[CalendarEvent]:
         logger.debug("Could not connect to Outlook for upcoming meetings")
         return []
 
-    now = datetime.now()
-    search_start = now - timedelta(minutes=window_minutes)
-    search_end = now + timedelta(minutes=window_minutes)
+    center = reference_time or datetime.now()
+    search_start = center - timedelta(minutes=window_minutes)
+    search_end = center + timedelta(minutes=window_minutes)
 
     start_str = search_start.strftime("%m/%d/%Y %H:%M %p")
     end_str = search_end.strftime("%m/%d/%Y %H:%M %p")
