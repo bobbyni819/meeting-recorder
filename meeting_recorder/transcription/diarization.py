@@ -82,12 +82,22 @@ class SpeakerDiarizer:
             "pyannote/speaker-diarization-3.1",
         )
 
-        # Move to GPU if available
+        # Move to GPU if available and cuDNN works
         try:
             import torch
             if torch.cuda.is_available():
-                self._pipeline.to(torch.device("cuda"))
-                logger.info("Diarization pipeline moved to CUDA.")
+                # Test cuDNN before moving pipeline — some installs have
+                # mismatched cuDNN that causes a hard C-level abort.
+                try:
+                    _test = torch.randn(2, 2, device="cuda")
+                    torch.nn.functional.conv1d(
+                        _test.unsqueeze(0), torch.randn(1, 2, 1, device="cuda")
+                    )
+                    del _test
+                    self._pipeline.to(torch.device("cuda"))
+                    logger.info("Diarization pipeline moved to CUDA.")
+                except Exception:
+                    logger.info("cuDNN test failed, diarization running on CPU.")
         except Exception:
             logger.info("Diarization running on CPU.")
 
