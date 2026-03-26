@@ -2303,6 +2303,8 @@ class MainWindow:
         self._current_detail_path = None
         if self._idle_frame:
             self._idle_frame.pack(fill=tk.BOTH, expand=True)
+            # Refresh history to reflect any metadata changes (renames, re-processing)
+            self._refresh_history()
 
     def _build_detail_content(self, parent: tk.Frame, rec_path: Path) -> None:
         """Build the content of the recording detail view."""
