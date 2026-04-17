@@ -31,14 +31,25 @@ logger = logging.getLogger(__name__)
 TOKEN_FILE = Path.home() / ".meeting_recorder" / "google_token.json"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# File extensions to upload (skip large raw audio)
+# File extensions to upload.  Video files are intentionally excluded —
+# they're large (500MB-2GB) and dominate upload time.  Users who want
+# the video can access it locally; Drive stores transcripts/summary/audio.
 UPLOAD_EXTENSIONS = {
-    ".json", ".txt", ".srt",  # Transcripts
-    ".mp4",                   # Screen recording
+    ".json", ".txt", ".srt", ".md",  # Transcripts, summaries, notes
+    ".wav",                          # Audio (for re-processing)
 }
 
-# Files to always upload by name (mixed.wav is transient and deleted after transcription)
-UPLOAD_FILENAMES = {"metadata.json", "transcript.json", "transcript.txt", "transcript.srt", "transcript_raw.txt", "screen.mp4", "summary.json", "summary.md"}
+# Files to always upload by name
+UPLOAD_FILENAMES = {
+    "metadata.json",
+    "transcript.json", "transcript.txt", "transcript.srt", "transcript_raw.txt",
+    "summary.json", "summary.md",
+    "notes.md", "decisions.json", "action_items.json",
+    "app_audio.wav", "mic_audio.wav", "mixed.wav",
+}
+
+# Files to NEVER upload (keeps screen recording local-only — too large)
+UPLOAD_BLOCKLIST = {"screen.mp4", "thumbnail.jpg"}
 
 
 class GoogleDriveUploader:
@@ -153,6 +164,9 @@ class GoogleDriveUploader:
             for file_path in recording_dir.iterdir():
                 if not file_path.is_file():
                     continue
+                # Skip blocklist (videos, thumbnails — too large to be worth uploading)
+                if file_path.name in UPLOAD_BLOCKLIST:
+                    continue
                 if file_path.name not in UPLOAD_FILENAMES and file_path.suffix not in UPLOAD_EXTENSIONS:
                     continue
 
@@ -177,7 +191,12 @@ class GoogleDriveUploader:
         but was created by another app/machine/scope.
         """
         try:
-            # Search in Drive root first
+            # Search in Drive root first, then broader.  When multiple
+            # matches exist (e.g. left over from before we fixed the OAuth
+            # scope), pick the OLDEST one — that's the canonical folder
+            # that any other machine with the correct scope would have
+            # also found first.  Deterministic ordering ensures every
+            # machine converges on the same folder.
             for parent_filter in ("'root' in parents and ", ""):
                 query = (
                     f"name = 'MeetingRecordings' and "
@@ -186,11 +205,20 @@ class GoogleDriveUploader:
                     f"trashed = false"
                 )
                 results = self._service.files().list(
-                    q=query, spaces="drive", fields="files(id, name)"
+                    q=query,
+                    spaces="drive",
+                    fields="files(id, name, createdTime)",
+                    orderBy="createdTime",
                 ).execute()
 
                 files = results.get("files", [])
                 if files:
+                    if len(files) > 1:
+                        logger.warning(
+                            "Multiple MeetingRecordings folders found (%d); "
+                            "using oldest: %s. Consider consolidating.",
+                            len(files), files[0]["id"],
+                        )
                     logger.info("Found existing MeetingRecordings folder: %s", files[0]["id"])
                     return files[0]["id"]
 

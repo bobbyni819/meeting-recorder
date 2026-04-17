@@ -160,14 +160,20 @@ class CaptureManager:
         # VAD (accept pre-loaded instance to avoid loading in background threads)
         self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
 
-        # Mute sync — detects when user mutes in meeting app
+        # Mute sync — detects when user mutes in meeting app.
+        # Default to MUTED when initial state can't be detected.  This is
+        # safer because most users join meetings muted, and if detection
+        # fails (or the user clicks the mute button with the mouse — which
+        # doesn't trigger the hotkey that mute-sync hooks into) the mic
+        # would otherwise stay unmuted and capture everything the user
+        # says, including things not said to the meeting.
         self._mute_sync = None
         self._mute_toggle_hotkey = mute_toggle_hotkey
         if app_key and process_name:
             target_pids = get_all_pids_for_process(process_name)
             if target_pids:
                 detected = detect_initial_mute_state(pid)
-                start_muted = detected if detected is not None else False
+                start_muted = detected if detected is not None else True
                 self._mute_sync = MuteSync(
                     app_key=app_key,
                     target_pids=target_pids,

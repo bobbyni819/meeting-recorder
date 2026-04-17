@@ -37,7 +37,28 @@ def save_transcript_txt(segments: list[TranscriptSegment], output_path: Path) ->
     Output format:
     [00:00:00 - 00:00:02] User: Hello everyone.
     [00:00:03 - 00:00:05] Participant 1: Hi there!
+
+    When the Gemini backend was used, ``transcript_raw.txt`` contains the
+    verbatim API output which often includes context (intro, narrative,
+    off-format lines) that the strict segment parser drops.  In that case
+    we use the raw text as ``transcript.txt`` so no information is lost.
+    The structured output still lives in ``transcript.json`` / ``.srt``.
     """
+    raw_path = output_path.parent / "transcript_raw.txt"
+    if raw_path.exists():
+        try:
+            raw_text = raw_path.read_text(encoding="utf-8").strip()
+            if raw_text:
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(raw_text)
+                    f.write("\n")
+                logger.info(
+                    "Transcript TXT saved (verbatim from raw): %s", output_path
+                )
+                return
+        except Exception:
+            logger.debug("Could not read transcript_raw.txt; falling back to segments", exc_info=True)
+
     lines = []
     for seg in segments:
         start = _format_timestamp_txt(seg.start)

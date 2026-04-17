@@ -83,7 +83,7 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - Silero VAD needs **exactly 512 samples at 16kHz** per chunk
 - `proctap.ProcessAudioCapture` is the correct class (not `ProcTap`)
 - Mute sync hooks **Alt+A** (Zoom) and **Ctrl+Shift+M** (Teams) keyboard shortcuts
-- Mute sync starts **UNMUTED** by default — starting muted silences all mic audio
+- Mute sync starts **MUTED** by default when initial state can't be detected — safer because mouse-clicks on the mute button don't trigger the hotkey that mute sync hooks into
 
 ## Screen capture
 - Uses Win32 `PrintWindow` API first (captures only the window, no overlays)
