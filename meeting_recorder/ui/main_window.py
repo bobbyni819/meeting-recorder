@@ -153,6 +153,10 @@ class MainWindow:
 
         # Health warning banner
         self._warning_frame: Optional[tk.Frame] = None
+        self._progress_frame: Optional[tk.Frame] = None  # post-processing banner
+        self._progress_step_label: Optional[tk.Label] = None
+        self._progress_time_label: Optional[tk.Label] = None
+        self._progress_checklist_label: Optional[tk.Label] = None
         self._warning_label: Optional[tk.Label] = None
         self._warning_dismiss_id: Optional[str] = None
 
@@ -362,6 +366,84 @@ class MainWindow:
         except tk.TclError:
             pass
 
+    def update_processing_progress(
+        self,
+        step: str,
+        elapsed_seconds: float,
+        steps_done: list[str] | None = None,
+        step_names: list[str] | None = None,
+    ) -> None:
+        """Show a prominent post-processing progress banner (thread-safe).
+
+        Args:
+            step: Current step name (e.g. "Transcribing audio…"). Pass "" to hide.
+            elapsed_seconds: Total elapsed time since post-processing started.
+            steps_done: List of completed step names (for checkmarks).
+            step_names: Full ordered list of step names (for the checklist).
+        """
+        if self._window is None:
+            return
+        try:
+            self._window.after(
+                0, self._apply_processing_progress,
+                step, elapsed_seconds, steps_done or [], step_names or [],
+            )
+        except tk.TclError:
+            pass
+
+    def _apply_processing_progress(
+        self,
+        step: str,
+        elapsed_seconds: float,
+        steps_done: list[str],
+        step_names: list[str],
+    ) -> None:
+        """Render the progress banner on the Tk thread."""
+        # All widget access here is wrapped so a destroyed window (e.g.
+        # user closed the main window mid-post-processing) can't raise
+        # TclError and leave Tk state inconsistent.
+        try:
+            if not self._progress_frame or not self._progress_frame.winfo_exists():
+                return
+
+            if not step:
+                if self._progress_frame.winfo_ismapped():
+                    self._progress_frame.pack_forget()
+                return
+
+            if not self._progress_frame.winfo_ismapped():
+                parent = self._progress_frame.master
+                try:
+                    first = parent.winfo_children()[0]
+                    self._progress_frame.pack(fill=tk.X, padx=16, pady=(8, 4),
+                                              after=first)
+                except Exception:
+                    self._progress_frame.pack(fill=tk.X, padx=16, pady=(8, 4))
+
+            mins, secs = divmod(int(elapsed_seconds), 60)
+            time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+
+            if self._progress_step_label and self._progress_step_label.winfo_exists():
+                self._progress_step_label.configure(text=f"\u23f3  {step}")
+            if self._progress_time_label and self._progress_time_label.winfo_exists():
+                self._progress_time_label.configure(text=f"elapsed {time_str}")
+
+            if (self._progress_checklist_label
+                    and self._progress_checklist_label.winfo_exists()
+                    and step_names):
+                parts = []
+                for name in step_names:
+                    if name in steps_done:
+                        parts.append(f"\u2713 {name}")
+                    elif step.lower().startswith(name.lower()) or name.lower() in step.lower():
+                        parts.append(f"\u2022 {name}")
+                    else:
+                        parts.append(f"\u00b7 {name}")
+                self._progress_checklist_label.configure(text="   ".join(parts))
+        except tk.TclError:
+            # Window/widget destroyed — silently drop the update.
+            pass
+
     def update_auto_start(self, enabled: bool) -> None:
         """Update the auto-record indicator (thread-safe)."""
         self._auto_start = enabled
@@ -507,6 +589,27 @@ class MainWindow:
 
     def _build_idle_view(self, parent: tk.Frame) -> None:
         """Build the idle mode view: big record button + history."""
+
+        # Post-processing progress banner (hidden by default; shown via
+        # update_processing_progress() while transcription runs).
+        self._progress_frame = tk.Frame(parent, bg="#0d3a5c", bd=0)
+        step_row = tk.Frame(self._progress_frame, bg="#0d3a5c")
+        step_row.pack(fill=tk.X, padx=12, pady=(6, 2))
+        self._progress_step_label = tk.Label(
+            step_row, text="", font=("Segoe UI", 10, "bold"),
+            fg=TEXT_BRIGHT, bg="#0d3a5c", anchor=tk.W,
+        )
+        self._progress_step_label.pack(side=tk.LEFT)
+        self._progress_time_label = tk.Label(
+            step_row, text="", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg="#0d3a5c",
+        )
+        self._progress_time_label.pack(side=tk.RIGHT)
+        self._progress_checklist_label = tk.Label(
+            self._progress_frame, text="", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg="#0d3a5c", anchor=tk.W, justify=tk.LEFT,
+        )
+        self._progress_checklist_label.pack(fill=tk.X, padx=12, pady=(0, 6))
 
         # Auto-record indicator (clickable to toggle)
         auto_text = "\u2713 Auto-record ON" if self._auto_start else "\u2717 Auto-record OFF"

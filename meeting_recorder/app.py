@@ -69,6 +69,11 @@ class MeetingRecorderApp:
         # Prevents double-invocation of stop_recording() from concurrent callers
         # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
         self._stop_lock = threading.Lock()
+        # Flag set when stop_recording has entered its cleanup phase but
+        # capture_manager.stop() hasn't finished yet.  Any concurrent
+        # start_recording call must wait until this clears to avoid
+        # spawning a second CaptureManager that writes to the same files.
+        self._is_stopping = False
 
         # Serialises all metadata.save() calls across threads (mark processing,
         # final save, summary callback, Drive upload callback) to avoid file corruption.
@@ -202,6 +207,10 @@ class MeetingRecorderApp:
         cm = self._capture_manager
         if cm and cm.is_recording:
             logger.warning("Already recording.")
+            return
+        if self._is_stopping:
+            logger.warning("Previous recording is still stopping; try again in a moment.")
+            notifications.notify_info("Still finishing previous recording — wait a second.")
             return
 
         # Always open the window picker so the user chooses what to record.
@@ -365,6 +374,10 @@ class MeetingRecorderApp:
         if cm and cm.is_recording:
             logger.warning("Already recording.")
             return
+        if self._is_stopping:
+            logger.warning("Previous recording is still stopping; try again in a moment.")
+            notifications.notify_info("Still finishing previous recording — wait a second.")
+            return
 
         # Try the main window's picker first (runs on its Tk thread)
         process = None
@@ -408,6 +421,11 @@ class MeetingRecorderApp:
 
     def _start_recording_for_process(self, process: MeetingProcess) -> None:
         """Inner method that performs all recording setup. Raises on failure."""
+        # Reject if another recording is still in the stop/cleanup phase
+        # — prevents two CaptureManagers from running simultaneously.
+        if self._is_stopping:
+            logger.warning("Refusing to start: previous recording still stopping.")
+            return
         # Check disk space before starting
         import shutil
         output_dir = self.config.output_dir
@@ -557,11 +575,19 @@ class MeetingRecorderApp:
             self._current_metadata = None
             self._current_process = None
             self._recording_config = None
+            # Set stopping flag so start_recording won't spawn a second
+            # CaptureManager while capture_manager.stop() is still draining
+            # writers / closing WAV files.
+            self._is_stopping = True
 
-        # Save a thumbnail from the last captured frame before stopping
-        self._save_thumbnail(capture_manager, recording_dir)
-
-        capture_manager.stop()
+        try:
+            # Save a thumbnail from the last captured frame before stopping
+            self._save_thumbnail(capture_manager, recording_dir)
+            capture_manager.stop()
+        finally:
+            # Cleared only after stop() has fully finished, so the next
+            # start_recording sees a clean slate.
+            self._is_stopping = False
 
         # Hide/close dashboard and persist position
         self._close_dashboard()
@@ -574,9 +600,16 @@ class MeetingRecorderApp:
         self._main_window.add_notification("info", f"Recording stopped ({duration_str})", source="recorder")
         logger.info("Recording stopped. Duration: %s", duration_str)
 
+        def _post_wrapper() -> None:
+            try:
+                self._post_process(recording_dir, metadata, recording_config, elapsed)
+            finally:
+                # Clear the thread reference once finished so subsequent
+                # reprocess calls see a clean slate (avoids stale references).
+                self._post_thread = None
+
         self._post_thread = threading.Thread(
-            target=self._post_process,
-            args=(recording_dir, metadata, recording_config, elapsed),
+            target=_post_wrapper,
             name="post-processing",
             daemon=False,
         )
@@ -631,6 +664,15 @@ class MeetingRecorderApp:
         import time as _time
         _pp_start = _time.monotonic()
 
+        # Ordered list of pipeline steps the user will see.  Updated by
+        # each _update_progress() call so the progress banner can show a
+        # live checklist (✓ done / • current / · pending).
+        _pipeline_steps = [
+            "Validating audio", "Mixing audio", "Transcribing",
+            "Summary", "Indexing", "Uploading", "Finalizing",
+        ]
+        _steps_done: list[str] = []
+
         def _update_progress(stage: str) -> None:
             elapsed = _time.monotonic() - _pp_start
             mins, secs = divmod(int(elapsed), 60)
@@ -638,6 +680,34 @@ class MeetingRecorderApp:
             msg = f"Processing ({time_str}): {stage}"
             self._tray.set_state("processing", msg)
             self._main_window.update_status_bar(msg)
+            # Match the stage string to a known pipeline step and mark
+            # earlier steps as done.  Keeps the banner checklist fresh.
+            stage_lower = stage.lower()
+            current = None
+            for step_name in _pipeline_steps:
+                if step_name.lower() in stage_lower or stage_lower.startswith(
+                    step_name.lower()
+                ):
+                    current = step_name
+                    break
+            if current:
+                # Mark everything before `current` as done
+                idx = _pipeline_steps.index(current)
+                for prev in _pipeline_steps[:idx]:
+                    if prev not in _steps_done:
+                        _steps_done.append(prev)
+            self._main_window.update_processing_progress(
+                step=stage,
+                elapsed_seconds=elapsed,
+                steps_done=list(_steps_done),
+                step_names=_pipeline_steps,
+            )
+
+        def _hide_progress() -> None:
+            """Clear the progress banner — call when post-processing finishes."""
+            self._main_window.update_processing_progress(
+                step="", elapsed_seconds=0, steps_done=[], step_names=[],
+            )
 
         cfg = config or self.config
         try:
@@ -780,6 +850,7 @@ class MeetingRecorderApp:
 
             # Run retention cleanup after each recording
             self._run_retention_cleanup(exclude=recording_dir)
+            _hide_progress()
 
         except Exception as e:
             logger.exception("Post-processing failed")
@@ -789,6 +860,7 @@ class MeetingRecorderApp:
             self._main_window.add_notification("error", f"Post-processing failed: {e}", source="pipeline")
             if metadata:
                 metadata.set_error(str(e), recording_dir)
+            _hide_progress()
 
     def _upload_to_google_drive(
         self,
@@ -1347,9 +1419,17 @@ class MeetingRecorderApp:
         notifications.notify_info("Re-processing recording...")
         self._main_window.update_status_bar("Re-processing recording...")
 
+        _rec_dir = recording_dir
+        _meta = metadata
+
+        def _reprocess_wrapper() -> None:
+            try:
+                self._post_process(_rec_dir, _meta, self.config, _meta.duration_seconds)
+            finally:
+                self._post_thread = None
+
         self._post_thread = threading.Thread(
-            target=self._post_process,
-            args=(recording_dir, metadata, self.config, metadata.duration_seconds),
+            target=_reprocess_wrapper,
             name="reprocess",
             daemon=False,
         )
@@ -1481,9 +1561,18 @@ class MeetingRecorderApp:
         self._main_window.update_status_bar(f"Importing: {file_path.name}...")
         self._main_window.add_notification("info", f"Imported audio: {file_path.name}", source="import")
 
+        _imp_rec = recording_dir
+        _imp_meta = metadata
+        _imp_dur = duration
+
+        def _import_wrapper() -> None:
+            try:
+                self._post_process(_imp_rec, _imp_meta, self.config, _imp_dur)
+            finally:
+                self._post_thread = None
+
         self._post_thread = threading.Thread(
-            target=self._post_process,
-            args=(recording_dir, metadata, self.config, duration),
+            target=_import_wrapper,
             name="import-audio",
             daemon=False,
         )

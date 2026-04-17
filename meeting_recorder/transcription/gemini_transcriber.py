@@ -229,13 +229,22 @@ class GeminiTranscriber:
     # ------------------------------------------------------------------
 
     def _parse(self, raw: str) -> list[TranscriptSegment]:
-        """Parse Gemini's ``[MM:SS] Speaker: text`` output into TranscriptSegments."""
+        """Parse Gemini's ``[MM:SS] Speaker: text`` output into TranscriptSegments.
+
+        Lines that match the strict ``[MM:SS] Speaker: text`` format become
+        first-class segments with timestamps and speaker labels.  Lines that
+        do NOT match (narrative, headers, descriptions, off-format text) are
+        still preserved — they're appended to the previous segment's text so
+        nothing is dropped.  The verbatim raw output is also always saved
+        to ``transcript_raw.txt`` alongside this structured output.
+        """
         # Matches both [MM:SS] and [H:MM:SS]
         pattern = re.compile(
             r"^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\s+(.+?):\s+(.+)$"
         )
 
         segments: list[TranscriptSegment] = []
+        unmatched_prefix: list[str] = []  # lines before first segment
 
         for line in raw.splitlines():
             line = line.strip()
@@ -243,6 +252,13 @@ class GeminiTranscriber:
                 continue
             m = pattern.match(line)
             if not m:
+                # Preserve the line instead of dropping it:
+                # - if we already have a segment, append as context
+                # - else save for the first segment to pick up
+                if segments:
+                    segments[-1].text = segments[-1].text + "\n" + line
+                else:
+                    unmatched_prefix.append(line)
                 continue
 
             g1, g2, g3 = m.group(1), m.group(2), m.group(3)
@@ -257,11 +273,27 @@ class GeminiTranscriber:
             if segments:
                 segments[-1].end = float(start)
 
+            seg_text = text.strip()
+            # Prepend any pre-segment narrative to the first segment
+            if unmatched_prefix and not segments:
+                seg_text = "\n".join(unmatched_prefix) + "\n" + seg_text
+                unmatched_prefix = []
+
             segments.append(TranscriptSegment(
                 start=float(start),
                 end=float(start + 60),  # placeholder — overwritten by next segment
-                text=text.strip(),
+                text=seg_text,
                 speaker=speaker.strip(),
+            ))
+
+        # If the whole transcript had no matching lines (edge case), emit
+        # one catch-all segment so nothing is dropped.
+        if not segments and unmatched_prefix:
+            segments.append(TranscriptSegment(
+                start=0.0,
+                end=0.0,
+                text="\n".join(unmatched_prefix),
+                speaker="",
             ))
 
         logger.info("Parsed %d segments from Gemini transcript", len(segments))

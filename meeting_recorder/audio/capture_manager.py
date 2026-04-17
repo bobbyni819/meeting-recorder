@@ -56,36 +56,54 @@ def _is_buffer_silent(data: bytes) -> bool:
     return bool(rms < _SILENCE_RMS_THRESHOLD)
 
 
-def _patch_wav_header(wav_path: Path) -> None:
+def _patch_wav_header(wav_path: Path, max_retries: int = 3) -> bool:
     """Patch a WAV file header so the data size matches the actual file size.
 
     Python's ``wave`` module writes the RIFF chunk size and data chunk size
     only when ``close()`` is called.  If the process crashes before that,
     the header says "0 bytes of data" even though audio samples are present.
     This function fixes the header in-place based on the real file size.
+
+    On Windows the file may be briefly locked by antivirus / Windows Search
+    / Explorer preview; we retry a few times with short backoff so a
+    transient lock doesn't leave the header stale.
+
+    Returns True if the header was patched successfully.
     """
     import struct
+    import time as _time
 
     size = wav_path.stat().st_size
     if size < 44:
-        return  # too small to be a valid WAV
+        return False  # too small to hold a complete header yet
 
-    with open(wav_path, "r+b") as f:
-        # Read the existing header to confirm RIFF/WAVE
-        header = f.read(44)
-        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-            return
+    for attempt in range(1, max_retries + 1):
+        try:
+            with open(wav_path, "r+b") as f:
+                header = f.read(44)
+                if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+                    return False
 
-        data_size = size - 44  # audio payload
-        riff_size = size - 8  # RIFF chunk size = file size - 8
+                data_size = size - 44  # audio payload
+                riff_size = size - 8  # RIFF chunk size = file size - 8
 
-        # Patch RIFF chunk size (offset 4, little-endian uint32)
-        f.seek(4)
-        f.write(struct.pack("<I", riff_size))
+                # Patch RIFF chunk size (offset 4, little-endian uint32)
+                f.seek(4)
+                f.write(struct.pack("<I", riff_size))
 
-        # Patch data chunk size (offset 40, little-endian uint32)
-        f.seek(40)
-        f.write(struct.pack("<I", data_size))
+                # Patch data chunk size (offset 40, little-endian uint32)
+                f.seek(40)
+                f.write(struct.pack("<I", data_size))
+            return True
+        except (PermissionError, OSError) as e:
+            if attempt == max_retries:
+                logger.warning(
+                    "WAV header patch failed after %d attempts for %s: %s",
+                    max_retries, wav_path.name, e,
+                )
+                return False
+            _time.sleep(0.2 * attempt)  # 0.2s, 0.4s, 0.6s
+    return False
 
 
 def _check_system_volume() -> Optional[float]:

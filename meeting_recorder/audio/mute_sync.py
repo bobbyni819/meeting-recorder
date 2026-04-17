@@ -16,6 +16,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import threading
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,11 @@ class MuteSync:
         self._lock = threading.Lock()
         self._started = False
         self._manual_hotkey: str = ""
+        # Registry poller: watches the Windows mic-usage registry so
+        # mouse clicks on Zoom's mute button (which don't trigger the
+        # hotkey hook) are still picked up within ~1 second.
+        self._poll_thread: Optional[threading.Thread] = None
+        self._poll_stop = threading.Event()
 
     @property
     def is_muted(self) -> bool:
@@ -120,6 +126,17 @@ class MuteSync:
         except Exception:
             logger.exception("Failed to register mute sync hotkeys")
 
+        # Start registry-polling fallback: detects mute toggles from
+        # mouse clicks on the meeting app's mute button (which don't
+        # trigger our hotkey hook).
+        self._poll_stop.clear()
+        self._poll_thread = threading.Thread(
+            target=self._poll_registry_loop,
+            name="mute-registry-poller",
+            daemon=True,
+        )
+        self._poll_thread.start()
+
     def stop(self) -> None:
         """Unregister keyboard hooks."""
         if not self._started:
@@ -134,7 +151,71 @@ class MuteSync:
                 keyboard.remove_hotkey(self._manual_hotkey)
         except Exception:
             logger.debug("Failed to remove mute sync hotkeys", exc_info=True)
+        self._poll_stop.set()
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=2.0)
+            self._poll_thread = None
         self._started = False
+
+    def _poll_registry_loop(self) -> None:
+        """Poll Windows registry for meeting-app mic usage changes.
+
+        The ``LastUsedTimeStop`` value under
+        ``HKCU\\...\\CapabilityAccessManager\\ConsentStore\\microphone``
+        is 0 while an app is actively using the mic and nonzero otherwise.
+        This works regardless of how the user toggled mute (hotkey or
+        mouse click on the app's button).
+        """
+        interval = 1.0  # seconds between polls
+        # Find any live PID from the target set to query
+        consecutive_errors = 0
+
+        while not self._poll_stop.is_set():
+            try:
+                detected = self._detect_via_any_pid()
+                if detected is not None:
+                    with self._lock:
+                        changed = detected != self._muted
+                        if changed:
+                            self._muted = detected
+                            state = "MUTED" if detected else "UNMUTED"
+                    if changed:
+                        logger.info("Mute sync: registry detected %s", state)
+                        self._fire_mute_changed(detected)
+                    consecutive_errors = 0
+            except Exception:
+                consecutive_errors += 1
+                if consecutive_errors == 1:
+                    logger.debug("Registry mute polling failed", exc_info=True)
+                if consecutive_errors > 10:
+                    # Registry not accessible; back off to avoid log spam
+                    interval = 10.0
+
+            self._poll_stop.wait(interval)
+
+    def _detect_via_any_pid(self) -> Optional[bool]:
+        """Try detect_initial_mute_state against each target PID.
+
+        Meeting apps often spawn child processes; the mic-owning PID
+        may not be the top-level PID we were given. Try them all and
+        return the first conclusive answer.
+        """
+        import psutil
+
+        # Include target_pids plus their children (WebView2, renderer, etc.)
+        pids_to_try: set[int] = set(self._target_pids)
+        for pid in list(self._target_pids):
+            try:
+                for child in psutil.Process(pid).children(recursive=True):
+                    pids_to_try.add(child.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        for pid in pids_to_try:
+            result = detect_initial_mute_state(pid)
+            if result is not None:
+                return result
+        return None
 
     def _on_mute_shortcut_pressed(self) -> None:
         """Called when the mute shortcut is pressed. Only toggles if

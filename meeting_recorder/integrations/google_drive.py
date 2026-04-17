@@ -161,6 +161,7 @@ class GoogleDriveUploader:
 
             # Upload files
             uploaded = 0
+            failed: list[str] = []
             for file_path in recording_dir.iterdir():
                 if not file_path.is_file():
                     continue
@@ -172,7 +173,14 @@ class GoogleDriveUploader:
 
                 if self._upload_file(file_path, recording_folder_id):
                     uploaded += 1
+                else:
+                    failed.append(file_path.name)
 
+            if failed:
+                logger.warning(
+                    "Drive upload partial: %d succeeded, %d failed (%s)",
+                    uploaded, len(failed), ", ".join(failed),
+                )
             logger.info(
                 "Uploaded %d files to Google Drive: %s", uploaded, folder_name
             )
@@ -248,35 +256,67 @@ class GoogleDriveUploader:
             logger.exception("Failed to create Drive folder: %s", name)
             return None
 
-    def _upload_file(self, file_path: Path, parent_id: str) -> bool:
-        """Upload a single file to a Google Drive folder."""
-        try:
-            from googleapiclient.http import MediaFileUpload
+    def _upload_file(self, file_path: Path, parent_id: str, max_retries: int = 3) -> bool:
+        """Upload a single file to a Google Drive folder with retries.
 
-            mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        Retries on transient errors (network blips, rate limits, 5xx).
+        Skips retry on file-access errors (PermissionError, FileNotFoundError).
+        """
+        import time
 
-            metadata = {
-                "name": file_path.name,
-                "parents": [parent_id],
-            }
-            media = MediaFileUpload(
-                str(file_path),
-                mimetype=mime_type,
-                resumable=True,
-            )
+        from googleapiclient.http import MediaFileUpload
 
-            self._service.files().create(
-                body=metadata,
-                media_body=media,
-                fields="id",
-            ).execute()
+        mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
 
-            logger.debug("Uploaded: %s", file_path.name)
-            return True
+        for attempt in range(1, max_retries + 1):
+            try:
+                metadata = {
+                    "name": file_path.name,
+                    "parents": [parent_id],
+                }
+                media = MediaFileUpload(
+                    str(file_path),
+                    mimetype=mime_type,
+                    resumable=True,
+                )
+                self._service.files().create(
+                    body=metadata,
+                    media_body=media,
+                    fields="id",
+                ).execute()
+                logger.debug("Uploaded: %s (attempt %d)", file_path.name, attempt)
+                return True
 
-        except Exception:
-            logger.exception("Failed to upload file: %s", file_path.name)
-            return False
+            except (PermissionError, FileNotFoundError) as e:
+                # File-access errors won't improve with retry — bail
+                logger.warning(
+                    "Cannot upload %s (file access error, not retrying): %s",
+                    file_path.name, e,
+                )
+                return False
+
+            except Exception as e:
+                err = str(e).lower()
+                retryable = any(k in err for k in (
+                    "429", "500", "502", "503", "504",
+                    "rate limit", "resource exhausted", "timeout",
+                    "connection", "deadline exceeded", "unavailable",
+                    "ssl", "eof", "reset",
+                ))
+                if not retryable or attempt == max_retries:
+                    logger.error(
+                        "Failed to upload %s after %d attempt(s): %s",
+                        file_path.name, attempt, e,
+                    )
+                    return False
+                wait = 2 ** attempt  # 2s, 4s, 8s
+                logger.warning(
+                    "Upload of %s failed (attempt %d/%d), retrying in %ds: %s",
+                    file_path.name, attempt, max_retries, wait, e,
+                )
+                time.sleep(wait)
+
+        return False
 
 
 def is_google_drive_available(credentials_path: Path) -> bool:

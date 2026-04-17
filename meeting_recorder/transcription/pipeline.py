@@ -229,10 +229,19 @@ class TranscriptionPipeline:
             mic_segments = mic_future.result()
 
             if diarize_future and app_segments:
-                speaker_segments = diarize_future.result()
-                app_segments = merge_transcript_with_speakers(
-                    app_segments, speaker_segments, user_name
-                )
+                # Don't let diarization failures kill the entire transcription:
+                # fall back to speaker-less segments so the user still gets a
+                # readable transcript. Common diarization failures include
+                # cuDNN mismatches, HF API changes, and missing gated models.
+                try:
+                    speaker_segments = diarize_future.result()
+                    app_segments = merge_transcript_with_speakers(
+                        app_segments, speaker_segments, user_name
+                    )
+                except Exception:
+                    logger.exception(
+                        "Diarization failed — returning transcript without speaker labels"
+                    )
 
         # Merge both track transcripts chronologically
         merged = merge_user_and_app_transcripts(mic_segments, app_segments, user_name)
@@ -253,10 +262,15 @@ class TranscriptionPipeline:
 
         diarizer = self._get_diarizer()
         if diarizer and segments:
-            speaker_segments = diarizer.diarize(mixed_audio)
-            segments = merge_transcript_with_speakers(
-                segments, speaker_segments, user_name
-            )
+            try:
+                speaker_segments = diarizer.diarize(mixed_audio)
+                segments = merge_transcript_with_speakers(
+                    segments, speaker_segments, user_name
+                )
+            except Exception:
+                logger.exception(
+                    "Diarization failed — returning transcript without speaker labels"
+                )
 
         logger.info("Pipeline complete: %d segments", len(segments))
         return segments
