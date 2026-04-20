@@ -80,5 +80,6 @@ recordings/
 *.log
 config.local.toml
 secrets.toml
+meeting_recorder_config.json
 google_credentials.json
 google_token.json
