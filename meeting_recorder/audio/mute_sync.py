@@ -54,6 +54,11 @@ class MuteSync:
         self._lock = threading.Lock()
         self._started = False
         self._manual_hotkey: str = ""
+        # Sticky once the user takes manual control (dashboard button or
+        # manual hotkey). The registry poller stops overriding so the
+        # user can mute the recording independently of the meeting app —
+        # e.g. to silence a noisy environment without muting Zoom.
+        self._manual_override = False
         # Registry poller: watches the Windows mic-usage registry so
         # mouse clicks on Zoom's mute button (which don't trigger the
         # hotkey hook) are still picked up within ~1 second.
@@ -69,9 +74,10 @@ class MuteSync:
         """Manually toggle mute state (for resync or manual control)."""
         with self._lock:
             self._muted = not self._muted
+            self._manual_override = True
             muted = self._muted
             state = "MUTED" if muted else "UNMUTED"
-        logger.info("Mic mute toggled: %s", state)
+        logger.info("Mic mute toggled: %s (manual override on)", state)
         self._fire_mute_changed(muted)
 
     def _fire_mute_changed(self, is_muted: bool) -> None:
@@ -172,10 +178,15 @@ class MuteSync:
 
         while not self._poll_stop.is_set():
             try:
+                with self._lock:
+                    overridden = self._manual_override
+                if overridden:
+                    self._poll_stop.wait(interval)
+                    continue
                 detected = self._detect_via_any_pid()
                 if detected is not None:
                     with self._lock:
-                        changed = detected != self._muted
+                        changed = detected != self._muted and not self._manual_override
                         if changed:
                             self._muted = detected
                             state = "MUTED" if detected else "UNMUTED"
@@ -234,9 +245,10 @@ class MuteSync:
         """Called when the manual toggle hotkey is pressed (works anywhere)."""
         with self._lock:
             self._muted = not self._muted
+            self._manual_override = True
             muted = self._muted
             state = "MUTED" if muted else "UNMUTED"
-        logger.info("Mute sync: manual toggle -> %s", state)
+        logger.info("Mute sync: manual toggle -> %s (manual override on)", state)
         self._fire_mute_changed(muted)
 
     def _is_meeting_app_focused(self) -> bool:
