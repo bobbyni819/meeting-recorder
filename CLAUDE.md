@@ -256,9 +256,31 @@ python -m meeting_recorder        # console (shows logs)
 pythonw launch.pyw                # background (tray only)
 ```
 
+## Dictation mode (solo voice memos)
+- `python -m meeting_recorder dictate` runs a headless hotkey loop (no tray icon)
+- Also launchable from Windows search via the `Meeting Recorder Dictation` shortcut
+  (install with `powershell -ExecutionPolicy Bypass -File scripts\install_dictation_shortcut.ps1`)
+- `Ctrl+Shift+V` (configurable via `dictation.hotkey`) toggles start/stop
+- Reuses `GeminiTranscriber` for transcription — adds `transcribe_dictation()` method
+  that asks Gemini for JSON with `transcript`, `slug`, `project`
+- Does NOT use `CaptureManager` — uses a minimal `DictationRecorder` that writes
+  mic directly to 16kHz mono WAV. No mute sync, VAD, screen capture, or diarization.
+- **Project-based routing**: `resolve_project_dir()` inspects the Gemini-inferred
+  project and moves the file to `<drive_root>/<project>/Sources/voice-memos/<date>/`
+  **only if the project folder already exists on disk**. Unknown/general project →
+  flat fallback dir `<drive_root>/voice-memos/<date>/`. Audio stages in the system
+  tempdir and is only moved once the project is known.
+- Drive root defaults to `G:/My Drive/Knowledge` (configurable via `dictation.drive_root`).
+  Path template is `dictation.project_subpath_template` (default `{project}/Sources/voice-memos`).
+- On Gemini failure: moves the WAV to the fallback dir as `HHMM-recording.wav` with
+  a `.error` sidecar. Audio is never lost.
+- Gemini key is shared with meeting transcription (`transcription.gemini_api_key`);
+  no separate secret. `dictation.gemini_model` empty = inherits `transcription.gemini_model`.
+
 ## CLI subcommands
 ```bash
 python -m meeting_recorder diagnose       # system health checks
+python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shift+V)
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)
 python -m meeting_recorder stats --weekly # weekly meeting report (--week-offset N)

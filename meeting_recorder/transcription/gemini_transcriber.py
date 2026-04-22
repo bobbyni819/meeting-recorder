@@ -10,9 +10,11 @@ Uses the current ``google-genai`` SDK (not the deprecated ``google.generativeai`
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
@@ -35,6 +37,89 @@ otherwise use Speaker 1, Speaker 2, etc. — and keep labels consistent througho
 
 Begin the transcript immediately with no preamble:
 """
+
+
+_DICTATION_PROMPT_TEMPLATE = """\
+This is a short solo dictation recording (30 seconds to 3 minutes).
+Transcribe it verbatim, infer a topic slug, and infer a project.
+
+Return ONLY a single JSON object, no preamble, no markdown fences, with these keys:
+- "transcript": string. Verbatim markdown-formatted transcript of everything spoken.
+  Break into paragraphs at natural pauses/topic shifts. Do NOT add commentary or
+  stage directions. Do NOT add speaker labels. Preserve filler words only if they
+  carry meaning.
+- "slug": string. A 3-word kebab-case topic summary (lowercase, hyphens, no punctuation).
+  Example: "fig4-simpsons-paradox" or "grant-deadline-notes".
+- "project": string. Must be exactly one of: {project_choices}. Pick the single
+  best match from the transcript content.
+
+Return the JSON object now:
+"""
+
+
+@dataclass
+class DictationResult:
+    """Structured output from a dictation transcription call."""
+    transcript: str
+    slug: str
+    project: str
+    model: str
+
+
+def _slugify(text: str) -> str:
+    """Normalize text to 3-word kebab-case."""
+    cleaned = re.sub(r"[^a-z0-9\s-]", "", text.lower().strip())
+    words = [w for w in re.split(r"[\s_-]+", cleaned) if w]
+    if not words:
+        return "untitled"
+    return "-".join(words[:3])
+
+
+def parse_dictation_response(
+    raw: str,
+    project_choices: list[str],
+    default_project: str,
+    model: str,
+) -> DictationResult:
+    """Parse Gemini's JSON response for a dictation clip.
+
+    Tolerates markdown code fences around the JSON, extra commentary, and
+    missing/invalid fields — falls back to sensible defaults rather than
+    raising so a voice memo is never lost because of a malformed response.
+    """
+    text = raw.strip()
+    # Strip ```json ... ``` fences if Gemini added them despite being told not to
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+
+    transcript = raw.strip()  # fallback: whole response as transcript
+    slug = ""
+    project = ""
+
+    try:
+        # Find the first {...} block if there's extra prose around it
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            obj = json.loads(match.group(0))
+            transcript = str(obj.get("transcript", transcript)).strip()
+            slug = str(obj.get("slug", "")).strip()
+            project = str(obj.get("project", "")).strip()
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Dictation response was not valid JSON; using raw text as transcript")
+
+    slug = _slugify(slug) if slug else _slugify(transcript[:60])
+
+    allowed = set(project_choices) | {default_project}
+    if project not in allowed:
+        project = default_project
+
+    return DictationResult(
+        transcript=transcript,
+        slug=slug,
+        project=project,
+        model=model,
+    )
 
 
 class GeminiTranscriber:
@@ -127,13 +212,80 @@ class GeminiTranscriber:
 
         return self._parse(raw_text)
 
-    def _transcribe_with_retry(self, client, uploaded, max_retries: int = 3):
+    def transcribe_dictation(
+        self,
+        audio_path: Path,
+        project_choices: list[str],
+        default_project: str = "general",
+    ) -> DictationResult:
+        """Transcribe a short solo dictation clip and return structured output.
+
+        Uses the same upload / FLAC compression / retry machinery as
+        ``transcribe()`` but asks Gemini for a JSON blob containing the
+        verbatim transcript, a kebab-case slug, and an inferred project.
+        """
+        from google import genai
+        from google.genai import types
+
+        if not project_choices:
+            project_choices = [default_project]
+        # Ensure default_project is always an allowed choice
+        choices = list(project_choices)
+        if default_project not in choices:
+            choices.append(default_project)
+
+        client = genai.Client(api_key=self.api_key)
+
+        upload_path, mime_type, flac_temp = self._compress_to_flac(audio_path)
+
+        size_mb = upload_path.stat().st_size / 1_000_000
+        logger.info(
+            "Uploading dictation %s (%.1f MB) to Gemini Files API…",
+            upload_path.name, size_mb,
+        )
+
+        try:
+            uploaded = client.files.upload(
+                file=str(upload_path),
+                config=types.UploadFileConfig(mime_type=mime_type),
+            )
+        finally:
+            if flac_temp is not None and flac_temp.exists():
+                flac_temp.unlink()
+
+        for _ in range(60):
+            if uploaded.state.name != "PROCESSING":
+                break
+            time.sleep(2)
+            uploaded = client.files.get(name=uploaded.name)
+
+        if uploaded.state.name != "ACTIVE":
+            raise RuntimeError(
+                f"Gemini file processing did not complete (state={uploaded.state.name})."
+            )
+
+        prompt = _DICTATION_PROMPT_TEMPLATE.format(
+            project_choices=", ".join(f'"{p}"' for p in choices)
+        )
+        raw_text = self._transcribe_with_retry(client, uploaded, prompt=prompt)
+
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            logger.debug("Could not delete uploaded Gemini file (non-fatal)")
+
+        return parse_dictation_response(raw_text, choices, default_project, self.model)
+
+    def _transcribe_with_retry(
+        self, client, uploaded, max_retries: int = 3, prompt: str | None = None,
+    ):
         """Call Gemini generate_content with retries for transient errors.
 
         Retries on rate-limit (429), server errors (5xx), and network
         issues.  Raises the final error if all attempts fail.
         """
         last_error = None
+        contents_prompt = prompt if prompt is not None else _TRANSCRIPTION_PROMPT
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(
@@ -142,7 +294,7 @@ class GeminiTranscriber:
                 )
                 response = client.models.generate_content(
                     model=self.model,
-                    contents=[uploaded, _TRANSCRIPTION_PROMPT],
+                    contents=[uploaded, contents_prompt],
                 )
                 return response.text
             except Exception as e:

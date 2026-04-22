@@ -65,6 +65,15 @@ enabled = false        # auto-delete old recordings based on age/size
 max_age_days = 90      # delete recordings older than N days (0 = no age limit)
 max_total_gb = 0.0     # delete oldest when total exceeds N GB (0 = no size limit)
 
+[dictation]
+enabled = true                               # set true to enable the dictate subcommand
+drive_root = "G:/My Drive/Knowledge"         # routed per project: <root>/<project>/Sources/voice-memos/<date>/
+hotkey = "ctrl+shift+v"                      # toggle start/stop; uses transcription.gemini_api_key
+project_list = ["metabolism", "dcp", "ailab", "tools", "career"]
+default_project = "general"                  # fallback when Gemini can't infer a project
+gemini_model = ""                            # empty = inherit transcription.gemini_model
+project_subpath_template = "{project}/Sources/voice-memos"  # falls back to <root>/voice-memos/ if project folder missing
+
 [dashboard]
 enabled = true
 auto_show = true       # auto-show dashboard when recording starts

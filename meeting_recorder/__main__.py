@@ -52,6 +52,10 @@ def main() -> None:
         elif cmd == "stats":
             from meeting_recorder.stats_cli import main as stats_main
             sys.exit(stats_main(sys.argv[2:]))
+        elif cmd == "dictate":
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+            from meeting_recorder.dictation.cli import main as dictate_main
+            sys.exit(dictate_main(sys.argv[2:]))
         elif cmd == "archive":
             from meeting_recorder.config import Config
             from meeting_recorder.storage.archive import archive_old_recordings, get_archive_stats

@@ -189,6 +189,23 @@ class RetentionConfig:
 
 
 @dataclass
+class DictationConfig:
+    enabled: bool = False
+    drive_root: str = "~/Documents"
+    hotkey: str = "ctrl+shift+v"
+    project_list: list[str] = field(default_factory=lambda: [
+        "metabolism", "dcp", "ailab", "tools", "career"
+    ])
+    default_project: str = "general"
+    gemini_model: str = ""       # empty = inherit transcription.gemini_model
+    # Subpath under drive_root to route project-tagged memos.
+    # {project} is substituted with the inferred project name.
+    # If the resolved parent dir doesn't exist (e.g. "general" or unknown project),
+    # memos fall back to drive_root/voice-memos/<date>/.
+    project_subpath_template: str = "{project}/Sources/voice-memos"
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -203,6 +220,7 @@ class Config:
     summary: SummaryConfig = field(default_factory=SummaryConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
+    dictation: DictationConfig = field(default_factory=DictationConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -291,6 +309,7 @@ class Config:
             summary=_safe_init(SummaryConfig, data, "summary"),
             dashboard=_safe_init(DashboardConfig, data, "dashboard"),
             retention=_safe_init(RetentionConfig, data, "retention"),
+            dictation=_safe_init(DictationConfig, data, "dictation"),
         )
 
     def save(self) -> None:
