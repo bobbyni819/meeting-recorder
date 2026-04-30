@@ -83,9 +83,9 @@ e2e = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bobbyni819/meeting_recorder"
-Source = "https://github.com/bobbyni819/meeting_recorder"
-Issues = "https://github.com/bobbyni819/meeting_recorder/issues"
+Homepage = "https://github.com/bobbyni819/meeting-recorder"
+Source = "https://github.com/bobbyni819/meeting-recorder"
+Issues = "https://github.com/bobbyni819/meeting-recorder/issues"
 
 [project.scripts]
 meeting-recorder = "meeting_recorder.__main__:main"
