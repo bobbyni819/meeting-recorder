@@ -3,10 +3,32 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meeting-recorder"
+name = "vaultlab-meetings"
 version = "0.1.0"
-description = "Smart meeting recorder with per-app audio capture, VAD, and transcription"
+description = "Smart Windows meeting recorder with per-app audio capture, voice-activity detection, and local/cloud transcription. Used by vaultlab as the meeting-context layer."
+readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
+authors = [
+    {name = "Bobby Y.X. Ni"},
+]
+keywords = [
+    "meeting-recorder", "transcription", "whisper", "audio-capture",
+    "vad", "per-app-audio", "vaultlab", "claude-code",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Office/Business",
+]
 dependencies = [
     "proc-tap>=0.3.0",
     "PyAudioWPatch>=0.2.12",
@@ -59,6 +81,11 @@ e2e = [
     "playwright>=1.40",
     "pyttsx3>=2.90",
 ]
+
+[project.urls]
+Homepage = "https://github.com/bobbyni819/meeting_recorder"
+Source = "https://github.com/bobbyni819/meeting_recorder"
+Issues = "https://github.com/bobbyni819/meeting_recorder/issues"
 
 [project.scripts]
 meeting-recorder = "meeting_recorder.__main__:main"
