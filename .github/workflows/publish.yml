@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # required for PyPI Trusted Publishing
+      id-token: write   # required for PyPI Trusted Publishing
+      contents: read    # required so actions/checkout can clone the private repo
     steps:
       - uses: actions/checkout@v4
 
