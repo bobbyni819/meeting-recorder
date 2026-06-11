@@ -92,6 +92,16 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   than the one `process_finder` selects — use the **⊙ Window** picker in the dashboard
   to switch both screen and audio capture to the correct window mid-recording
 - `switch_screen_window(hwnd)` hot-swaps both screen capture AND audio PID atomically
+- **Screen-share fallback**: when the tracked window stays minimized for
+  `_SHARE_FALLBACK_SECONDS` (3s), switches to full-monitor capture via `mss`.
+  Monitor is chosen by `_find_share_monitor()` — enumerates visible non-minimized
+  windows owned by the meeting process (Zoom spawns sharing toolbar / overlay
+  on the shared monitor) and uses the largest candidate's monitor. Falls back
+  to `_pick_monitor_for_rect(last_rect)` if no candidate is found (e.g., Teams
+  with toolbar docked elsewhere). Log line prints `[source: share-overlay]` or
+  `[source: last-window-position]` so you can tell which heuristic fired.
+  Audio (ProcTap by PID) is unaffected. Exits automatically when the window is
+  restored. Resets when the user manually switches target via `switch_window()`.
 
 ## Record Anything mode
 - If no meeting app (Zoom/Teams/Webex) is detected, `start_recording()` opens a window picker

@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 _PW_RENDERFULLCONTENT = 2  # PrintWindow flag: render full content (Win 8.1+)
 _DIB_RGB_COLORS = 0
 
+# When the tracked window stays minimized this long, fall back to capturing
+# the whole monitor instead of a frozen last frame. This covers the Zoom /
+# Teams screen-share case, where the meeting window is minimized while the
+# user presents — without this, the recorded video would freeze for the
+# entire share. Audio capture (by PID) is unaffected either way.
+_SHARE_FALLBACK_SECONDS = 3.0
+
 
 class _BITMAPINFOHEADER(ctypes.Structure):
     """Win32 BITMAPINFOHEADER for reading bitmap pixels."""
@@ -255,6 +262,14 @@ class ScreenCapture:
             # current_hwnd tracks the active window (can be changed by switch_window())
             current_hwnd = hwnd
 
+            # Share-fallback state: when the tracked window is minimized for
+            # _SHARE_FALLBACK_SECONDS we assume the user is presenting and
+            # switch the video source to the monitor it was last on.
+            share_mode = False
+            share_monitor: Optional[dict] = None
+            minimized_since: Optional[float] = None
+            last_rect: Optional[tuple[int, int, int, int]] = None
+
             # Determine capture method: try PrintWindow first, fall back to mss
             use_printwindow = True
             test_frame = self._capture_printwindow(current_hwnd, init_width, init_height)
@@ -306,6 +321,11 @@ class ScreenCapture:
                             # Reset glitch baseline for new window
                             last_good_frame = None
                             last_non_glitch_time = time.monotonic()
+                            # Reset share-fallback state — user chose a new target
+                            share_mode = False
+                            share_monitor = None
+                            minimized_since = None
+                            last_rect = None
                         else:
                             logger.warning(
                                 "Requested HWND %d is not visible; ignoring switch.", pending
@@ -318,8 +338,66 @@ class ScreenCapture:
                 # Get current window position/size
                 rect = get_window_rect(current_hwnd)
                 if rect is None:
-                    # Window minimized or transiently unavailable — repeat last
-                    # good frame to avoid black-frame flicker.
+                    # Window minimized or transiently unavailable. If it stays
+                    # minimized past the share-fallback threshold, capture the
+                    # whole monitor instead — this handles screen-shares where
+                    # Zoom/Teams minimize the meeting window while presenting.
+                    now = time.monotonic()
+                    if minimized_since is None:
+                        minimized_since = now
+                    elapsed_min = now - minimized_since
+
+                    if not share_mode and elapsed_min >= _SHARE_FALLBACK_SECONDS:
+                        try:
+                            if sct is None:
+                                import mss
+                                sct = mss.mss()
+                            # Try to identify the monitor being shared via
+                            # the meeting app's own floating toolbar/overlay.
+                            share_monitor = _find_share_monitor(
+                                sct, self.pid, self.process_name, current_hwnd
+                            )
+                            source = "share-overlay"
+                            if share_monitor is None:
+                                # No toolbar found — fall back to the monitor
+                                # the meeting window was last on.
+                                share_monitor = _pick_monitor_for_rect(sct, last_rect)
+                                source = "last-window-position"
+                            share_mode = True
+                            logger.info(
+                                "Tracked window minimized for %.1fs — falling back "
+                                "to desktop capture (likely screen share). Monitor: "
+                                "%dx%d @ (%d,%d) [source: %s]",
+                                elapsed_min,
+                                share_monitor["width"], share_monitor["height"],
+                                share_monitor["left"], share_monitor["top"],
+                                source,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Could not engage desktop fallback", exc_info=True
+                            )
+
+                    if share_mode and sct is not None and share_monitor is not None:
+                        try:
+                            shot = sct.grab(share_monitor)
+                            frame = np.array(shot)[:, :, :3]  # BGRA -> BGR
+                            if frame.shape[:2] != (init_height, init_width):
+                                frame = cv2.resize(frame, (init_width, init_height))
+                            if not self.paused:
+                                writer.write(frame)
+                                frame_count += 1
+                            self._latest_frame = frame
+                            last_good_frame = frame
+                            _sleep_remaining(frame_start, interval)
+                            continue
+                        except Exception:
+                            logger.debug(
+                                "Desktop fallback grab failed", exc_info=True
+                            )
+
+                    # Haven't hit threshold yet, or fallback failed: repeat
+                    # the last good frame so the video timing stays intact.
                     if not self.paused:
                         if last_good_frame is not None:
                             writer.write(last_good_frame)
@@ -330,7 +408,17 @@ class ScreenCapture:
                     _sleep_remaining(frame_start, interval)
                     continue
 
+                # Window is visible again — exit share mode if it was engaged.
+                if share_mode:
+                    logger.info(
+                        "Tracked window restored — resuming window capture."
+                    )
+                    share_mode = False
+                    share_monitor = None
+                minimized_since = None
+
                 left, top, cur_w, cur_h = rect
+                last_rect = (left, top, cur_w, cur_h)
 
                 # Skip degenerate window dimensions (collapsed, zero-size)
                 if cur_w <= 0 or cur_h <= 0:
@@ -484,6 +572,108 @@ def _is_glitch_frame(frame: np.ndarray, last_good: np.ndarray) -> bool:
             return True
 
     return False
+
+
+def _find_share_monitor(
+    sct,
+    pid: int,
+    process_name: str,
+    exclude_hwnd: int,
+) -> Optional[dict]:
+    """Pick the monitor Zoom/Teams is most likely sharing on.
+
+    During screen share, Zoom/Teams create a small floating toolbar (and
+    often a full-screen border overlay) on the monitor being shared,
+    while the main meeting window is minimized. This enumerates visible,
+    non-minimized windows owned by any process with the meeting app's
+    name, excluding the (minimized) main window, and returns the monitor
+    containing the largest such window. Returns None when no candidate
+    is found — caller should fall back to the last-known-rect heuristic.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+
+    # Zoom spawns several child processes with the same image name;
+    # any of them may own the sharing overlay. Gather all matching PIDs.
+    target_pids = {pid}
+    try:
+        for p in psutil.process_iter(["pid", "name"]):
+            try:
+                name = p.info.get("name")
+                if name and name.lower() == process_name.lower():
+                    target_pids.add(p.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        logger.debug("psutil iteration failed during share-monitor search", exc_info=True)
+
+    user32 = ctypes.windll.user32
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+    candidates: list[tuple[int, int, int, int]] = []
+
+    def _cb(hwnd, _lparam):
+        if hwnd == exclude_hwnd:
+            return True
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        if user32.IsIconic(hwnd):
+            return True
+        found_pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(found_pid))
+        if found_pid.value not in target_pids:
+            return True
+        rect = ctypes.wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return True
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return True
+        candidates.append((rect.left, rect.top, w, h))
+        return True
+
+    try:
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    except Exception:
+        logger.debug("EnumWindows failed during share-monitor search", exc_info=True)
+        return None
+
+    if not candidates:
+        return None
+    # Pick the largest — most likely the sharing overlay rather than a
+    # 1-pixel tooltip/tray-popup that happens to be visible.
+    candidates.sort(key=lambda r: r[2] * r[3], reverse=True)
+    return _pick_monitor_for_rect(sct, candidates[0])
+
+
+def _pick_monitor_for_rect(
+    sct, last_rect: Optional[tuple[int, int, int, int]]
+) -> dict:
+    """Pick the mss monitor containing the centre of *last_rect*.
+
+    ``sct.monitors[0]`` is the virtual union of every display and ``[1:]``
+    are the individual monitors. On single-display systems we always return
+    monitor 1. If *last_rect* is missing or doesn't intersect any monitor,
+    we fall back to monitor 1 (the primary).
+    """
+    monitors = sct.monitors
+    if len(monitors) <= 1:
+        return monitors[0]
+    if last_rect is None:
+        return monitors[1]
+    left, top, w, h = last_rect
+    cx = left + w // 2
+    cy = top + h // 2
+    for mon in monitors[1:]:
+        m_right = mon["left"] + mon["width"]
+        m_bottom = mon["top"] + mon["height"]
+        if mon["left"] <= cx < m_right and mon["top"] <= cy < m_bottom:
+            return mon
+    return monitors[1]
 
 
 def _sleep_remaining(frame_start: float, interval: float) -> None:

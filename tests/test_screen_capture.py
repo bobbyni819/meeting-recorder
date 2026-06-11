@@ -8,7 +8,18 @@ from unittest import mock
 import numpy as np
 import pytest
 
-from meeting_recorder.video.screen_capture import ScreenCapture, _is_glitch_frame
+from meeting_recorder.video.screen_capture import (
+    ScreenCapture,
+    _find_share_monitor,
+    _is_glitch_frame,
+    _pick_monitor_for_rect,
+)
+
+
+class _FakeSct:
+    """Minimal mss-like stub exposing a .monitors list."""
+    def __init__(self, monitors):
+        self.monitors = monitors
 
 
 class TestScreenCaptureLatestFrame:
@@ -95,6 +106,83 @@ class TestGlitchFrameDetection:
         similar = good.copy()
         similar[:240, :, :] += 10
         assert _is_glitch_frame(similar, good) is False
+
+
+class TestPickMonitorForRect:
+    """Monitor selection for the screen-share fallback."""
+
+    # mss convention: monitors[0] is the virtual union of every display,
+    # monitors[1:] are the individual physical monitors.
+    _PRIMARY = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+    _SECONDARY = {"left": 1920, "top": 0, "width": 2560, "height": 1440}
+    _UNION = {"left": 0, "top": 0, "width": 4480, "height": 1440}
+
+    def test_single_monitor_returns_union(self):
+        """Only monitors[0] (union) available → return it."""
+        sct = _FakeSct([self._UNION])
+        # last_rect doesn't matter here
+        assert _pick_monitor_for_rect(sct, (100, 100, 800, 600)) is self._UNION
+
+    def test_no_last_rect_returns_primary(self):
+        """No prior rect known → fall back to the primary monitor."""
+        sct = _FakeSct([self._UNION, self._PRIMARY, self._SECONDARY])
+        assert _pick_monitor_for_rect(sct, None) is self._PRIMARY
+
+    def test_rect_on_primary(self):
+        """Window centred on the primary monitor → primary."""
+        sct = _FakeSct([self._UNION, self._PRIMARY, self._SECONDARY])
+        # Rect centre at (500, 400) → primary
+        assert _pick_monitor_for_rect(sct, (100, 100, 800, 600)) is self._PRIMARY
+
+    def test_rect_on_secondary(self):
+        """Window centred on the secondary monitor → secondary."""
+        sct = _FakeSct([self._UNION, self._PRIMARY, self._SECONDARY])
+        # Rect centre at (3200, 720) → inside secondary
+        assert _pick_monitor_for_rect(sct, (2900, 500, 600, 400)) is self._SECONDARY
+
+    def test_rect_outside_all_falls_back_to_primary(self):
+        """Window off-screen → fall back to primary rather than raising."""
+        sct = _FakeSct([self._UNION, self._PRIMARY, self._SECONDARY])
+        assert _pick_monitor_for_rect(sct, (-5000, -5000, 100, 100)) is self._PRIMARY
+
+
+class TestFindShareMonitor:
+    """_find_share_monitor uses Zoom/Teams share-toolbar location as the signal."""
+
+    _PRIMARY = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+    _SECONDARY = {"left": 1920, "top": 0, "width": 2560, "height": 1440}
+    _UNION = {"left": 0, "top": 0, "width": 4480, "height": 1440}
+
+    def test_returns_none_when_enum_finds_no_zoom_windows(self):
+        """No Zoom-owned visible windows → None (caller falls back to last-rect)."""
+        sct = _FakeSct([self._UNION, self._PRIMARY, self._SECONDARY])
+        with mock.patch("psutil.process_iter", return_value=[]), \
+             mock.patch("ctypes.windll.user32.EnumWindows") as enum, \
+             mock.patch(
+                 "meeting_recorder.video.screen_capture._pick_monitor_for_rect"
+             ) as pick:
+            # EnumWindows is called but the callback never appends a candidate
+            # (stubbed away), so the function should bail out without calling
+            # the monitor picker.
+            result = _find_share_monitor(
+                sct, pid=1234, process_name="Zoom.exe", exclude_hwnd=999
+            )
+        enum.assert_called_once()
+        pick.assert_not_called()
+        assert result is None
+
+    def test_enum_exception_returns_none_gracefully(self):
+        """If Win32 EnumWindows raises, caller gets None (no crash)."""
+        sct = _FakeSct([self._UNION, self._PRIMARY])
+        with mock.patch("psutil.process_iter", return_value=[]), \
+             mock.patch(
+                 "ctypes.windll.user32.EnumWindows",
+                 side_effect=OSError("enum broke"),
+             ):
+            result = _find_share_monitor(
+                sct, pid=1234, process_name="Zoom.exe", exclude_hwnd=999
+            )
+        assert result is None
 
 
 class TestCaptureManagerGetScreenFrame:
