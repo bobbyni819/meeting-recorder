@@ -38,6 +38,26 @@ _SILENCE_WARNING_SECONDS = 10.0
 _DESKTOP_EXIT_GRACE_SECONDS = 5.0
 
 
+def _resolve_app_key(app_key: str, process_name: str) -> str:
+    """Map a window-picker ("manual") recording back to its meeting app.
+
+    Window-picker recordings arrive as app_key="manual", which has no mute
+    shortcut — so the meeting app's mute hotkey (Alt+A for Zoom, Ctrl+Shift+M
+    for Teams) never toggled the recorder. Recover the real app from the
+    process name so the shortcut hook and UIA detection work either way.
+    """
+    if app_key and app_key != "manual":
+        return app_key
+    pn = (process_name or "").lower()
+    if "zoom" in pn:
+        return "zoom"
+    if "teams" in pn:
+        return "teams"
+    if "webex" in pn or "ptoneclk" in pn or "atmgr" in pn:
+        return "webex"
+    return app_key
+
+
 def _is_buffer_silent(data: bytes) -> bool:
     """Check whether raw int16 PCM audio data is effectively silent.
 
@@ -215,8 +235,14 @@ class CaptureManager:
                 else:
                     detected = detect_initial_mute_state(pid)
                     start_muted = detected if detected is not None else True
+                # A window-picker recording of a Zoom/Teams window comes in as
+                # app_key="manual", which has no mute shortcut — so Alt+A
+                # (Zoom) / Ctrl+Shift+M (Teams) never toggled the recorder.
+                # Recover the real app from the process so the shortcut hook
+                # and UIA detection work for manual recordings too.
+                effective_app_key = _resolve_app_key(app_key, process_name)
                 self._mute_sync = MuteSync(
-                    app_key=app_key,
+                    app_key=effective_app_key,
                     target_pids=target_pids,
                     start_muted=start_muted,
                     on_mute_changed=on_mute_changed,

@@ -181,6 +181,26 @@ class TestCaptureManagerCallbackSafety:
             mgr._monitor_process()
 
 
+class TestResolveAppKey:
+    """Window-picker (manual) recordings recover their meeting app for mute."""
+
+    def test_manual_zoom_resolves(self):
+        from meeting_recorder.audio.capture_manager import _resolve_app_key
+        assert _resolve_app_key("manual", "Zoom.exe") == "zoom"
+
+    def test_manual_teams_resolves(self):
+        from meeting_recorder.audio.capture_manager import _resolve_app_key
+        assert _resolve_app_key("manual", "ms-teams.exe") == "teams"
+
+    def test_explicit_app_key_kept(self):
+        from meeting_recorder.audio.capture_manager import _resolve_app_key
+        assert _resolve_app_key("zoom", "anything.exe") == "zoom"
+
+    def test_manual_non_meeting_window_unchanged(self):
+        from meeting_recorder.audio.capture_manager import _resolve_app_key
+        assert _resolve_app_key("manual", "chrome.exe") == "manual"
+
+
 class TestWritersBackedUp:
     """Backpressure: live transcription is shed when writers fall behind."""
 
