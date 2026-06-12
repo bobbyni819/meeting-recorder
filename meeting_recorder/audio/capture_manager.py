@@ -135,6 +135,7 @@ class CaptureManager:
         screen_recording_enabled: bool = False,
         screen_recording_fps: float = 30.0,
         video_encoder_preference: str = "nvenc",
+        capture_speaker_events: bool = False,
         process_name: str = "",
         app_key: str = "",
         mute_toggle_hotkey: str = "ctrl+shift+u",
@@ -203,6 +204,20 @@ class CaptureManager:
                     start_muted=start_muted,
                     on_mute_changed=on_mute_changed,
                 )
+
+        # Active-speaker event capture (experimental, opt-in).
+        self._speaker_capture = None
+        if capture_speaker_events and process_name:
+            try:
+                from meeting_recorder.audio.speaker_events import SpeakerEventCapture
+
+                spk_pids = get_all_pids_for_process(process_name) or {pid}
+                self._speaker_capture = SpeakerEventCapture(
+                    pids=set(spk_pids),
+                    output_path=output_dir / "speaker_events.jsonl",
+                )
+            except Exception:
+                logger.debug("Speaker-event capture unavailable", exc_info=True)
 
         # Capture instances
         self._app_capture = AppAudioCapture(
@@ -277,6 +292,10 @@ class CaptureManager:
         # Start mute sync (hooks meeting app's mute shortcut + manual toggle)
         if self._mute_sync is not None:
             self._mute_sync.start(manual_hotkey=self._mute_toggle_hotkey)
+
+        # Start active-speaker event capture (experimental, opt-in)
+        if self._speaker_capture is not None:
+            self._speaker_capture.start()
 
         # Start capture threads
         self._app_capture.start()
@@ -393,6 +412,9 @@ class CaptureManager:
         # Stop mute sync
         if self._mute_sync is not None:
             self._mute_sync.stop()
+
+        if self._speaker_capture is not None:
+            self._speaker_capture.stop()
 
         # Stop capture threads (stops producing new chunks)
         self._app_capture.stop()

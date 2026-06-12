@@ -46,6 +46,43 @@ def main() -> None:
                 sys.exit(1)
             from meeting_recorder.config_transfer import import_config
             sys.exit(import_config(sys.argv[2]))
+        elif cmd == "probe-speakers":
+            # Experimental: live-probe what active-speaker names Zoom/Teams
+            # expose via UIAutomation. Run this DURING a real meeting to
+            # validate (and tune) speaker-event capture before enabling it.
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+            import time as _t
+
+            try:
+                import psutil
+                from meeting_recorder.audio.speaker_events import SpeakerEventCapture
+            except ImportError as e:
+                print(f"Missing dependency: {e}")
+                sys.exit(2)
+            pids = {
+                p.info["pid"] for p in psutil.process_iter(["pid", "name"])
+                if any(k in (p.info["name"] or "").lower()
+                       for k in ("zoom", "teams"))
+            }
+            if not pids:
+                print("No Zoom/Teams process found.")
+                sys.exit(1)
+            print(f"Probing PIDs {pids} for 20s — speak in your meeting now…")
+            cap = SpeakerEventCapture(pids=pids, output_path="-")
+            seen = []
+            cap._write_event = lambda name: (  # capture to stdout instead of file
+                seen.append(name) or print(f"  active speaker: {name}")
+            )
+            cap.start()
+            try:
+                _t.sleep(20)
+            finally:
+                cap.stop()
+            print(
+                f"\nDetected {len(set(seen))} distinct speaker name(s): "
+                f"{sorted(set(seen)) or 'none — UI names not exposed this way'}"
+            )
+            sys.exit(0)
         elif cmd == "search":
             from meeting_recorder.search.cli import main as search_main
             sys.exit(search_main(sys.argv[2:]))

@@ -169,13 +169,22 @@ class GeminiTranscriber:
     # Public API — matches the LocalWhisperTranscriber interface
     # ------------------------------------------------------------------
 
-    def transcribe(self, audio_path: Path) -> list[TranscriptSegment]:
+    def transcribe(
+        self, audio_path: Path, attendees: list[str] | None = None,
+    ) -> list[TranscriptSegment]:
         """Upload *audio_path* to Gemini and return parsed TranscriptSegments.
 
         Also writes ``transcript_raw.txt`` into the same directory as the
         audio file so the verbatim Gemini output is preserved.
 
         If possible, compresses to FLAC before upload to reduce transfer size.
+
+        Args:
+            audio_path: Audio file to transcribe.
+            attendees: Optional known attendee names. When given, Gemini is
+                asked to label speakers using these names where the audio
+                supports it (choose-from-list, not invent) — improving
+                speaker labels without a separate resolution pass.
         """
         from google import genai
         from google.genai import types
@@ -211,7 +220,9 @@ class GeminiTranscriber:
             )
 
         # Transcribe with retries for transient API errors
-        raw_text = self._transcribe_with_retry(client, uploaded)
+        raw_text = self._transcribe_with_retry(
+            client, uploaded, prompt=self._build_prompt(attendees),
+        )
 
         logger.info("Transcript received: %d chars", len(raw_text))
 
@@ -324,6 +335,33 @@ class GeminiTranscriber:
                 except ValueError:
                     continue
         return None
+
+    def _build_prompt(self, attendees: list[str] | None) -> str:
+        """Build the transcription prompt, optionally hinting attendee names.
+
+        Constrains Gemini to label speakers from the known attendee list
+        where the audio supports it (choose-from-list, never invent), which
+        produces real names instead of "Speaker 1/2" without a separate
+        resolution pass. Falls back to the generic prompt when no attendees.
+        """
+        names = [a.strip() for a in (attendees or []) if a and a.strip()]
+        if not names:
+            return _TRANSCRIPTION_PROMPT
+        roster = ", ".join(names)
+        hint = (
+            "\nThe following people are known to attend this meeting: "
+            f"{roster}.\nWhen a speaker is clearly one of them (by self-"
+            "introduction, by being addressed by name, or by voice "
+            "continuity), label them with that exact name. Only use "
+            "Speaker 1, Speaker 2, etc. for voices you cannot match to a "
+            "known attendee. Do not invent names that are not in the list.\n"
+        )
+        # Insert the hint before the final "Begin the transcript" line.
+        marker = "\nBegin the transcript"
+        if marker in _TRANSCRIPTION_PROMPT:
+            head, tail = _TRANSCRIPTION_PROMPT.split(marker, 1)
+            return head + hint + marker + tail
+        return _TRANSCRIPTION_PROMPT + hint
 
     def _transcribe_with_retry(
         self, client, uploaded, max_retries: int = 5, prompt: str | None = None,

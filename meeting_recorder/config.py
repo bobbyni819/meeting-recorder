@@ -102,6 +102,11 @@ class RecordingConfig:
     # disambiguating between meetings booked in the same slot via the
     # calendar. Only the folder moves; files inside are untouched.
     smart_rename: bool = True
+    # EXPERIMENTAL: poll the Zoom/Teams UI for the active speaker during the
+    # meeting and use it to put real names on diarized speakers. Off by
+    # default — the accessibility names vary by app version and need a
+    # live-meeting validation pass. Writes an additive speaker_events.jsonl.
+    capture_speaker_events: bool = False
 
 
 @dataclass

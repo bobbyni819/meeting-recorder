@@ -192,7 +192,9 @@ class TranscriptionPipeline:
                 raise FileNotFoundError(f"No audio file found in {recording_dir}")
             try:
                 transcriber = self._get_transcriber()
-                segments = transcriber.transcribe(audio_path)
+                # Pass attendee names so Gemini labels speakers with real
+                # names from the known roster (choose-from-list, not invent).
+                segments = transcriber.transcribe(audio_path, attendees=attendees)
             except Exception as gemini_error:
                 logger.exception(
                     "Gemini transcription failed; attempting local Whisper fallback"
@@ -218,6 +220,9 @@ class TranscriptionPipeline:
             self._resolve_speakers(
                 segments, attendees, organizer, user_name, audio_path=None,
             )
+            # Active-speaker UI events (experimental) name any speakers still
+            # generic after the above.
+            self._apply_speaker_events(segments, recording_dir)
             logger.info("Gemini pipeline complete: %d segments", len(segments))
             return segments
 
@@ -299,6 +304,31 @@ class TranscriptionPipeline:
                 segments, attendees, organizer, user_name, audio_path=audio_path,
             )
             return segments
+
+    def _apply_speaker_events(
+        self, segments: list[TranscriptSegment], recording_dir: Path,
+    ) -> None:
+        """Name still-generic speakers from captured active-speaker events."""
+        if not (recording_dir / "speaker_events.jsonl").exists():
+            return
+        try:
+            from meeting_recorder.audio.speaker_events import (
+                load_speaker_events, build_speaker_name_map,
+            )
+            from meeting_recorder.transcription.speaker_resolver import (
+                apply_speaker_map,
+            )
+
+            events = load_speaker_events(recording_dir)
+            name_map = build_speaker_name_map(segments, events)
+            if name_map:
+                apply_speaker_map(segments, name_map)
+                logger.info(
+                    "Active-speaker events named %d speaker(s): %s",
+                    len(name_map), name_map,
+                )
+        except Exception:
+            logger.debug("Speaker-event alignment failed (non-fatal)", exc_info=True)
 
     def _attribute_user_from_mic(
         self,

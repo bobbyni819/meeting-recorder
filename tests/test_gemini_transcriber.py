@@ -24,6 +24,37 @@ def _write_wav(path: Path, duration: float, sample_rate: int = 16000) -> Path:
     return path
 
 
+class TestBuildPrompt:
+    """Attendee-aware prompt construction."""
+
+    def _t(self):
+        return GeminiTranscriber(api_key="k")
+
+    def test_no_attendees_uses_generic_prompt(self):
+        from meeting_recorder.transcription.gemini_transcriber import (
+            _TRANSCRIPTION_PROMPT,
+        )
+        assert self._t()._build_prompt(None) == _TRANSCRIPTION_PROMPT
+        assert self._t()._build_prompt([]) == _TRANSCRIPTION_PROMPT
+
+    def test_attendees_injected_before_begin_marker(self):
+        prompt = self._t()._build_prompt(["Alice Smith", "Bob Jones"])
+        assert "Alice Smith, Bob Jones" in prompt
+        assert "known to attend" in prompt
+        # The hint precedes the final "Begin the transcript" instruction
+        assert prompt.index("known to attend") < prompt.index("Begin the transcript")
+
+    def test_blank_names_filtered(self):
+        prompt = self._t()._build_prompt(["", "  ", "Real Name"])
+        assert "Real Name" in prompt
+        # No stray empty roster entries
+        assert "known to attend this meeting: Real Name." in prompt
+
+    def test_instructs_not_to_invent(self):
+        prompt = self._t()._build_prompt(["Alice"])
+        assert "Do not invent" in prompt
+
+
 # ---------------------------------------------------------------------------
 # _parse() tests
 # ---------------------------------------------------------------------------
