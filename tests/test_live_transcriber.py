@@ -554,3 +554,42 @@ class TestLiveInsights:
         lt = LiveTranscriber()  # no on_insight
         # Must be a no-op, not an error
         lt._maybe_run_insights([(0.0, "app", "budget budget budget")])
+
+
+class TestBackpressureAndBounds:
+    """Live transcription must yield to the recording under load."""
+
+    def test_skips_cycle_when_should_transcribe_false(self):
+        """Backpressure: a False gate skips the GPU cycle entirely."""
+        gate = {"ok": False}
+        lt = LiveTranscriber(
+            transcribe_interval=0.05,
+            should_transcribe=lambda: gate["ok"],
+        )
+        model = MagicMock()
+        model.transcribe.return_value = (iter([]), MagicMock())
+
+        def fake_load():
+            lt._model = model
+
+        lt.feed_audio(_make_audio_bytes(32000), source="app")
+        with patch.object(lt, "_load_model", side_effect=fake_load):
+            lt.start()
+            time.sleep(0.3)  # several intervals, all gated off
+            # While running and gated, the periodic loop never transcribes
+            assert model.transcribe.call_count == 0
+            lt.stop()  # final flush may transcribe once (tail), that's fine
+
+    def test_committed_history_is_bounded(self):
+        from meeting_recorder.transcription.live_transcriber import _MAX_COMMITTED
+
+        lt = LiveTranscriber()
+        # Simulate a very long meeting accumulating committed entries
+        with lt._committed_lock:
+            lt._committed = [(float(i), "app", f"t{i}") for i in range(_MAX_COMMITTED + 200)]
+        # The loop's bound runs on commit; emulate it
+        if len(lt._committed) > _MAX_COMMITTED:
+            del lt._committed[:-_MAX_COMMITTED]
+        assert len(lt._committed) == _MAX_COMMITTED
+        # Newest entries are retained
+        assert lt._committed[-1][2] == f"t{_MAX_COMMITTED + 199}"

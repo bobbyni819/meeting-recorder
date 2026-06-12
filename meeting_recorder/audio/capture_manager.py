@@ -401,6 +401,7 @@ class CaptureManager:
                     device=self._live_transcription_device,
                     compute_type=self._live_transcription_compute_type,
                     transcribe_interval=self._live_transcription_interval,
+                    should_transcribe=lambda: not self._writers_backed_up(),
                 )
                 lt.start()
                 with self._transcriber_lock:
@@ -473,6 +474,22 @@ class CaptureManager:
         duration = time.time() - self._start_time if self._start_time else 0
         logger.info("Recording stopped. Duration: %.1fs", duration)
 
+    def _writers_backed_up(self) -> bool:
+        """True when an audio ring buffer is filling — the writers are behind.
+
+        Used as backpressure: when behind, live transcription is shed so the
+        recording (WAV writing) stays real-time and never stalls.
+        """
+        try:
+            cap = self._app_buffer._max_chunks
+            threshold = cap * 0.4  # ~24s of backlog at the default capacity
+            return (
+                len(self._app_buffer) > threshold
+                or len(self._mic_buffer) > threshold
+            )
+        except Exception:
+            return False
+
     def _writer_loop(self, buffer: RingBuffer, wav_path: Path, label: str) -> None:
         """Write audio chunks from a ring buffer to a WAV file."""
         wf = None
@@ -501,27 +518,25 @@ class CaptureManager:
                 chunks = buffer.get_all()
                 if chunks:
                     feeds_transcriber = is_app or self._live_transcript_mic
-                    # When paused, drain the buffer but don't write to disk.
-                    # Still feed the live transcriber so it stays time-aligned.
-                    if self._paused:
-                        if feeds_transcriber:
-                            with self._transcriber_lock:
-                                lt = self._live_transcriber
-                            if lt is not None:
-                                for chunk in chunks:
-                                    lt.feed_audio(chunk, source=label)
-                        self._thread_heartbeats[f"{label}_writer"] = time.time()
-                    else:
+                    # CRITICAL PATH FIRST: write audio to the WAV (skipped when
+                    # paused) and update the heartbeat BEFORE touching the live
+                    # transcriber, so the recording never waits on the preview.
+                    if not self._paused:
                         for chunk in chunks:
                             wf.writeframes(chunk)
                             frames_since_flush += len(chunk) // 2
                             level_update(chunk)
-                            if feeds_transcriber:
-                                with self._transcriber_lock:
-                                    lt = self._live_transcriber
-                                if lt is not None:
-                                    lt.feed_audio(chunk, source=label)
-                        self._thread_heartbeats[f"{label}_writer"] = time.time()
+                    self._thread_heartbeats[f"{label}_writer"] = time.time()
+
+                    # Best-effort live preview: only feed when the writer is
+                    # NOT backed up. Under load (GPU/CPU contention) the live
+                    # transcription is shed so the recording stays real-time.
+                    if feeds_transcriber and not self._writers_backed_up():
+                        with self._transcriber_lock:
+                            lt = self._live_transcriber
+                        if lt is not None:
+                            for chunk in chunks:
+                                lt.feed_audio(chunk, source=label)
 
                     # Periodic WAV header flush: patch the RIFF/data chunk
                     # sizes in-place so the file is playable even if the

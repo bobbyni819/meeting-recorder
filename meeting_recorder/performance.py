@@ -178,10 +178,12 @@ def resolve_tier(profile: str, hw: HardwareInfo | None = None) -> PerformanceTie
         preset = _TIER_PRESETS[name]
 
     # Live transcription on the GPU when one exists and the tier runs live
-    # preview at all; faster inference + a shorter poll interval cut the lag.
+    # preview at all. 2.5s interval (not 1.5) keeps GPU/GIL pressure modest so
+    # it never contends with the audio writers or the NVENC video encode on a
+    # long recording — the recording always takes priority over the preview.
     if hw.has_cuda and preset.live_transcription:
         return replace(
             preset, live_device="cuda", live_compute_type="float16",
-            live_interval=1.5,
+            live_interval=2.5,
         )
     return preset

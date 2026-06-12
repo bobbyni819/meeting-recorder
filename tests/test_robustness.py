@@ -181,6 +181,35 @@ class TestCaptureManagerCallbackSafety:
             mgr._monitor_process()
 
 
+class TestWritersBackedUp:
+    """Backpressure: live transcription is shed when writers fall behind."""
+
+    def _mgr(self):
+        from meeting_recorder.audio.capture_manager import CaptureManager
+
+        with (
+            mock.patch("meeting_recorder.audio.capture_manager.AppAudioCapture"),
+            mock.patch("meeting_recorder.audio.capture_manager.MicAudioCapture"),
+            mock.patch("meeting_recorder.audio.capture_manager.VoiceActivityDetector"),
+            mock.patch("meeting_recorder.audio.capture_manager.AudioLevelMonitor"),
+        ):
+            return CaptureManager(
+                pid=100, output_dir=Path("/tmp/t"), screen_recording_enabled=False,
+            )
+
+    def test_not_backed_up_when_empty(self):
+        mgr = self._mgr()
+        assert mgr._writers_backed_up() is False
+
+    def test_backed_up_when_buffer_fills(self):
+        mgr = self._mgr()
+        cap = mgr._app_buffer._max_chunks
+        # Fill past the 40% threshold
+        for _ in range(int(cap * 0.5)):
+            mgr._app_buffer.put(b"\x00\x00")
+        assert mgr._writers_backed_up() is True
+
+
 class TestStartMutedDefault:
     """The recorder starts muted by default (users usually join muted)."""
 

@@ -39,6 +39,10 @@ DEFAULT_TRANSCRIBE_INTERVAL = 3.0  # seconds between transcription attempts
 DEFAULT_STABILITY_MARGIN = 3.0
 # How often the cheap local concept extraction runs.
 DEFAULT_INSIGHT_INTERVAL = 20.0
+# Max committed entries kept in memory for the on-screen display. The full
+# transcript is always written to live_transcript.txt; this only bounds the
+# rolling display so a long meeting can't grow memory unbounded.
+_MAX_COMMITTED = 400
 
 # Display labels per audio source.
 SOURCE_LABELS = {"app": "Them", "mic": "You"}
@@ -78,6 +82,7 @@ class LiveTranscriber:
         on_insight: Optional[Callable[[dict], None]] = None,
         stability_margin: float = DEFAULT_STABILITY_MARGIN,
         insight_interval: float = DEFAULT_INSIGHT_INTERVAL,
+        should_transcribe: Optional[Callable[[], bool]] = None,
     ):
         """
         Args:
@@ -110,6 +115,9 @@ class LiveTranscriber:
         self._on_insight = on_insight
         self._stability_margin = stability_margin
         self._insight_interval = insight_interval
+        # Returns False when the recording is under load and live
+        # transcription should skip a cycle (recording always wins).
+        self._should_transcribe = should_transcribe
 
         self._max_samples = int(buffer_seconds * sample_rate)
         self._buffer_lock = threading.Lock()
@@ -288,6 +296,17 @@ class LiveTranscriber:
             if self._stop_event.is_set():
                 break
 
+            # Backpressure: the live preview is best-effort and must never
+            # starve the audio WRITER. If the recording is falling behind
+            # (ring buffers backing up), skip this GPU cycle entirely so the
+            # writer threads get the CPU/GIL/GPU back.
+            if self._should_transcribe is not None:
+                try:
+                    if not self._should_transcribe():
+                        continue
+                except Exception:
+                    pass
+
             newly_committed: list[tuple[float, str, str]] = []
             with self._buffer_lock:
                 source_names = list(self._sources)
@@ -302,6 +321,11 @@ class LiveTranscriber:
             if newly_committed:
                 with self._committed_lock:
                     self._committed.extend(newly_committed)
+                    # Bound in-memory history (the full transcript is in the
+                    # live_transcript.txt file); keep the recent window for
+                    # the on-screen display.
+                    if len(self._committed) > _MAX_COMMITTED:
+                        del self._committed[:-_MAX_COMMITTED]
                 self._append_to_file(newly_committed)
 
             display = self._build_display_text()
@@ -408,7 +432,7 @@ class LiveTranscriber:
         state.provisional = " ".join(provisional)
         return committed
 
-    def _build_display_text(self, tail_entries: int = 25) -> str:
+    def _build_display_text(self, tail_entries: int = 60) -> str:
         """Merged display text: recent stable entries + provisional tails.
 
         Consecutive entries from the same source share one label, e.g.
