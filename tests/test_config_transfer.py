@@ -145,6 +145,40 @@ class TestExportConfig:
         assert "Gemini" in output
         assert "HuggingFace" in output
 
+    def test_export_prints_plaintext_warning(self, secrets_file, config_dir, tmp_path, capsys):
+        """Export must warn that the bundle holds plaintext keys."""
+        dest = str(tmp_path / "export.json")
+        with patch("meeting_recorder.config_transfer.SECRETS_FILE", secrets_file), \
+             patch("meeting_recorder.config_transfer.CONFIG_FILE", config_dir / "no.toml"), \
+             patch("meeting_recorder.config_transfer.CONFIG_DIR", config_dir), \
+             patch("meeting_recorder.config_transfer.TOKEN_FILE", config_dir / "nope.json"):
+            export_config(dest)
+
+        output = capsys.readouterr().out
+        assert "WARNING" in output
+        assert "PLAINTEXT" in output
+        assert "Delete" in output
+        # No token file => warning must not claim a token is included
+        assert "OAuth token" not in output.split("WARNING")[1].split("Copy this file")[0]
+
+    def test_export_warning_mentions_oauth_token_when_included(
+        self, secrets_file, config_dir, tmp_path, capsys
+    ):
+        token_file = config_dir / "google_token.json"
+        token_file.write_text(json.dumps({"refresh_token": "rt-123"}))
+        dest = str(tmp_path / "export.json")
+
+        with patch("meeting_recorder.config_transfer.SECRETS_FILE", secrets_file), \
+             patch("meeting_recorder.config_transfer.CONFIG_FILE", config_dir / "no.toml"), \
+             patch("meeting_recorder.config_transfer.CONFIG_DIR", config_dir), \
+             patch("meeting_recorder.config_transfer.TOKEN_FILE", token_file):
+            export_config(dest)
+
+        output = capsys.readouterr().out
+        assert "WARNING" in output
+        assert "PLAINTEXT" in output
+        assert "Google OAuth token" in output
+
 
 class TestImportConfig:
     def _make_v2_bundle(self, tmp_path, secrets, google_token=None):

@@ -61,19 +61,21 @@ Open a terminal (PowerShell or Git Bash) and run:
 
 ```bash
 cd ~/Downloads
-git clone https://github.com/bobbyni819/meeting_recorder.git
-cd meeting_recorder
+git clone https://github.com/bobbyni819/meeting-recorder.git
+cd meeting-recorder
 ```
 
 ---
 
 ## Step 5: Install PyTorch with CUDA
 
-PyTorch must be installed **before** the project dependencies because it needs the CUDA-specific build. The project uses CUDA 12.1 builds:
+PyTorch must be installed **before** the project dependencies because it needs the CUDA-specific build. Use the CUDA 12.8 builds — RTX 50-series (Blackwell) GPUs **require** cu128, and older GPUs (GTX 10-series and up) work with it too:
 
 ```bash
-pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
+
+> On an older GPU with an older driver you can use the CUDA 12.1 builds instead (`--index-url https://download.pytorch.org/whl/cu121`), but do NOT use cu121 with an RTX 50-series card — it lacks Blackwell support and CUDA will silently be unavailable.
 
 Verify CUDA is working:
 ```bash
@@ -88,27 +90,48 @@ Should print something like: `CUDA: True, GPU: NVIDIA GeForce RTX 3060 Ti`
 
 ## Step 6: Install the Project and Dependencies
 
-From the `meeting_recorder` directory:
+From the `meeting-recorder` directory:
+
+```bash
+# Recommended: everything the default config uses, in one command
+pip install -e ".[dev,local,cloud,gemini,gdrive,outlook]"
+```
+
+Or pick extras individually:
 
 ```bash
 # Core dependencies + local transcription (whisper, pyannote)
 pip install -e ".[local]"
 
+# Optional: Gemini-powered transcription + summaries (default config backend)
+pip install -e ".[gemini]"
+
 # Optional: Outlook calendar integration (auto-names recordings from calendar events)
 pip install -e ".[outlook]"
-
-# Optional: OpenAI-powered meeting summaries
-pip install -e ".[summary-openai]"
 
 # Optional: Google Drive upload
 pip install -e ".[gdrive]"
 
-# Optional: Gemini-powered transcription (Google AI)
-pip install -e ".[gemini]"
+# Optional: OpenAI Whisper API transcription / OpenAI summaries
+pip install -e ".[cloud]"          # or ".[summary-openai]" (same dependency)
 
-# Optional: All of the above in one command
-pip install -e ".[local,outlook,summary-openai,gdrive,gemini]"
+# Optional: Anthropic-powered summaries
+pip install -e ".[summary-anthropic]"
+
+# Optional: bundled ffmpeg for the decoupled video encoder (h264_nvenc/libx264);
+# screen recording falls back to cv2.VideoWriter without it
+pip install -e ".[video-encode]"
+
+# Optional: UIAutomation-based Zoom/Teams mute-state detection; mute sync
+# falls back to the keyboard-hook + registry paths without it
+pip install -e ".[uia]"
+
+# Test dependencies
+pip install -e ".[dev]"
 ```
+
+> The full list of extras lives in `pyproject.toml` under `[project.optional-dependencies]`:
+> `local`, `cloud`, `outlook`, `gdrive`, `summary-openai`, `summary-anthropic`, `gemini`, `video-encode`, `uia`, `dev`, `e2e`.
 
 The `[local]` extra installs:
 - `faster-whisper` — Whisper speech-to-text (CTranslate2, very fast on GPU)
@@ -123,7 +146,8 @@ The core package installs:
 - `mss` — Screen capture fallback
 - `pystray` — System tray icon
 - `keyboard` — Global hotkey support
-- `scipy` — Audio resampling (polyphase anti-aliasing filter)
+
+> `scipy` (audio resampling) is pulled in transitively by the `[local]` extra. If you skip `[local]` entirely, install it manually: `pip install scipy`.
 
 ---
 
@@ -132,104 +156,101 @@ The core package installs:
 Speaker diarization uses pyannote models that require accepting license agreements on HuggingFace:
 
 1. Create a HuggingFace account at https://huggingface.co/join
-2. Visit **each** of these model pages and click **"Agree and access repository"**:
+2. Visit **each** of these model pages and click **"Agree and access repository"**
+   (the pipeline loads `pyannote/speaker-diarization-3.1`, which pulls in the other two):
    - https://huggingface.co/pyannote/speaker-diarization-3.1
    - https://huggingface.co/pyannote/segmentation-3.0
-   - https://huggingface.co/pyannote/speaker-diarization-community-1 *(easy to miss!)*
+   - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM *(easy to miss!)*
 3. Create an access token:
    - Go to https://huggingface.co/settings/tokens
    - Click "New token" > name it anything > **Read** permission > Create
    - Copy the token (starts with `hf_...`)
 
-You'll paste this token into the config file in the next step.
+You'll paste this token into the secrets file in the next step.
 
-> **Common error**: `Cannot access gated repo for url...` means you missed one of the three model pages above. The community-1 model is the one people most often forget.
+> **Common error**: `Cannot access gated repo for url...` means you missed one of the three model pages above. The wespeaker embedding model is the one people most often forget.
 
 ---
 
-## Step 8: Create the Configuration File
+## Step 8: Configure Settings and API Keys
 
-Create the config directory and file:
+Configuration is **split into two files** so settings sync across machines but secrets never leave your computer:
+
+| File | Contents | Synced? |
+|---|---|---|
+| `config.toml` (repo root) | Non-secret settings: backends, model sizes, FPS, hotkeys, features | **Yes** — git-tracked; `git pull` keeps machines in sync |
+| `%USERPROFILE%\.meeting_recorder\secrets.toml` | API keys, tokens, machine-specific values (mic device, dashboard position) | **No** — local only, git-ignored |
+
+The non-secret settings need no setup: the repo's `config.toml` already came with the clone and has working defaults (Gemini transcription backend, `large-v3` for local Whisper, diarization on, 30 fps screen recording). Edit that file directly to change behavior.
+
+What you DO need to create is the secrets file.
+
+### Create secrets.toml
+
+Create the config directory (skip if it exists):
 
 ```bash
 mkdir %USERPROFILE%\.meeting_recorder
 ```
 
-Create `%USERPROFILE%\.meeting_recorder\config.toml` with a text editor (Notepad, VS Code, etc.):
+Create `%USERPROFILE%\.meeting_recorder\secrets.toml` with a text editor (Notepad, VS Code, etc.):
 
 ```toml
-[recording]
-output_dir = "~/MeetingRecordings"
-language = "en"
-user_name = "Your Name"            # Your name (used to label your mic audio in transcripts)
-live_transcription = false          # Set to true for real-time transcript in dashboard
-
-[audio]
-sample_rate = 16000
-channels = 1
-chunk_duration_ms = 30
-mic_device = ""                     # Leave empty for default mic
-
-[vad]
-threshold = 0.5
-min_speech_duration_ms = 250
-min_silence_duration_ms = 300
-
 [transcription]
-backend = "local"                   # "local", "cloud" (OpenAI API), or "gemini" (Google AI)
-model_size = "large-v3"             # Options: tiny, base, small, medium, large-v3
-device = "cuda"                     # "cuda" for GPU, "cpu" for CPU-only (much slower)
-compute_type = "float16"            # "float16" for GPU, "int8" for CPU
-openai_api_key = ""                 # Only needed if backend = "cloud"
-gemini_api_key = ""                 # Only needed if backend = "gemini"
-gemini_model = ""                   # Empty = default (gemini-2.5-flash)
+gemini_api_key = "YOUR_GEMINI_KEY"          # from https://aistudio.google.com/apikey
+openai_api_key = ""                         # only if backend = "cloud" (OpenAI Whisper API)
 
 [diarization]
-enabled = true
-huggingface_token = "hf_YOUR_TOKEN_HERE"   # Paste your HuggingFace token from Step 7
-min_speakers = 2
-max_speakers = 6
-
-[output]
-formats = ["json", "txt", "srt"]
-
-[hotkey]
-toggle_recording = "ctrl+shift+r"   # Start/stop recording
-toggle_mute = "ctrl+shift+u"        # Toggle your mic mute
-toggle_dashboard = "ctrl+shift+d"   # Show/hide the dashboard overlay
-
-[screen_recording]
-enabled = true
-fps = 30.0                          # 15-30 recommended; higher = larger files
-
-[outlook]
-enabled = false                     # Set to true if you have Outlook and installed [outlook] extra
-buffer_minutes = 10
-
-[google_drive]
-enabled = false
-credentials_path = "~/.config/google/client_secret.json"
-folder_id = ""
+huggingface_token = "hf_YOUR_TOKEN_HERE"    # the Read token from Step 7
 
 [summary]
-enabled = false                     # Set to true and provide API key for auto-summaries
-provider = "openai"                 # "openai", "anthropic", or "gemini"
-api_key = ""                        # Your OpenAI API key (sk-...)
-model = "gpt-4o-mini"
-max_transcript_tokens = 0
-
-[dashboard]
-enabled = true
-auto_show = true                    # Automatically show dashboard when recording starts
-auto_hide = true                    # Automatically hide when recording stops
-opacity = 0.92
-position = "top-right"
-start_collapsed = false
-show_transcript = true
-show_screen_preview = true          # Live thumbnail of captured window
+api_key = ""                                # leave empty: summaries reuse the Gemini key above
 ```
 
-> **Tip**: The config file is auto-created on first run from bundled defaults if it doesn't already exist. You only need to create it manually if you want to customize settings before the first launch.
+### Where the keys come from
+
+- **Gemini API key** (free tier works): go to https://aistudio.google.com/apikey and click "Create API key". **One Gemini key powers both transcription and summaries** — the default config uses `backend = "gemini"` and `provider = "gemini"`, and the summary step falls back to `transcription.gemini_api_key` when `[summary] api_key` is empty.
+- **HuggingFace token**: created in Step 7 (Read permission). Only needed for speaker diarization.
+- **OpenAI key**: only if you switch `backend = "cloud"` or `provider = "openai"` in the repo `config.toml`. Not needed for the default setup.
+
+> **Tip**: `secrets.toml` is also written automatically when you save API keys from the app's Settings window — creating it by hand is just the fastest path on a fresh machine. If you're upgrading an old install that used a combined `%USERPROFILE%\.meeting_recorder\config.toml`, the app auto-migrates it into the split layout on first run.
+
+Verify the keys are picked up:
+
+```bash
+python -m meeting_recorder diagnose
+```
+
+The **Secrets** section reports each key as `SET` or `EMPTY` (key values are never printed).
+
+---
+
+## Migrating from another machine
+
+Already have Meeting Recorder configured on another computer? Don't re-create the keys — transfer them.
+
+**On the old machine:**
+
+```bash
+python -m meeting_recorder export-config
+```
+
+This writes `~/meeting_recorder_config.json` containing your API keys **in plaintext**, plus a live Google OAuth token if you've authorized Drive upload there.
+
+> **Security**: transfer the file privately (USB drive, direct copy between machines) — never email it, upload it, or commit it to git. Delete it from **both** machines after importing.
+
+**On the new machine** (after Steps 1–7):
+
+```bash
+python -m meeting_recorder import-config meeting_recorder_config.json
+python -m meeting_recorder diagnose
+```
+
+Notes:
+- Machine-specific fields (mic device, dashboard position) are **reset automatically** on import — they don't carry over, and the new machine picks its own defaults.
+- Non-secret settings are not in the bundle; they arrive with `git pull` of the repo.
+- Double-check `transcription.device` in the repo `config.toml` matches the new machine's hardware: `"cuda"` with an NVIDIA GPU, `"cpu"` otherwise (`compute_type = "int8"` for CPU).
+- If the bundle included the Google OAuth token, Drive upload works immediately — no browser re-authorization.
 
 ---
 
@@ -247,7 +268,7 @@ The first time you run the app, it will download several models (this only happe
 Run in a terminal to see download progress:
 
 ```bash
-cd ~/Downloads/meeting_recorder
+cd ~/Downloads/meeting-recorder
 python -m meeting_recorder
 ```
 
@@ -257,9 +278,9 @@ The app will:
 3. Show a system tray icon (a small icon near the clock)
 4. Begin scanning for Zoom, Teams, or Webex meetings (if `auto_start = true`)
 
-> **Auto-recording**: With `auto_start = true` (the default), the app scans for meeting processes every 5 seconds and starts recording automatically when an active meeting is detected. You can toggle this from the tray menu ("Auto-Record Meetings") or in Settings. You can also always start manually with `Ctrl+Shift+R`.
+> **Auto-recording**: Auto-record is **off by default** (`recording.auto_start = false` in the repo `config.toml`). When enabled — via the tray menu ("Auto-Record Meetings"), Settings, or the config file — the app scans for meeting processes every 5 seconds and starts recording automatically when an active meeting is detected. You can always start manually with `Ctrl+Shift+R`.
 
-> **Diagnostic check**: Run `python -m meeting_recorder diagnose` to verify your setup — it checks for GPU availability, model downloads, microphone access, and config validity.
+> **Diagnostic check**: Run `python -m meeting_recorder diagnose` to verify your setup — it checks config validity, API key presence (SET/EMPTY, never values), GPU availability, model downloads, microphone access, and screen capture.
 
 ---
 
@@ -298,8 +319,11 @@ pythonw launch.pyw
 | Hotkey | Action |
 |---|---|
 | `Ctrl+Shift+R` | Start/stop recording manually |
+| `Ctrl+Shift+P` | Pause/resume recording |
 | `Ctrl+Shift+U` | Toggle your mic mute |
 | `Ctrl+Shift+D` | Show/hide the dashboard overlay |
+
+All four are configurable in the `[hotkey]` section of the repo `config.toml` or in Settings > Hotkeys.
 
 ### Meeting App Mute Sync
 
@@ -341,7 +365,7 @@ You can record any application — not just Zoom, Teams, or Webex:
 ### "Cannot access gated repo" during first run
 
 - You missed accepting a model license in Step 7
-- Most commonly it's the `pyannote/speaker-diarization-community-1` model
+- Most commonly it's the `pyannote/wespeaker-voxceleb-resnet34-LM` embedding model
 - Go to each URL, click "Agree and access repository", then retry
 
 ### "AudioDecoder is not defined" or pyannote errors
@@ -386,7 +410,9 @@ You can record any application — not just Zoom, Teams, or Webex:
 
 | Item | Path |
 |---|---|
-| Config file | `%USERPROFILE%\.meeting_recorder\config.toml` |
+| Settings (non-secret, git-tracked) | `config.toml` in the repo root |
+| Secrets (API keys, tokens — local only) | `%USERPROFILE%\.meeting_recorder\secrets.toml` |
+| Legacy combined config | `%USERPROFILE%\.meeting_recorder\config.toml` (auto-migrated to the split layout on first run) |
 | Recordings | `%USERPROFILE%\MeetingRecordings\` |
 | Log file | `meeting_recorder.log` (in working directory) |
 | Whisper model cache | `%USERPROFILE%\.cache\huggingface\hub\` |
@@ -398,10 +424,12 @@ You can record any application — not just Zoom, Teams, or Webex:
 ## Updating
 
 ```bash
-cd ~/Downloads/meeting_recorder
+cd ~/Downloads/meeting-recorder
 git pull
-pip install -e ".[local]"
+pip install -e ".[dev,local,cloud,gemini,gdrive,outlook]"
 ```
+
+`git pull` also brings the latest non-secret settings (`config.toml`) — your `secrets.toml` is untouched.
 
 ---
 

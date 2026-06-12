@@ -98,6 +98,18 @@ def export_config(dest: str | None = None) -> int:
         json.dump(bundle, f, indent=2)
 
     print(f"\nSecrets exported to: {dest_path}")
+
+    # Security warning: the bundle is deliberately unencrypted for portability,
+    # so make the exposure explicit every time.
+    if "google_token" in bundle:
+        contents = "your API keys in PLAINTEXT and a live Google OAuth token"
+    else:
+        contents = "your API keys in PLAINTEXT"
+    print(f"\nWARNING: this file contains {contents}.")
+    print("  - Transfer it privately (USB drive, direct copy) — never email,")
+    print("    upload, or commit it to git.")
+    print("  - Delete the file from BOTH machines after importing.")
+
     print(f"\nCopy this file to your other machine(s) and run:")
     print(f"  python -m meeting_recorder import-config {dest_path.name}")
 

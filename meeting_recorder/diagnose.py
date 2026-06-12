@@ -16,10 +16,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 logger = logging.getLogger(__name__)
 
 # ANSI color codes (used only when terminal supports it)
 _SUPPORTS_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+# Secret keys reported by the secrets check as SET/EMPTY.
+# Values are NEVER printed — only presence. (section, key, label)
+_SECRET_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("transcription", "gemini_api_key", "Gemini API key"),
+    ("transcription", "openai_api_key", "OpenAI API key"),
+    ("diarization", "huggingface_token", "HuggingFace token"),
+    ("summary", "api_key", "Summary API key"),
+)
 
 
 @dataclass
@@ -49,6 +63,7 @@ def run_diagnostics_structured() -> list[CheckCategory]:
     """Run all diagnostic checks and return structured results."""
     categories = []
     categories.append(_check_config_structured())
+    categories.append(_check_secrets_structured())
     categories.append(_check_gpu_structured())
     categories.append(_check_vad_structured())
     categories.append(_check_meeting_processes_structured())
@@ -91,25 +106,28 @@ def run_diagnostics() -> int:
     # 1. Config
     failures += _check_config()
 
-    # 2. GPU / CUDA
+    # 2. Secrets (API key presence, no values)
+    failures += _check_secrets()
+
+    # 3. GPU / CUDA
     failures += _check_gpu()
 
-    # 3. VAD model
+    # 4. VAD model
     failures += _check_vad()
 
-    # 4. Meeting process scan
+    # 5. Meeting process scan
     failures += _check_meeting_processes()
 
-    # 5. App audio probe
+    # 6. App audio probe
     failures += _check_app_audio()
 
-    # 6. Mic probe
+    # 7. Mic probe
     failures += _check_mic()
 
-    # 7. API connectivity
+    # 8. API connectivity
     failures += _check_api()
 
-    # 8. Screen capture probe
+    # 9. Screen capture probe
     failures += _check_screen_capture()
 
     print()
@@ -178,6 +196,46 @@ def _check_config() -> int:
     return failures
 
 
+def _check_secrets() -> int:
+    """Report secrets.toml presence and per-key SET/EMPTY status.
+
+    Key values are never printed — only whether each key is set.
+    """
+    print(_header("Secrets"))
+    failures = 0
+    try:
+        from meeting_recorder.config import SECRETS_FILE
+
+        if not SECRETS_FILE.exists():
+            print(_warn(
+                f"No secrets file at {SECRETS_FILE} — API keys are not set up "
+                "on this machine. See 'Migrating from another machine' in "
+                "SETUP.md, or run: python -m meeting_recorder import-config <file>"
+            ))
+            return failures
+
+        print(_ok(f"Secrets file found: {SECRETS_FILE}"))
+        with open(SECRETS_FILE, "rb") as f:
+            data = tomllib.load(f)
+
+        any_set = False
+        for section, key, label in _SECRET_KEYS:
+            is_set = bool(data.get(section, {}).get(key))
+            any_set = any_set or is_set
+            print(_ok(f"{label} ([{section}] {key}): {'SET' if is_set else 'EMPTY'}"))
+
+        if not any_set:
+            print(_warn(
+                "All known secrets are EMPTY — cloud transcription, diarization "
+                "and summaries won't work until keys are added (see SETUP.md Step 8)"
+            ))
+    except Exception as e:
+        print(_fail(f"Secrets check failed: {e}"))
+        failures += 1
+
+    return failures
+
+
 def _check_gpu() -> int:
     """Check GPU availability and CUDA support."""
     print(_header("GPU / CUDA"))
@@ -187,13 +245,13 @@ def _check_gpu() -> int:
 
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
-            vram = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
             print(_ok(f"CUDA available: {name} ({vram:.1f} GB VRAM)"))
         else:
             print(_warn(
                 "CUDA not available — transcription will use CPU (much slower). "
                 "Install PyTorch with CUDA: pip install torch --index-url "
-                "https://download.pytorch.org/whl/cu121"
+                "https://download.pytorch.org/whl/cu128"
             ))
     except ImportError:
         print(_fail("PyTorch not installed"))
@@ -344,6 +402,16 @@ def _check_mic() -> int:
     return failures
 
 
+def _is_rate_limit_error(e: Exception) -> bool:
+    """True for quota/429 errors — the key was accepted, the quota wasn't.
+
+    On the Gemini free tier 429/RESOURCE_EXHAUSTED is routine, so it must
+    not fail diagnostics (an invalid key raises 400/403 instead).
+    """
+    text = str(e)
+    return "RESOURCE_EXHAUSTED" in text or "429" in text
+
+
 def _check_api() -> int:
     """Check API connectivity for configured providers."""
     print(_header("API Connectivity"))
@@ -370,8 +438,11 @@ def _check_api() -> int:
                 else:
                     print(_warn("Gemini API: empty response"))
             except Exception as e:
-                print(_fail(f"Gemini API: {e}"))
-                failures += 1
+                if _is_rate_limit_error(e):
+                    print(_warn("Gemini API: rate-limited (free-tier quota) — key accepted, retry later"))
+                else:
+                    print(_fail(f"Gemini API: {e}"))
+                    failures += 1
         else:
             print(_ok("Gemini API: not configured (skipped)"))
 
@@ -504,13 +575,51 @@ def _check_config_structured() -> CheckCategory:
     return cat
 
 
+def _check_secrets_structured() -> CheckCategory:
+    """Secrets.toml presence and per-key SET/EMPTY status (values never included)."""
+    cat = CheckCategory(name="Secrets")
+    try:
+        from meeting_recorder.config import SECRETS_FILE
+
+        if not SECRETS_FILE.exists():
+            cat.results.append(CheckResult(
+                "warn",
+                f"No secrets file at {SECRETS_FILE} — API keys are not set up "
+                "on this machine. See 'Migrating from another machine' in "
+                "SETUP.md, or run: python -m meeting_recorder import-config <file>",
+            ))
+            return cat
+
+        cat.results.append(CheckResult("ok", f"Secrets file found: {SECRETS_FILE}"))
+        with open(SECRETS_FILE, "rb") as f:
+            data = tomllib.load(f)
+
+        any_set = False
+        for section, key, label in _SECRET_KEYS:
+            is_set = bool(data.get(section, {}).get(key))
+            any_set = any_set or is_set
+            cat.results.append(CheckResult(
+                "ok", f"{label} ([{section}] {key}): {'SET' if is_set else 'EMPTY'}"
+            ))
+
+        if not any_set:
+            cat.results.append(CheckResult(
+                "warn",
+                "All known secrets are EMPTY — cloud transcription, diarization "
+                "and summaries won't work until keys are added (see SETUP.md Step 8)",
+            ))
+    except Exception as e:
+        cat.results.append(CheckResult("fail", f"Secrets check failed: {e}"))
+    return cat
+
+
 def _check_gpu_structured() -> CheckCategory:
     cat = CheckCategory(name="GPU / CUDA")
     try:
         import torch
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
-            vram = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
             cat.results.append(CheckResult("ok", f"CUDA available: {name} ({vram:.1f} GB VRAM)"))
         else:
             cat.results.append(CheckResult("warn", "CUDA not available — transcription will use CPU (much slower)"))
@@ -652,7 +761,12 @@ def _check_api_structured() -> CheckCategory:
                 else:
                     cat.results.append(CheckResult("warn", "Gemini API: empty response"))
             except Exception as e:
-                cat.results.append(CheckResult("fail", f"Gemini API: {e}"))
+                if _is_rate_limit_error(e):
+                    cat.results.append(CheckResult(
+                        "warn", "Gemini API: rate-limited (free-tier quota) — key accepted, retry later"
+                    ))
+                else:
+                    cat.results.append(CheckResult("fail", f"Gemini API: {e}"))
         else:
             cat.results.append(CheckResult("ok", "Gemini API: not configured (skipped)"))
 
