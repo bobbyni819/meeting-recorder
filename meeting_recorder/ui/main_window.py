@@ -2505,6 +2505,21 @@ class MainWindow:
             play_btn.bind("<Enter>", lambda e: play_btn.configure(fg=TEXT_COLOR))
             play_btn.bind("<Leave>", lambda e: play_btn.configure(fg=TEXT_DIM))
 
+        # Play video button (if the screen recording exists). Without this the
+        # video is only reachable via Open Folder; users assume it didn't record.
+        video_file = rec_path / "screen.mp4"
+        if video_file.exists() and video_file.stat().st_size > 0:
+            video_btn = tk.Label(
+                top_bar, text="\U0001f3ac  Video", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BG_HEADER, cursor="hand2", padx=8,
+            )
+            video_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+            video_btn.bind("<Button-1>", lambda e, f=video_file: (
+                threading.Thread(target=lambda: os.startfile(str(f)), daemon=True).start()
+            ))
+            video_btn.bind("<Enter>", lambda e: video_btn.configure(fg=TEXT_COLOR))
+            video_btn.bind("<Leave>", lambda e: video_btn.configure(fg=TEXT_DIM))
+
         # Google Drive button (if uploaded)
         drive_id = meta.get("google_drive_folder_id", "")
         if drive_id:
