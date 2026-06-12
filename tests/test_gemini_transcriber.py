@@ -84,6 +84,21 @@ class TestGeminiParse:
         assert segments[2].speaker == "Alice"
         assert segments[2].text == "Let's get started."
 
+    def test_spaced_bracket_format(self):
+        """Gemini sometimes emits '[ MM:SS]' with a leading space — must still
+        split into per-turn segments, not collapse into one catch-all."""
+        raw = (
+            "[ 00:00] Speaker 1: I'm familiar with net logo for ABM.\n"
+            "[ 01:10] Speaker 2: Yeah, that sounds good.\n"
+            "[ 02:46] Speaker 1: Oh, okay.\n"
+        )
+        segments = self.transcriber._parse(raw)
+        assert len(segments) == 3
+        assert segments[0].start == 0.0
+        assert segments[0].speaker == "Speaker 1"
+        assert segments[1].start == 70.0
+        assert segments[2].start == 166.0
+
     def test_h_mm_ss_format(self):
         raw = (
             "[1:00:00] Speaker 1: We're at the one hour mark.\n"

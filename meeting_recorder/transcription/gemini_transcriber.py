@@ -517,9 +517,11 @@ class GeminiTranscriber:
         in particular the final segment, whose end would otherwise be a
         fabricated ``start + 60`` placeholder.
         """
-        # Matches both [MM:SS] and [H:MM:SS]
+        # Matches both [MM:SS] and [H:MM:SS]. \s* inside the brackets tolerates
+        # Gemini emitting "[ 00:00]" (a leading space) — without it NO lines
+        # match and the whole transcript collapses into one catch-all segment.
         pattern = re.compile(
-            r"^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\s+(.+?):\s+(.+)$"
+            r"^\[\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*\]\s+(.+?):\s+(.+)$"
         )
 
         segments: list[TranscriptSegment] = []
