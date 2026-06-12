@@ -6,6 +6,7 @@ import io
 import threading
 import time
 import wave
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -374,3 +375,182 @@ class TestTranscriptionWithMockModel:
 
         # Model should not have been called since audio was too short
         mock_model.transcribe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Multi-source accumulation (new behavior)
+# ---------------------------------------------------------------------------
+
+def _make_timed_segment(text: str, start: float, end: float):
+    seg = MagicMock()
+    seg.text = text
+    seg.start = start
+    seg.end = end
+    return seg
+
+
+class TestMultiSourceAccumulation:
+    """Stable text accumulates across windows with speaker labels."""
+
+    def _transcriber(self, **kwargs):
+        return LiveTranscriber(
+            buffer_seconds=10.0,
+            sample_rate=16000,
+            stability_margin=3.0,
+            **kwargs,
+        )
+
+    def _set_model(self, lt, segments_by_call):
+        """Inject a model whose transcribe() returns successive segment lists."""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = [
+            (iter(segs), MagicMock()) for segs in segments_by_call
+        ]
+        lt._model = mock_model
+        return mock_model
+
+    def test_stable_segment_commits_once(self):
+        """A segment ending before the stability horizon commits exactly once."""
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="app")  # 8s fed
+
+        # Window covers 0-8s; horizon = 8 - 3 = 5s. Segment ends at 4s.
+        self._set_model(lt, [[_make_timed_segment("hello world", 1.0, 4.0)]])
+        committed = lt._transcribe_source("app")
+
+        assert len(committed) == 1
+        assert committed[0][1] == "app"
+        assert committed[0][2] == "hello world"
+        assert lt._sources["app"].watermark == pytest.approx(4.0)
+
+        # Same audio re-transcribed: already-committed segment is skipped.
+        self._set_model(lt, [[_make_timed_segment("hello world", 1.0, 4.0)]])
+        lt.feed_audio(_make_audio_bytes(160), source="app")  # tiny new chunk
+        committed2 = lt._transcribe_source("app")
+        assert committed2 == []
+
+    def test_recent_segment_stays_provisional(self):
+        """A segment ending after the horizon is provisional, not committed."""
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="app")
+
+        # Horizon = 5s; segment ends at 7s -> provisional.
+        self._set_model(lt, [[_make_timed_segment("still talking", 6.0, 7.0)]])
+        committed = lt._transcribe_source("app")
+
+        assert committed == []
+        assert lt._sources["app"].provisional == "still talking"
+
+    def test_sources_are_independent(self):
+        """app and mic keep separate buffers, watermarks, and labels."""
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="app")
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="mic")
+
+        assert lt._sources["app"].buffer_samples == 16000 * 8
+        assert lt._sources["mic"].buffer_samples == 16000 * 8
+
+        self._set_model(lt, [[_make_timed_segment("from them", 0.0, 2.0)]])
+        lt._committed.extend(lt._transcribe_source("app"))
+        self._set_model(lt, [[_make_timed_segment("from me", 2.0, 4.0)]])
+        lt._committed.extend(lt._transcribe_source("mic"))
+
+        display = lt._build_display_text()
+        assert "[Them] from them" in display
+        assert "[You] from me" in display
+        assert lt.accumulated_text == "from them from me"
+
+    def test_single_source_display_has_no_labels(self):
+        """With only app audio, the preview shows plain unlabelled text."""
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="app")
+        self._set_model(lt, [[_make_timed_segment("just them", 0.0, 2.0)]])
+        lt._committed.extend(lt._transcribe_source("app"))
+
+        assert lt._build_display_text() == "just them"
+
+    def test_silent_source_skips_model_call(self):
+        """A source with no new audio since the last pass is not re-transcribed."""
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(16000 * 8), source="app")
+
+        model = self._set_model(lt, [[], []])
+        lt._transcribe_source("app")
+        assert model.transcribe.call_count == 1
+
+        # No new audio fed: second pass must skip the model entirely.
+        lt._transcribe_source("app")
+        assert model.transcribe.call_count == 1
+
+    def test_committed_lines_written_to_file(self, tmp_path):
+        """Stable entries append to live_transcript.txt with timestamps."""
+        out = tmp_path / "live_transcript.txt"
+        lt = self._transcriber(output_path=out)
+        lt._append_to_file([(65.0, "mic", "hello"), (2.0, "app", "hi there")])
+
+        content = out.read_text(encoding="utf-8")
+        # Entries are written in chronological order
+        assert content == "[00:02] Them: hi there\n[01:05] You: hello\n"
+
+    def test_file_write_failure_is_non_fatal(self):
+        """An unwritable path disables the file but keeps the preview alive."""
+        lt = self._transcriber(
+            output_path=Path("Z:/nonexistent-drive/live.txt"),
+        )
+        lt._append_to_file([(1.0, "app", "text")])
+        assert lt._file_write_failed is True
+        # Second call is a silent no-op
+        lt._append_to_file([(2.0, "app", "more")])
+
+    def test_clear_buffer_resets_all_sources(self):
+        lt = self._transcriber()
+        lt.feed_audio(_make_audio_bytes(1000), source="app")
+        lt.feed_audio(_make_audio_bytes(1000), source="mic")
+        lt._committed.append((1.0, "app", "old"))
+
+        lt.clear_buffer()
+
+        assert lt._sources["app"].buffer_samples == 0
+        assert lt._sources["mic"].buffer_samples == 0
+        assert lt.accumulated_text == ""
+
+
+# ---------------------------------------------------------------------------
+# Live insights (topic + watched keywords)
+# ---------------------------------------------------------------------------
+
+class TestLiveInsights:
+    def test_topic_detected_from_accumulated_text(self):
+        events = []
+        lt = LiveTranscriber(on_insight=events.append)
+        lt._committed = [
+            (0.0, "app", "we need to deploy the api to the server"),
+            (5.0, "app", "there is a bug in the database pipeline"),
+        ]
+
+        lt._detect_topic()
+
+        assert events == [{"type": "topic", "topic": "engineering"}]
+        assert lt.current_topic == "engineering"
+        # Unchanged topic does not re-fire
+        lt._detect_topic()
+        assert len(events) == 1
+
+    def test_watched_keyword_alerts_once(self):
+        events = []
+        lt = LiveTranscriber(on_insight=events.append)
+        with patch(
+            "meeting_recorder.storage.keyword_alerts.load_watched_keywords",
+            return_value=["budget"],
+        ):
+            lt._check_watched_keywords("we discussed the budget today")
+            lt._check_watched_keywords("budget came up again")
+
+        assert len(events) == 1
+        assert events[0]["type"] == "keyword"
+        assert events[0]["keyword"] == "budget"
+
+    def test_insights_disabled_without_callback(self):
+        lt = LiveTranscriber()  # no on_insight
+        # Must be a no-op, not an error
+        lt._maybe_run_insights([(0.0, "app", "budget budget budget")])

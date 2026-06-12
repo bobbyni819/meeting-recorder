@@ -140,6 +140,8 @@ class CaptureManager:
         on_audio_levels: Optional[callable] = None,
         on_live_transcript: Optional[callable] = None,
         live_transcription_enabled: bool = False,
+        live_transcript_mic: bool = True,
+        on_live_insight: Optional[callable] = None,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
         on_health_warning: Optional[callable] = None,
@@ -174,6 +176,8 @@ class CaptureManager:
         self._live_transcriber = None
         self._on_live_transcript = on_live_transcript
         self._live_transcription_enabled = live_transcription_enabled
+        self._live_transcript_mic = live_transcript_mic
+        self._on_live_insight = on_live_insight
 
         # VAD (accept pre-loaded instance to avoid loading in background threads)
         self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
@@ -351,6 +355,8 @@ class CaptureManager:
 
                 lt = LiveTranscriber(
                     on_transcript=self._on_live_transcript,
+                    output_path=self.output_dir / "live_transcript.txt",
+                    on_insight=self._on_live_insight,
                 )
                 lt.start()
                 with self._transcriber_lock:
@@ -447,26 +453,27 @@ class CaptureManager:
             while not self._stop_event.is_set():
                 chunks = buffer.get_all()
                 if chunks:
+                    feeds_transcriber = is_app or self._live_transcript_mic
                     # When paused, drain the buffer but don't write to disk.
                     # Still feed the live transcriber so it stays time-aligned.
                     if self._paused:
-                        if is_app:
+                        if feeds_transcriber:
                             with self._transcriber_lock:
                                 lt = self._live_transcriber
                             if lt is not None:
                                 for chunk in chunks:
-                                    lt.feed_audio(chunk)
+                                    lt.feed_audio(chunk, source=label)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
                     else:
                         for chunk in chunks:
                             wf.writeframes(chunk)
                             frames_since_flush += len(chunk) // 2
                             level_update(chunk)
-                            if is_app:
+                            if feeds_transcriber:
                                 with self._transcriber_lock:
                                     lt = self._live_transcriber
                                 if lt is not None:
-                                    lt.feed_audio(chunk)
+                                    lt.feed_audio(chunk, source=label)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
 
                     # Periodic WAV header flush: patch the RIFF/data chunk

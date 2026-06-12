@@ -89,6 +89,9 @@ class RecordingConfig:
     language: str = "en"
     user_name: str = "User"
     live_transcription: bool = False
+    # Feed the user's mic into the live preview too (labelled [You]);
+    # app audio (other participants) is always fed when live preview is on.
+    live_transcript_mic: bool = True
     auto_start: bool = False  # auto-detect meetings and start recording
 
 

@@ -501,6 +501,8 @@ class MeetingRecorderApp:
             on_audio_levels=self._on_audio_levels,
             on_live_transcript=self._on_live_transcript,
             live_transcription_enabled=self.config.recording.live_transcription,
+            live_transcript_mic=self.config.recording.live_transcript_mic,
+            on_live_insight=self._on_live_insight,
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
             on_health_warning=self._on_health_warning,
@@ -1117,6 +1119,31 @@ class MeetingRecorderApp:
             if self._dashboard and self._dashboard.is_visible:
                 self._dashboard.update_transcript(text)
             self._main_window.update_transcript(text)
+
+    def _on_live_insight(self, event: dict) -> None:
+        """Handle live concept-extraction events (topic shifts, watchlist hits).
+
+        Fired from the live transcriber thread; keyword hits matter most —
+        the watchlist is the user's own "ping me when this comes up" list.
+        """
+        try:
+            kind = event.get("type")
+            if kind == "keyword":
+                keyword = event.get("keyword", "")
+                logger.info("Live keyword alert: %r mentioned", keyword)
+                notifications.notify_info(f'Watched keyword mentioned: "{keyword}"')
+                self._main_window.add_notification(
+                    "info", f'Watched keyword mentioned live: "{keyword}"',
+                    source="live",
+                )
+            elif kind == "topic":
+                topic = event.get("topic", "")
+                logger.info("Live topic detected: %s", topic)
+                self._main_window.add_notification(
+                    "info", f"Discussion topic: {topic}", source="live",
+                )
+        except Exception:
+            logger.exception("Live insight handling failed")
 
     def _on_mute_changed(self, is_muted: bool) -> None:
         """Handle mute state changes from MuteSync."""

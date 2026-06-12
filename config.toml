@@ -2,7 +2,8 @@
 output_dir = "~/MeetingRecordings"
 language = "en"
 user_name = "User"
-live_transcription = false  # real-time transcription preview during recording (uses tiny model on CPU)
+live_transcription = true  # real-time transcription preview during recording (uses tiny model on CPU)
+live_transcript_mic = true  # also feed your mic into the live preview (labelled [You])
 auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
 
 [audio]
