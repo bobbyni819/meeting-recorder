@@ -147,6 +147,7 @@ class CaptureManager:
         live_transcription_device: str = "cpu",
         live_transcription_compute_type: str = "int8",
         live_transcription_interval: float = 3.0,
+        start_muted_default: bool = True,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
         on_health_warning: Optional[callable] = None,
@@ -202,8 +203,16 @@ class CaptureManager:
         if app_key and process_name:
             target_pids = get_all_pids_for_process(process_name)
             if target_pids:
-                detected = detect_initial_mute_state(pid)
-                start_muted = detected if detected is not None else True
+                if start_muted_default:
+                    # Always start MUTED: users typically join meetings muted,
+                    # and starting muted means the recorder never captures the
+                    # room before the user actively unmutes. Auto-detection
+                    # (UIA poller) unmutes within ~1.5s if they are in fact
+                    # already unmuted with the meeting toolbar visible.
+                    start_muted = True
+                else:
+                    detected = detect_initial_mute_state(pid)
+                    start_muted = detected if detected is not None else True
                 self._mute_sync = MuteSync(
                     app_key=app_key,
                     target_pids=target_pids,

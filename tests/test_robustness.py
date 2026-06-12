@@ -181,6 +181,55 @@ class TestCaptureManagerCallbackSafety:
             mgr._monitor_process()
 
 
+class TestStartMutedDefault:
+    """The recorder starts muted by default (users usually join muted)."""
+
+    def _make(self, start_muted_default, detected):
+        from meeting_recorder.audio.capture_manager import CaptureManager
+
+        with (
+            mock.patch("meeting_recorder.audio.capture_manager.AppAudioCapture"),
+            mock.patch("meeting_recorder.audio.capture_manager.MicAudioCapture"),
+            mock.patch("meeting_recorder.audio.capture_manager.VoiceActivityDetector"),
+            mock.patch("meeting_recorder.audio.capture_manager.AudioLevelMonitor"),
+            mock.patch(
+                "meeting_recorder.audio.capture_manager.get_all_pids_for_process",
+                return_value={100},
+            ),
+            mock.patch(
+                "meeting_recorder.audio.capture_manager.detect_initial_mute_state",
+                return_value=detected,
+            ),
+            mock.patch(
+                "meeting_recorder.audio.capture_manager.MuteSync"
+            ) as MockMuteSync,
+        ):
+            CaptureManager(
+                pid=100,
+                output_dir=Path("/tmp/test"),
+                screen_recording_enabled=False,
+                process_name="ms-teams.exe",
+                app_key="teams",
+                start_muted_default=start_muted_default,
+            )
+        return MockMuteSync
+
+    def test_forces_muted_even_when_detected_unmuted(self):
+        """start_muted_default=True overrides a detected 'unmuted' at join."""
+        MockMuteSync = self._make(start_muted_default=True, detected=False)
+        assert MockMuteSync.call_args.kwargs["start_muted"] is True
+
+    def test_uses_detection_when_default_off(self):
+        """With the default off, a detected 'unmuted' is honored."""
+        MockMuteSync = self._make(start_muted_default=False, detected=False)
+        assert MockMuteSync.call_args.kwargs["start_muted"] is False
+
+    def test_muted_when_detection_inconclusive(self):
+        """No detection -> still muted (the safe default), default off."""
+        MockMuteSync = self._make(start_muted_default=False, detected=None)
+        assert MockMuteSync.call_args.kwargs["start_muted"] is True
+
+
 # ---------------------------------------------------------------------------
 # Pipeline error handling
 # ---------------------------------------------------------------------------

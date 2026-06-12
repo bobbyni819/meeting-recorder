@@ -104,6 +104,11 @@ class RecordingConfig:
     # default: re-transcription hits the (often free-tier) backend and can
     # exhaust the daily quota — reprocess those manually when ready.
     auto_retry_full_reprocess: bool = False
+    # Start every recording with the mic MUTED (recording-only), since users
+    # usually join meetings muted. Auto-detection unmutes within ~1.5s if the
+    # meeting app shows you are actually unmuted. Prevents capturing the room
+    # before you actively speak.
+    start_muted: bool = True
     # Rename the recording folder from transcript content after processing,
     # disambiguating between meetings booked in the same slot via the
     # calendar. Only the folder moves; files inside are untouched.
