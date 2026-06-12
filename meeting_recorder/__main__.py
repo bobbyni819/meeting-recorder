@@ -25,9 +25,26 @@ def _fix_stdio() -> None:
         sys.stdin = open(os.devnull, "r")
 
 
+def _set_app_user_model_id() -> None:
+    """Give Windows an explicit app identity so the taskbar shows OUR icon.
+
+    Without this, a pythonw-hosted app inherits Python's taskbar icon and
+    grouping. Harmless no-op off Windows or if the call is unavailable.
+    """
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "vaultlab.meeting-recorder"
+        )
+    except Exception:
+        pass
+
+
 def main() -> None:
     """Main entry point for Meeting Recorder."""
     _fix_stdio()
+    _set_app_user_model_id()
 
     # Handle subcommands before full app startup
     if len(sys.argv) > 1:
