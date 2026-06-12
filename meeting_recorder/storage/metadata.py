@@ -51,6 +51,10 @@ class RecordingMetadata:
     has_summary: bool = False
     summary_provider: str = ""
     summary_model: str = ""
+    # Tail-step failure flags: set when a non-fatal post-processing step
+    # fails so the startup retry sweep can heal the recording later.
+    summary_failed: bool = False
+    upload_pending: bool = False
     # Quality scores (computed during post-processing)
     quality_scores: dict = field(default_factory=dict)
     # User-defined tags

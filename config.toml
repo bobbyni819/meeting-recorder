@@ -5,6 +5,7 @@ user_name = "User"
 live_transcription = true  # real-time transcription preview during recording (uses tiny model on CPU)
 live_transcript_mic = true  # also feed your mic into the live preview (labelled [You])
 auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
+auto_retry_failed = true  # heal failed/stuck recordings at startup (summary, upload, transcription)
 
 [audio]
 sample_rate = 16000
@@ -58,7 +59,7 @@ folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
 enabled = true         # generate AI summary after transcription
 provider = "gemini"    # "openai", "anthropic", or "gemini"
 api_key = ""
-model = "gemini-2.0-flash"  # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
+model = "gemini-2.5-flash"  # gemini-2.0-flash free tier was zeroed (429 limit: 0) — keep in sync with transcription model
 max_transcript_tokens = 0  # 0 = no limit
 
 [retention]

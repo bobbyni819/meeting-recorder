@@ -93,6 +93,8 @@ class RecordingConfig:
     # app audio (other participants) is always fed when live preview is on.
     live_transcript_mic: bool = True
     auto_start: bool = False  # auto-detect meetings and start recording
+    # Heal failed/stuck/partially-processed recordings at startup
+    auto_retry_failed: bool = True
 
 
 @dataclass

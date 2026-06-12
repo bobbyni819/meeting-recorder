@@ -174,6 +174,13 @@ class MeetingRecorderApp:
             target=self._sync_search_index, daemon=True, name="search-index-sync"
         ).start()
 
+        # Heal failed/stuck/partially-processed recordings in background
+        if self.config.recording.auto_retry_failed:
+            threading.Thread(
+                target=self._startup_retry_sweep, daemon=True,
+                name="startup-retry-sweep",
+            ).start()
+
         # Start meeting auto-detection scanner
         if self.config.recording.auto_start:
             self._start_meeting_scanner()
@@ -725,7 +732,7 @@ class MeetingRecorderApp:
                 logger.warning("app_audio.wav is corrupt or empty — skipping transcription")
                 notifications.notify_error(
                     "App audio corrupt or empty — try re-recording. "
-                    "Right-click tray → Re-process to retry."
+                    "Use Re-process in the recording's detail view to retry."
                 )
                 metadata.status = "error"
                 metadata.error_message = "App audio file corrupt or empty"
@@ -756,6 +763,21 @@ class MeetingRecorderApp:
                 if mixed_audio.exists():
                     mixed_audio.unlink()
                     logger.info("Cleaned up transient mixed.wav")
+
+            # Persist which backend actually produced the transcript — the
+            # pipeline may have fallen back from Gemini to local Whisper.
+            backend_used = getattr(self._pipeline, "last_backend_used", None)
+            if isinstance(backend_used, str) and backend_used:
+                if (
+                    backend_used != cfg.transcription.backend
+                    and cfg.transcription.backend == "gemini"
+                ):
+                    self._main_window.add_notification(
+                        "warning",
+                        "Gemini unavailable — transcribed with local Whisper instead",
+                        source="pipeline",
+                    )
+                metadata.transcription_backend = backend_used
 
             # Store speaker mapping from pipeline
             mapping = self._pipeline.last_speaker_mapping
@@ -887,12 +909,23 @@ class MeetingRecorderApp:
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
                 metadata.google_drive_folder_id = folder_id
+                metadata.upload_pending = False
                 self._save_metadata(metadata, recording_dir)
                 logger.info("Google Drive upload complete: %s", folder_id)
             else:
                 logger.warning("Google Drive upload returned no folder ID.")
+                metadata.upload_pending = True
+                self._save_metadata(metadata, recording_dir)
         except Exception:
+            # Flag it so the startup retry sweep can re-upload later.
+            metadata.upload_pending = True
+            self._save_metadata(metadata, recording_dir)
             logger.exception("Google Drive upload failed (non-fatal)")
+            self._main_window.add_notification(
+                "warning",
+                f"Drive upload failed for {recording_dir.name} — will retry at next startup",
+                source="pipeline",
+            )
 
     def _generate_summary(
         self, recording_dir: Path, segments, metadata: RecordingMetadata,
@@ -912,11 +945,19 @@ class MeetingRecorderApp:
             )
             save_summary(summary, recording_dir)
             metadata.has_summary = True
+            metadata.summary_failed = False
             metadata.summary_provider = summary.provider_used
             metadata.summary_model = summary.model_used
             logger.info("AI summary generated successfully.")
         except Exception:
+            # Flag it so the startup retry sweep can heal this recording.
+            metadata.summary_failed = True
             logger.exception("AI summary generation failed (non-fatal)")
+            self._main_window.add_notification(
+                "warning",
+                f"Summary failed for {recording_dir.name} — will retry at next startup",
+                source="pipeline",
+            )
 
     @staticmethod
     def _save_thumbnail(capture_manager: CaptureManager, recording_dir: Path) -> None:
@@ -1468,6 +1509,63 @@ class MeetingRecorderApp:
             daemon=False,
         )
         self._post_thread.start()
+
+    def _startup_retry_sweep(self) -> None:
+        """Heal recordings left broken by crashes or transient failures.
+
+        Runs once in the background shortly after startup: fully
+        re-processes retryable failures and stale 'processing' leftovers
+        (capped to avoid hour-long startup churn), and re-runs just the
+        missing tail steps (summary, Drive upload) for completed
+        recordings flagged summary_failed/upload_pending.
+        """
+        import time as _time
+
+        from meeting_recorder import recovery
+
+        _time.sleep(15.0)  # let startup settle first
+        try:
+            found = recovery.find_recoverable(self.config.output_dir)
+        except Exception:
+            logger.exception("Startup retry sweep scan failed")
+            return
+
+        full = (found.failed_retryable + found.stuck_processing)[:5]
+        if not full and not found.incomplete_tail:
+            return
+        logger.info(
+            "Startup retry sweep: %d full re-process(es), %d tail retr%s",
+            len(full), len(found.incomplete_tail),
+            "y" if len(found.incomplete_tail) == 1 else "ies",
+        )
+
+        for rec_dir in found.incomplete_tail:
+            try:
+                performed = recovery.retry_tail(rec_dir, self.config)
+                if performed:
+                    self._main_window.add_notification(
+                        "success",
+                        f"Recovered {' + '.join(performed)} for {rec_dir.name}",
+                        source="recovery",
+                    )
+            except Exception:
+                logger.exception("Tail retry failed for %s", rec_dir.name)
+
+        for rec_dir in full:
+            # Don't fight an active recording's post-processing
+            if self._post_thread and self._post_thread.is_alive():
+                self._post_thread.join(timeout=600)
+            if self._capture_manager and self._capture_manager.is_recording:
+                logger.info("Retry sweep paused: recording in progress")
+                return
+            try:
+                self.reprocess_recording(rec_dir)
+                if self._post_thread:
+                    self._post_thread.join(timeout=600)
+            except Exception:
+                logger.exception("Sweep re-process failed for %s", rec_dir.name)
+
+        self._main_window.refresh_history()
 
     def reprocess_all_failed(self) -> None:
         """Re-process all recordings with status 'error', one at a time."""
