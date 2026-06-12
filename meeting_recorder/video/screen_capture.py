@@ -74,6 +74,50 @@ class _BITMAPINFOHEADER(ctypes.Structure):
     ]
 
 
+_gdi_prototypes_ready = False
+
+
+def _ensure_gdi_prototypes(user32, gdi32) -> None:
+    """Declare 64-bit-safe restype/argtypes for the GDI/User32 calls we use.
+
+    ctypes function objects on ``windll.user32`` / ``windll.gdi32`` are
+    process-wide singletons with default ``c_int`` types. Window/DC/bitmap
+    handles are 64-bit pointers, so leaving them untyped truncates handles
+    or — once another library (uiautomation, comtypes) sets ``restype`` on a
+    shared function like GetWindowDC — raises "int too long to convert".
+    Declaring them explicitly makes screen capture robust regardless of what
+    else is loaded. Idempotent; runs once per process.
+    """
+    global _gdi_prototypes_ready
+    if _gdi_prototypes_ready:
+        return
+    from ctypes import c_bool, c_int, c_uint, c_void_p
+
+    user32.GetWindowDC.restype = c_void_p
+    user32.GetWindowDC.argtypes = [c_void_p]
+    user32.ReleaseDC.restype = c_int
+    user32.ReleaseDC.argtypes = [c_void_p, c_void_p]
+    user32.PrintWindow.restype = c_bool
+    user32.PrintWindow.argtypes = [c_void_p, c_void_p, c_uint]
+    user32.IsWindow.restype = c_bool
+    user32.IsWindow.argtypes = [c_void_p]
+    gdi32.CreateCompatibleDC.restype = c_void_p
+    gdi32.CreateCompatibleDC.argtypes = [c_void_p]
+    gdi32.CreateCompatibleBitmap.restype = c_void_p
+    gdi32.CreateCompatibleBitmap.argtypes = [c_void_p, c_int, c_int]
+    gdi32.SelectObject.restype = c_void_p
+    gdi32.SelectObject.argtypes = [c_void_p, c_void_p]
+    gdi32.DeleteObject.restype = c_bool
+    gdi32.DeleteObject.argtypes = [c_void_p]
+    gdi32.DeleteDC.restype = c_bool
+    gdi32.DeleteDC.argtypes = [c_void_p]
+    gdi32.GetDIBits.restype = c_int
+    gdi32.GetDIBits.argtypes = [
+        c_void_p, c_void_p, c_uint, c_uint, c_void_p, c_void_p, c_uint,
+    ]
+    _gdi_prototypes_ready = True
+
+
 def _parse_encoder_names(encoders_output: str) -> set[str]:
     """Extract video encoder names from ``ffmpeg -encoders`` output."""
     names: set[str] = set()
@@ -345,6 +389,11 @@ class ScreenCapture:
 
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
+        # Declare 64-bit-safe handle types. These ctypes function objects are
+        # process-wide singletons; other libraries (e.g. uiautomation, loaded
+        # for mute detection) set .restype on GetWindowDC, which would make our
+        # untyped CreateCompatibleDC overflow with "int too long to convert".
+        _ensure_gdi_prototypes(user32, gdi32)
 
         # Validate window handle before GDI operations
         if not user32.IsWindow(hwnd):
