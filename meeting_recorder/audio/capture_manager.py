@@ -148,6 +148,8 @@ class CaptureManager:
         live_transcription_compute_type: str = "int8",
         live_transcription_interval: float = 3.0,
         start_muted_default: bool = True,
+        mute_privacy_first: bool = True,
+        mute_remute_seconds: float = 12.0,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
         on_health_warning: Optional[callable] = None,
@@ -218,6 +220,8 @@ class CaptureManager:
                     target_pids=target_pids,
                     start_muted=start_muted,
                     on_mute_changed=on_mute_changed,
+                    privacy_first=mute_privacy_first,
+                    remute_grace_seconds=mute_remute_seconds,
                 )
 
         # Active-speaker event capture (experimental, opt-in).

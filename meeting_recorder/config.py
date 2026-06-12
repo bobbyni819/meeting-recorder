@@ -109,6 +109,14 @@ class RecordingConfig:
     # meeting app shows you are actually unmuted. Prevents capturing the room
     # before you actively speak.
     start_muted: bool = True
+    # Privacy-first mute: only record the mic when positively confirmed
+    # unmuted. The recorder auto-unmutes ONLY when the meeting app's mute
+    # button reads "unmuted"; if that becomes unreadable (toolbar hidden)
+    # for longer than mute_remute_seconds while unmuted, it re-mutes — so it
+    # can never keep capturing the room after losing sight of your real
+    # mute state. Manual unmute (hotkey/dashboard) still overrides.
+    mute_privacy_first: bool = True
+    mute_remute_seconds: float = 12.0
     # Rename the recording folder from transcript content after processing,
     # disambiguating between meetings booked in the same slot via the
     # calendar. Only the folder moves; files inside are untouched.

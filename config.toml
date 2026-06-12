@@ -8,6 +8,8 @@ auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
 auto_retry_failed = true  # heal failed/stuck recordings at startup (cheap tail steps: missing summary/upload)
 auto_retry_full_reprocess = false  # auto RE-TRANSCRIBE failed recordings at startup — off to protect free-tier API quota (reprocess manually instead)
 start_muted = true  # start every recording with the mic muted (you usually join muted); auto-detection unmutes within ~1.5s if you're actually unmuted
+mute_privacy_first = true  # only record mic when positively confirmed unmuted; re-mutes if the meeting mute button becomes unreadable (toolbar hidden) — never records the room behind your back
+mute_remute_seconds = 12.0  # how long the mute button can stay unreadable while unmuted before privacy-first re-mutes
 smart_rename = true  # rename the folder from transcript content (disambiguates same-slot meetings via calendar); only the folder moves, files inside are untouched
 capture_speaker_events = false  # EXPERIMENTAL: poll Zoom/Teams UI for active speaker to name diarized speakers (needs live-meeting validation; writes additive speaker_events.jsonl)
 

@@ -50,10 +50,23 @@ class MuteSync:
         on_mute_changed: Optional[callable] = None,
         use_uia_detection: bool = True,
         use_registry_fallback: bool = True,
+        privacy_first: bool = True,
+        remute_grace_seconds: float = 12.0,
+        clock: Optional[callable] = None,
     ):
         self._app_key = app_key.lower()
         self._target_pids = target_pids
         self._muted = start_muted
+        # Privacy-first: only ever record the mic when positively confirmed
+        # unmuted. Auto-unmute happens ONLY on a conclusive UIA "unmuted"
+        # read (never on the flawed registry signal), and if the mute button
+        # stays unreadable (toolbar hidden) for longer than the grace period
+        # while unmuted, re-mute — so the recorder can never keep capturing
+        # the room once it loses sight of your actual mute state.
+        self._privacy_first = privacy_first
+        self._remute_grace = remute_grace_seconds
+        self._clock = clock or time.monotonic
+        self._last_uia_ts = self._clock()
         self._on_mute_changed = on_mute_changed
         self._lock = threading.Lock()
         self._started = False
@@ -242,28 +255,56 @@ class MuteSync:
         3. Registry mic-usage fallback (legacy behavior), only when UIA
            never concluded and the constructor flag allows.
         """
-        detected: Optional[bool] = None
-        source = ""
-        if self._use_uia_detection:
-            detected = self._detect_via_uia()
-            if detected is not None:
-                with self._lock:
-                    self._last_uia_state = detected
-                source = "uia"
-        if detected is None:
+        # 1. UIA — the real mute-button state. Conclusive read always wins.
+        uia = self._detect_via_uia() if self._use_uia_detection else None
+        if uia is not None:
             with self._lock:
-                held = self._last_uia_state
-            if held is not None:
-                if not apply_held:
-                    return
-                detected = held
-                source = "uia-held"
-        if detected is None and self._use_registry_fallback:
-            detected = self._detect_via_any_pid()
-            source = "registry"
-        if detected is None:
+                self._last_uia_state = uia
+                self._last_uia_ts = self._clock()
+            self._apply_detected_state(uia, "uia")
             return
-        self._apply_detected_state(detected, source)
+
+        # 2. UIA is blind (toolbar hidden / window minimized).
+        if self._privacy_first:
+            self._privacy_blind_cycle()
+            return
+
+        # Legacy (non-privacy) behavior: hold the last conclusive UIA state
+        # through inconclusive polls; only re-apply on resume_auto_sync.
+        with self._lock:
+            held = self._last_uia_state
+        if held is not None:
+            if apply_held:
+                self._apply_detected_state(held, "uia-held")
+            return
+        if self._use_registry_fallback:
+            reg = self._detect_via_any_pid()
+            if reg is not None:
+                self._apply_detected_state(reg, "registry")
+
+    def _privacy_blind_cycle(self) -> None:
+        """Privacy-first handling when the mute button can't be read.
+
+        Never trusts the registry to UNMUTE (it can't see soft-mute). If we
+        are currently unmuted and have been unable to confirm it for longer
+        than the grace period, re-mute — the recorder must not keep capturing
+        the room once it loses sight of your real mute state.
+        """
+        with self._lock:
+            muted_now = self._muted
+            overridden = self._manual_override
+            blind_for = self._clock() - self._last_uia_ts
+        if overridden:
+            return  # manual control wins — never auto-mute/unmute
+        if not muted_now and blind_for >= self._remute_grace:
+            self._apply_detected_state(True, "privacy-remute")
+            return
+        # Registry may only *mute* (e.g. the app released the mic / call
+        # ended), never unmute, in privacy-first mode.
+        if self._use_registry_fallback:
+            reg = self._detect_via_any_pid()
+            if reg is True:
+                self._apply_detected_state(True, "registry-mute")
 
     def _apply_detected_state(self, detected: bool, source: str) -> None:
         """Apply an auto-detected mute state unless manually overridden."""

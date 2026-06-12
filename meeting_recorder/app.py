@@ -532,6 +532,8 @@ class MeetingRecorderApp:
             live_transcription_compute_type=self._perf_tier.live_compute_type,
             live_transcription_interval=self._perf_tier.live_interval,
             start_muted_default=self.config.recording.start_muted,
+            mute_privacy_first=self.config.recording.mute_privacy_first,
+            mute_remute_seconds=self.config.recording.mute_remute_seconds,
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
             on_health_warning=self._on_health_warning,

@@ -572,7 +572,10 @@ class TestDetectionPrecedence:
 
     def test_held_uia_state_blocks_registry(self):
         """After a conclusive UIA poll, inconclusive polls skip registry."""
-        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms = MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=False,
+            privacy_first=False,
+        )
         ms._detect_via_uia = mock.MagicMock(return_value=True)
         ms._detect_via_any_pid = mock.MagicMock(return_value=False)
 
@@ -587,7 +590,10 @@ class TestDetectionPrecedence:
 
     def test_held_state_does_not_undo_hotkey_toggle(self):
         """The poller must not re-apply held state over a hotkey toggle."""
-        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms = MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=False,
+            privacy_first=False,
+        )
         ms._detect_via_uia = mock.MagicMock(return_value=True)
         ms._run_detection_cycle(apply_held=False)
         assert ms.is_muted is True
@@ -601,6 +607,101 @@ class TestDetectionPrecedence:
         ms._detect_via_uia = mock.MagicMock(return_value=None)
         ms._run_detection_cycle(apply_held=False)
         assert ms.is_muted is False
+
+
+class TestPrivacyFirstMute:
+    """Privacy-first: never record the mic without positive unmute proof."""
+
+    def _ms(self, **kw):
+        clock = kw.pop("clock")
+        return MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=True,
+            privacy_first=True, remute_grace_seconds=10.0, clock=clock, **kw,
+        )
+
+    def test_unmutes_on_conclusive_uia(self):
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_uia = mock.MagicMock(return_value=False)  # unmuted
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+    def test_remutes_after_grace_when_blind(self):
+        """Lost sight of the mute button while unmuted -> re-mute after grace."""
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)  # registry "unmuted"
+        # Become unmuted via a conclusive UIA read at t=0
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+        # Toolbar hidden from now on (UIA blind)
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+
+        # Within grace: still unmuted
+        t[0] = 5.0
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+        # Past grace: re-muted (never keeps recording the room)
+        t[0] = 11.0
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True
+
+    def test_registry_never_unmutes(self):
+        """The flawed registry 'mic in use' signal must not unmute."""
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_uia = mock.MagicMock(return_value=None)  # blind
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)  # "unmuted"
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True  # stayed muted despite registry
+
+    def test_registry_may_mute(self):
+        """Registry 'muted' (app released mic) is allowed to mute."""
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._run_detection_cycle(apply_held=False)  # unmuted via UIA
+        assert ms.is_muted is False
+
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=True)  # muted
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True
+
+    def test_blind_then_uia_confirms_resets_grace(self):
+        """A fresh conclusive unmuted read resets the re-mute timer."""
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._run_detection_cycle(apply_held=False)  # unmuted at t=0
+
+        t[0] = 8.0  # blind, within grace
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+        t[0] = 9.0  # toolbar visible again, confirms unmuted -> resets timer
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._run_detection_cycle(apply_held=False)
+
+        t[0] = 18.0  # 9s since last confirm < 10s grace -> still unmuted
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+    def test_manual_override_not_remuted(self):
+        """A manual unmute is never auto-re-muted by privacy-first."""
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms.toggle()  # manual unmute (was start_muted=True), override sticky
+        assert ms.is_muted is False
+        ms._detect_via_uia = mock.MagicMock(return_value=None)  # blind
+        t[0] = 100.0  # well past grace
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False  # manual wins, no re-mute
 
     def test_uia_disabled_uses_registry_only(self):
         ms = MuteSync(
@@ -686,7 +787,10 @@ class TestResumeAutoSync:
         assert ms.is_muted is False  # re-detected immediately
 
     def test_applies_held_uia_state_when_inconclusive(self):
-        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms = MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=False,
+            privacy_first=False,
+        )
         ms._detect_via_uia = mock.MagicMock(return_value=True)
         ms._run_detection_cycle(apply_held=False)  # held state: muted
 
@@ -701,7 +805,10 @@ class TestResumeAutoSync:
         ms._detect_via_any_pid.assert_not_called()
 
     def test_falls_back_to_registry_when_nothing_held(self):
-        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms = MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=False,
+            privacy_first=False,
+        )
         ms.toggle()  # manual: muted, override on
 
         ms._detect_via_uia = mock.MagicMock(return_value=None)
