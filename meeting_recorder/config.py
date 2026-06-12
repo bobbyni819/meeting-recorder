@@ -44,6 +44,9 @@ _LOCAL_ONLY_FIELDS: dict[str, dict[str, object]] = {
     "summary": {"api_key": ""},
     "audio": {"mic_device": ""},
     "dashboard": {"position_x": -1, "position_y": -1},
+    # Per-machine performance tier — must NOT sync via git (the workstation
+    # and the old PC have different hardware). "auto" detects at startup.
+    "performance": {"profile": "auto"},
 }
 
 
@@ -194,6 +197,13 @@ class RetentionConfig:
 
 
 @dataclass
+class PerformanceConfig:
+    # "auto" | "light" | "balanced" | "full". Local-only (per machine).
+    # "auto" detects GPU/CPU/RAM at startup. See meeting_recorder/performance.py.
+    profile: str = "auto"
+
+
+@dataclass
 class DictationConfig:
     enabled: bool = False
     drive_root: str = "~/Documents"
@@ -226,6 +236,7 @@ class Config:
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     dictation: DictationConfig = field(default_factory=DictationConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -315,6 +326,7 @@ class Config:
             dashboard=_safe_init(DashboardConfig, data, "dashboard"),
             retention=_safe_init(RetentionConfig, data, "retention"),
             dictation=_safe_init(DictationConfig, data, "dictation"),
+            performance=_safe_init(PerformanceConfig, data, "performance"),
         )
 
     def save(self) -> None:

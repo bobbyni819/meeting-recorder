@@ -101,8 +101,9 @@ class TranscriptionPipeline:
         try:
             if self._fallback_transcriber is None:
                 tc = self.config.transcription
+                model_size = self._fallback_model_size(tc.model_size, tc.device)
                 transcriber = LocalWhisperTranscriber(
-                    model_size=tc.model_size,
+                    model_size=model_size,
                     device=tc.device,
                     compute_type=tc.compute_type,
                     language=self.config.recording.language,
@@ -115,6 +116,34 @@ class TranscriptionPipeline:
                 "Local Whisper fallback unavailable — re-raising original Gemini error"
             )
             raise original_error
+
+    # Model sizes ordered small -> large; a tier cap selects the largest
+    # model at or below its ceiling.
+    _MODEL_ORDER = ("tiny", "base", "small", "medium", "large-v3")
+
+    def _fallback_model_size(self, configured: str, device: str) -> str:
+        """Cap the fallback model by the machine's performance tier.
+
+        On a weak machine, large-v3 on CPU could take hours; the tier picks
+        a smaller model so the fallback actually finishes. Never upgrades
+        beyond what the user configured.
+        """
+        try:
+            from meeting_recorder.performance import resolve_tier
+
+            ceiling = resolve_tier(self.config.performance.profile).fallback_model_size
+        except Exception:
+            return configured
+        order = self._MODEL_ORDER
+        if configured not in order or ceiling not in order:
+            return configured
+        capped = order[min(order.index(configured), order.index(ceiling))]
+        if capped != configured:
+            logger.info(
+                "Fallback model capped %s -> %s for this performance tier",
+                configured, capped,
+            )
+        return capped
 
     @property
     def last_speaker_mapping(self):

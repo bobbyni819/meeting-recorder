@@ -87,3 +87,13 @@ position_y = -1
 start_collapsed = false
 show_transcript = true
 show_screen_preview = true  # show live screen capture thumbnail in dashboard
+
+[performance]
+# Per-machine tier gating heavy features. LOCAL-ONLY: this value is written
+# to ~/.meeting_recorder/secrets.toml, NOT synced via git, so each machine
+# keeps its own setting. "auto" detects GPU/CPU/RAM at startup.
+#   auto     — detect and pick (recommended)
+#   light    — weak/no-GPU machine: live transcription off, small fallback model, cv2 video
+#   balanced — capable GPU (e.g. RTX 3060): live on, medium fallback, NVENC video
+#   full     — strong GPU (>=10GB) + many cores: everything on, large-v3 fallback
+profile = "auto"

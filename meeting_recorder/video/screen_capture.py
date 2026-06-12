@@ -251,11 +251,16 @@ class ScreenCapture:
         process_name: str,
         output_path: Path,
         fps: float = 30.0,
+        encoder_preference: str = "nvenc",
     ):
         self.pid = pid
         self.process_name = process_name
         self.output_path = str(output_path)
         self.fps = fps
+        # "nvenc" (try GPU first), "software" (libx264 ffmpeg), or "cv2"
+        # (skip ffmpeg entirely — for machines that can't afford software
+        # H.264). The ffmpeg path still self-falls-back if a probe fails.
+        self.encoder_preference = encoder_preference
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         # Latest captured frame for live preview. Each frame is a new numpy array
@@ -406,16 +411,26 @@ class ScreenCapture:
         any failure — imageio_ffmpeg missing, probe failure, process dead at
         startup — falls back to the original cv2.VideoWriter path. Returns
         None only when no writer could be opened at all.
+
+        The performance tier sets ``encoder_preference``: "cv2" skips ffmpeg
+        entirely (machines that can't afford software H.264), "software"
+        forces libx264 (skip the NVENC probe), "nvenc" tries the GPU first.
         """
-        try:
-            w = FFmpegVideoWriter(self.output_path, self.fps, width, height)
-            logger.info("Screen recording codec: %s (ffmpeg)", w.encoder)
-            return w
-        except Exception as e:
-            logger.info(
-                "FFmpeg writer unavailable (%s); falling back to cv2.VideoWriter.",
-                e,
-            )
+        if self.encoder_preference != "cv2":
+            try:
+                forced = (
+                    "libx264" if self.encoder_preference == "software" else None
+                )
+                w = FFmpegVideoWriter(
+                    self.output_path, self.fps, width, height, encoder=forced,
+                )
+                logger.info("Screen recording codec: %s (ffmpeg)", w.encoder)
+                return w
+            except Exception as e:
+                logger.info(
+                    "FFmpeg writer unavailable (%s); falling back to cv2.VideoWriter.",
+                    e,
+                )
         # cv2 path — try H.264 first (3-5x smaller), fall back to mp4v
         for codec in ("avc1", "mp4v"):
             fourcc = cv2_module.VideoWriter_fourcc(*codec)

@@ -134,6 +134,7 @@ class CaptureManager:
         on_stopped: Optional[callable] = None,
         screen_recording_enabled: bool = False,
         screen_recording_fps: float = 30.0,
+        video_encoder_preference: str = "nvenc",
         process_name: str = "",
         app_key: str = "",
         mute_toggle_hotkey: str = "ctrl+shift+u",
@@ -231,6 +232,7 @@ class CaptureManager:
                     process_name=process_name,
                     output_path=output_dir / "screen.mp4",
                     fps=screen_recording_fps,
+                    encoder_preference=video_encoder_preference,
                 )
             except ImportError:
                 logger.warning("Screen capture dependencies not available.")

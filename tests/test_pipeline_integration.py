@@ -593,6 +593,9 @@ class TestGeminiLocalFallback:
     def test_get_local_fallback_uses_configured_model(self):
         """Fallback uses the configured model size / device / compute type."""
         pipeline = self._gemini_pipeline()
+        # Pin the 'full' tier so the per-machine model cap doesn't downsize
+        # large-v3 (the cap itself is covered in test_performance.py).
+        pipeline.config.performance.profile = "full"
         pipeline.config.transcription.model_size = "large-v3"
         pipeline.config.transcription.device = "cuda"
         pipeline.config.transcription.compute_type = "float16"

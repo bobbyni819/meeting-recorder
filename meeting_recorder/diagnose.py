@@ -259,6 +259,23 @@ def _check_gpu() -> int:
     except Exception as e:
         print(_fail(f"GPU check failed: {e}"))
         failures += 1
+
+    # Report the resolved performance tier (gates live transcription, video
+    # encoder, and fallback model size on this machine).
+    try:
+        from meeting_recorder.config import Config
+        from meeting_recorder.performance import detect_hardware, resolve_tier
+
+        profile = Config.load().performance.profile
+        tier = resolve_tier(profile, detect_hardware())
+        suffix = "" if profile == "auto" else f" (set to '{profile}')"
+        print(_ok(
+            f"Performance tier: {tier.name}{suffix} — "
+            f"live transcription {'on' if tier.live_transcription else 'off'}, "
+            f"video {tier.video_encoder}, fallback {tier.fallback_model_size}"
+        ))
+    except Exception as e:
+        print(_warn(f"Performance tier check failed: {e}"))
     return failures
 
 

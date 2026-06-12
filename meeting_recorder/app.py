@@ -57,6 +57,11 @@ class MeetingRecorderApp:
         self._pipeline = TranscriptionPipeline(self.config)
         self._hotkey_registered = False
 
+        # Resolve the per-machine performance tier once (auto-detects GPU/CPU).
+        from meeting_recorder.performance import resolve_tier
+        self._perf_tier = resolve_tier(self.config.performance.profile)
+        logger.info("Performance tier: %s", self._perf_tier.name)
+
         # Pre-loaded VAD model (loaded once in run(), reused across recordings)
         self._vad: Optional[VoiceActivityDetector] = None
 
@@ -502,14 +507,26 @@ class MeetingRecorderApp:
             on_stopped=self._on_capture_auto_stopped,
             screen_recording_enabled=self.config.screen_recording.enabled,
             screen_recording_fps=self.config.screen_recording.fps,
+            video_encoder_preference=self._perf_tier.video_encoder,
             process_name=process.name,
             app_key=process.app_key,
             mute_toggle_hotkey=self.config.hotkey.toggle_mute,
             on_audio_levels=self._on_audio_levels,
             on_live_transcript=self._on_live_transcript,
-            live_transcription_enabled=self.config.recording.live_transcription,
-            live_transcript_mic=self.config.recording.live_transcript_mic,
-            on_live_insight=self._on_live_insight,
+            # The performance tier can only RESTRICT, never force-enable: a
+            # light machine turns live preview off even if the synced config
+            # has it on, but a strong machine never overrides a user's "off".
+            live_transcription_enabled=(
+                self.config.recording.live_transcription
+                and self._perf_tier.live_transcription
+            ),
+            live_transcript_mic=(
+                self.config.recording.live_transcript_mic
+                and self._perf_tier.live_transcript_mic
+            ),
+            on_live_insight=(
+                self._on_live_insight if self._perf_tier.live_insights else None
+            ),
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
             on_health_warning=self._on_health_warning,
