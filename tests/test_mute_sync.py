@@ -166,6 +166,7 @@ class TestMuteSyncStartStop:
         ms = MuteSync(app_key="zoom", target_pids={100})
         ms.start()
         assert ms._started is True
+        ms.stop()  # don't leave the poller thread running
 
     @mock.patch.dict("sys.modules", {"keyboard": mock.MagicMock()})
     def test_start_idempotent(self):
@@ -173,6 +174,7 @@ class TestMuteSyncStartStop:
         ms.start()
         ms.start()  # second call should be no-op
         assert ms._started is True
+        ms.stop()
 
     @mock.patch.dict("sys.modules", {"keyboard": mock.MagicMock()})
     def test_stop_after_start(self):
@@ -288,6 +290,27 @@ class TestDetectInitialMuteState:
 
     @mock.patch("psutil.Process")
     @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_nonpackaged_match_skips_packaged_scan(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """A NonPackaged hit returns immediately (one OpenKey of HKCU)."""
+        mock_process.return_value.exe.return_value = self.ZOOM_EXE
+
+        mock_open_key.side_effect = [mock.MagicMock(), mock.MagicMock()]
+        mock_enum_key.side_effect = [self.ZOOM_REGISTRY, OSError]
+        mock_query.return_value = (0, winreg.REG_QWORD)
+
+        result = detect_initial_mute_state(1234)
+
+        assert result is False
+        # Only NonPackaged base + its subkey opened; no packaged scan.
+        assert mock_open_key.call_count == 2
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
     @mock.patch("winreg.EnumKey")
     @mock.patch("winreg.OpenKey")
     def test_returns_none_when_no_matching_subkey(
@@ -299,13 +322,424 @@ class TestDetectInitialMuteState:
         mock_base_key = mock.MagicMock()
         mock_open_key.return_value = mock_base_key
 
-        # Return subkeys that don't match Zoom's exe path
+        # Return subkeys that don't match Zoom's exe path. The second
+        # OSError ends the packaged-app scan that follows NonPackaged.
         mock_enum_key.side_effect = [
             "C:#Program Files#Teams#teams.exe",
             "C:#Program Files#Webex#webex.exe",
+            OSError,
             OSError,
         ]
 
         result = detect_initial_mute_state(1234)
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Packaged-app (MSIX) registry detection
+# ---------------------------------------------------------------------------
+
+class TestDetectPackagedMuteState:
+    """Registry detection for packaged apps (e.g. new Teams MSTeams_*)."""
+
+    TEAMS_EXE = (
+        r"C:\Program Files\WindowsApps"
+        r"\MSTeams_24295.605.3225.8804_x64__8wekyb3d8bbwe\ms-teams.exe"
+    )
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_packaged_teams_unmuted(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """LastUsedTimeStop == 0 on the package key -> unmuted (False)."""
+        mock_process.return_value.exe.return_value = self.TEAMS_EXE
+
+        # OpenKey: NonPackaged base, microphone base, MSTeams package key
+        mock_open_key.side_effect = [
+            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(),
+        ]
+        # EnumKey: NonPackaged scan finds nothing; packaged scan walks
+        # NonPackaged (skipped) then the MSTeams family key.
+        mock_enum_key.side_effect = [
+            OSError,  # NonPackaged subtree empty
+            "NonPackaged",
+            "MSTeams_8wekyb3d8bbwe",
+        ]
+        mock_query.return_value = (0, winreg.REG_QWORD)
+
+        result = detect_initial_mute_state(4321, include_packaged=True)
+
+        assert result is False
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_packaged_teams_muted(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """LastUsedTimeStop > 0 on the package key -> muted (True)."""
+        mock_process.return_value.exe.return_value = self.TEAMS_EXE
+
+        mock_open_key.side_effect = [
+            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(),
+        ]
+        mock_enum_key.side_effect = [
+            OSError,
+            "NonPackaged",
+            "MSTeams_8wekyb3d8bbwe",
+        ]
+        mock_query.return_value = (133200000000000000, winreg.REG_QWORD)
+
+        result = detect_initial_mute_state(4321, include_packaged=True)
+
+        assert result is True
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_packaged_value_on_child_subkey(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """LastUsedTimeStop absent on the package key but on a child."""
+        mock_process.return_value.exe.return_value = self.TEAMS_EXE
+
+        mock_open_key.side_effect = [
+            mock.MagicMock(),  # NonPackaged base
+            mock.MagicMock(),  # microphone base
+            mock.MagicMock(),  # MSTeams package key
+            mock.MagicMock(),  # child subkey
+        ]
+        mock_enum_key.side_effect = [
+            OSError,  # NonPackaged subtree empty
+            "MSTeams_8wekyb3d8bbwe",
+            "SomeChildKey",  # child of the package key
+        ]
+        # First query (package key itself) fails, child succeeds.
+        mock_query.side_effect = [OSError, (0, winreg.REG_QWORD)]
+
+        result = detect_initial_mute_state(4321, include_packaged=True)
+
+        assert result is False
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_packaged_no_matching_family(
+        self, mock_open_key, mock_enum_key, mock_close, mock_process,
+    ):
+        """Unrelated package family names do not match -> None."""
+        mock_process.return_value.exe.return_value = (
+            r"C:\Program Files\Zoom\bin\Zoom.exe"
+        )
+
+        mock_open_key.side_effect = [mock.MagicMock(), mock.MagicMock()]
+        mock_enum_key.side_effect = [
+            OSError,  # NonPackaged subtree empty
+            "Microsoft.WindowsCamera_8wekyb3d8bbwe",
+            OSError,
+        ]
+
+        result = detect_initial_mute_state(1234, include_packaged=True)
+
+        assert result is None
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.OpenKey")
+    def test_packaged_base_key_missing(self, mock_open_key, mock_process):
+        """OSError opening both base keys -> None."""
+        mock_process.return_value.exe.return_value = self.TEAMS_EXE
+        mock_open_key.side_effect = OSError("not found")
+
+        result = detect_initial_mute_state(4321, include_packaged=True)
+
+        assert result is None
+
+    @mock.patch("psutil.Process")
+    @mock.patch("winreg.CloseKey")
+    @mock.patch("winreg.QueryValueEx")
+    @mock.patch("winreg.EnumKey")
+    @mock.patch("winreg.OpenKey")
+    def test_initial_state_skips_packaged_scan(
+        self, mock_open_key, mock_enum_key, mock_query, mock_close, mock_process,
+    ):
+        """Default call (initial state) must NOT consult packaged keys.
+
+        Teams holds the mic open while soft-muted; if the packaged signal
+        reached the initial-state call it would flip the safe MUTED
+        default to UNMUTED at recording start (privacy regression).
+        """
+        mock_process.return_value.exe.return_value = self.TEAMS_EXE
+
+        mock_open_key.side_effect = [
+            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(),
+        ]
+        mock_enum_key.side_effect = [
+            OSError,  # NonPackaged subtree empty
+            "NonPackaged",
+            "MSTeams_8wekyb3d8bbwe",
+        ]
+        mock_query.return_value = (0, winreg.REG_QWORD)  # would mean unmuted
+
+        result = detect_initial_mute_state(4321)
+
+        assert result is None  # not False — packaged signal must be ignored
+
+
+# ---------------------------------------------------------------------------
+# Poll loop error backoff
+# ---------------------------------------------------------------------------
+
+class TestPollBackoffRestore:
+    """The poll interval backs off on repeated errors and recovers."""
+
+    def _run_loop(self, ms, fail_count, total_polls):
+        intervals = []
+        calls = {"n": 0}
+
+        def fake_cycle(apply_held):
+            calls["n"] += 1
+            if calls["n"] <= fail_count:
+                raise RuntimeError("registry unavailable")
+
+        ms._run_detection_cycle = fake_cycle
+
+        def fake_wait(timeout=None):
+            intervals.append(timeout)
+            if len(intervals) >= total_polls:
+                ms._poll_stop.set()
+            return ms._poll_stop.is_set()
+
+        ms._poll_stop.wait = fake_wait
+        ms._poll_detection_loop()
+        return intervals
+
+    def test_backoff_after_repeated_errors(self):
+        ms = MuteSync(app_key="zoom", target_pids={100})
+        intervals = self._run_loop(ms, fail_count=15, total_polls=15)
+        # After >10 consecutive errors the interval backs off to 10s.
+        assert intervals[-1] == 10.0
+
+    def test_interval_restored_after_recovery(self):
+        ms = MuteSync(app_key="zoom", target_pids={100})
+        intervals = self._run_loop(ms, fail_count=12, total_polls=15)
+        assert 10.0 in intervals  # backed off while erroring
+        # First successful poll restores the 1s interval permanently.
+        assert intervals[12] == 1.0
+        assert intervals[-1] == 1.0
+
+    def test_no_backoff_when_healthy(self):
+        ms = MuteSync(app_key="zoom", target_pids={100})
+        intervals = self._run_loop(ms, fail_count=0, total_polls=5)
+        assert all(i == 1.0 for i in intervals)
+
+
+# ---------------------------------------------------------------------------
+# Detection precedence: UIA first, held state, registry fallback
+# ---------------------------------------------------------------------------
+
+class TestDetectionPrecedence:
+    """UIA wins over registry; held UIA state prevents flapping."""
+
+    def test_uia_conclusive_beats_registry(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)
+
+        ms._run_detection_cycle(apply_held=False)
+
+        assert ms.is_muted is True
+        ms._detect_via_any_pid.assert_not_called()
+
+    def test_registry_fallback_when_uia_never_concluded(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=True)
+
+        ms._run_detection_cycle(apply_held=False)
+
+        assert ms.is_muted is True
+        ms._detect_via_any_pid.assert_called_once()
+
+    def test_held_uia_state_blocks_registry(self):
+        """After a conclusive UIA poll, inconclusive polls skip registry."""
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)
+
+        ms._run_detection_cycle(apply_held=False)  # UIA says muted
+        assert ms.is_muted is True
+
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._run_detection_cycle(apply_held=False)  # toolbar hidden
+
+        assert ms.is_muted is True  # held, not flapped to registry
+        ms._detect_via_any_pid.assert_not_called()
+
+    def test_held_state_does_not_undo_hotkey_toggle(self):
+        """The poller must not re-apply held state over a hotkey toggle."""
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True
+
+        # Hotkey blind-toggle (no manual override)
+        ms._is_meeting_app_focused = mock.MagicMock(return_value=True)
+        ms._on_mute_shortcut_pressed()
+        assert ms.is_muted is False
+
+        # Inconclusive UIA poll holds, does not re-apply the stale state
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False
+
+    def test_uia_disabled_uses_registry_only(self):
+        ms = MuteSync(
+            app_key="zoom", target_pids={100},
+            start_muted=False, use_uia_detection=False,
+        )
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=True)
+
+        ms._run_detection_cycle(apply_held=False)
+
+        assert ms.is_muted is True
+        ms._detect_via_uia.assert_not_called()
+
+    def test_registry_fallback_disabled(self):
+        ms = MuteSync(
+            app_key="zoom", target_pids={100},
+            start_muted=False, use_registry_fallback=False,
+        )
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=True)
+
+        ms._run_detection_cycle(apply_held=False)
+
+        assert ms.is_muted is False  # nothing detected, state unchanged
+        ms._detect_via_any_pid.assert_not_called()
+
+    def test_detection_fires_callback(self):
+        events = []
+        ms = MuteSync(
+            app_key="zoom", target_pids={100},
+            start_muted=False, on_mute_changed=events.append,
+        )
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._run_detection_cycle(apply_held=False)
+        assert events == [True]
+
+    def test_no_callback_when_state_unchanged(self):
+        events = []
+        ms = MuteSync(
+            app_key="zoom", target_pids={100},
+            start_muted=True, on_mute_changed=events.append,
+        )
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._run_detection_cycle(apply_held=False)
+        assert events == []
+
+    def test_manual_override_blocks_detection(self):
+        """Manual toggle wins over any subsequent auto-detection."""
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms.toggle()  # manual: muted, override sticky
+        assert ms.is_muted is True
+
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms._run_detection_cycle(apply_held=False)
+
+        assert ms.is_muted is True  # detection did not win
+
+    def test_detect_via_uia_returns_none_on_import_failure(self):
+        ms = MuteSync(app_key="zoom", target_pids={100})
+        with mock.patch.dict(
+            "sys.modules", {"meeting_recorder.audio.uia_mute_detector": None},
+        ):
+            assert ms._detect_via_uia() is None
+
+
+# ---------------------------------------------------------------------------
+# resume_auto_sync
+# ---------------------------------------------------------------------------
+
+class TestResumeAutoSync:
+    """Right-click affordance: clear override and re-detect once."""
+
+    def test_clears_override_and_applies_detection(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms.toggle()  # manual: muted, override on
+        assert ms._manual_override is True
+
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms.resume_auto_sync()
+
+        assert ms._manual_override is False
+        assert ms.is_muted is False  # re-detected immediately
+
+    def test_applies_held_uia_state_when_inconclusive(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._run_detection_cycle(apply_held=False)  # held state: muted
+
+        ms.toggle()  # manual: unmuted, override on
+        assert ms.is_muted is False
+
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)
+        ms.resume_auto_sync()
+
+        assert ms.is_muted is True  # held UIA state re-applied
+        ms._detect_via_any_pid.assert_not_called()
+
+    def test_falls_back_to_registry_when_nothing_held(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms.toggle()  # manual: muted, override on
+
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=False)
+        ms.resume_auto_sync()
+
+        assert ms._manual_override is False
+        assert ms.is_muted is False
+
+    def test_safe_when_detection_raises(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms.toggle()
+        ms._detect_via_uia = mock.MagicMock(side_effect=RuntimeError("boom"))
+        ms.resume_auto_sync()  # must not raise
+        assert ms._manual_override is False
+
+    def test_manual_toggle_after_resume_is_sticky_again(self):
+        ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
+        ms.toggle()
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        ms._detect_via_any_pid = mock.MagicMock(return_value=None)
+        ms.resume_auto_sync()
+        assert ms._manual_override is False
+
+        ms.toggle()  # user takes manual control again
+        assert ms._manual_override is True
+        ms._detect_via_uia = mock.MagicMock(return_value=True)
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False  # manual still wins
+
+    def test_fires_callback_on_state_change(self):
+        events = []
+        ms = MuteSync(
+            app_key="zoom", target_pids={100},
+            start_muted=False, on_mute_changed=events.append,
+        )
+        ms.toggle()  # muted (manual)
+        events.clear()
+        ms._detect_via_uia = mock.MagicMock(return_value=False)
+        ms.resume_auto_sync()
+        assert events == [False]

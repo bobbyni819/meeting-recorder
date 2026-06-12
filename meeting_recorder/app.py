@@ -520,6 +520,7 @@ class MeetingRecorderApp:
                 on_stop=lambda: threading.Thread(target=self.stop_recording, daemon=True).start(),
                 on_toggle_pause=self._toggle_pause,
                 on_toggle_mute=self._toggle_mute,
+                on_resume_auto_sync=self._resume_mute_auto_sync,
                 on_open_recordings=self._open_recordings_folder,
                 on_open_settings=self._open_settings,
                 on_list_windows=self._capture_manager.list_capturable_windows,
@@ -1146,6 +1147,12 @@ class MeetingRecorderApp:
         cm = self._capture_manager
         if cm and cm.mute_sync:
             cm.mute_sync.toggle()
+
+    def _resume_mute_auto_sync(self) -> None:
+        """Resume auto mute sync (clears the sticky manual override)."""
+        cm = self._capture_manager
+        if cm and cm.mute_sync:
+            cm.mute_sync.resume_auto_sync()
 
     def _toggle_audio_mode(self) -> None:
         """Toggle between per-process and desktop-wide audio capture."""

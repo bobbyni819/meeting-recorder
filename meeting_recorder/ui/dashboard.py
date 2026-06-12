@@ -54,6 +54,7 @@ class GameBarDashboard:
         on_stop: Optional[Callable[[], None]] = None,
         on_toggle_pause: Optional[Callable[[], None]] = None,
         on_toggle_mute: Optional[Callable[[], None]] = None,
+        on_resume_auto_sync: Optional[Callable[[], None]] = None,
         on_open_recordings: Optional[Callable[[], None]] = None,
         on_open_settings: Optional[Callable[[], None]] = None,
         on_list_windows: Optional[Callable[[], list]] = None,
@@ -69,6 +70,7 @@ class GameBarDashboard:
         self._on_stop = on_stop
         self._on_toggle_pause = on_toggle_pause
         self._on_toggle_mute = on_toggle_mute
+        self._on_resume_auto_sync = on_resume_auto_sync
         self._on_open_recordings = on_open_recordings
         self._on_open_settings = on_open_settings
         self._on_list_windows = on_list_windows
@@ -95,6 +97,7 @@ class GameBarDashboard:
         self._app_db_label: Optional[tk.Label] = None
         self._mic_db_label: Optional[tk.Label] = None
         self._mute_btn: Optional[tk.Label] = None
+        self._mute_tooltip: Optional[tk.Toplevel] = None
         self._pause_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
         self._capture_warning_label: Optional[tk.Label] = None
@@ -487,6 +490,11 @@ class GameBarDashboard:
         )
         self._mute_btn.pack(side=tk.LEFT, padx=4, pady=6)
         self._mute_btn.bind("<Button-1>", lambda e: self._handle_mute_toggle())
+        # Right-click hands mute control back to auto-detection after a
+        # manual (left-click) correction made the override sticky.
+        self._mute_btn.bind("<Button-3>", self._on_mute_right_click)
+        self._mute_btn.bind("<Enter>", lambda e: self._show_mute_tooltip())
+        self._mute_btn.bind("<Leave>", lambda e: self._hide_mute_tooltip())
 
         # Window picker button (only when screen recording is active)
         if self._on_list_windows and self._on_pick_window:
@@ -889,6 +897,53 @@ class GameBarDashboard:
         """Handle the mute toggle click."""
         if self._on_toggle_mute:
             self._on_toggle_mute()
+
+    def _on_mute_right_click(self, _event) -> str:
+        """Right-click on the mute button: resume auto mute sync.
+
+        Returns "break" so the window-level context menu binding does
+        not also fire.
+        """
+        self._handle_resume_auto_sync()
+        return "break"
+
+    def _handle_resume_auto_sync(self) -> None:
+        """Hand mute control back to auto-detection."""
+        if self._on_resume_auto_sync:
+            self._on_resume_auto_sync()
+
+    def _show_mute_tooltip(self) -> None:
+        """Show a small hint below the mute button on hover."""
+        if self._window is None or self._mute_btn is None:
+            return
+        if self._mute_tooltip is not None:
+            return
+        try:
+            tip = tk.Toplevel(self._window)
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(
+                tip,
+                text="Click: mute/unmute recording · Right-click: resume auto-sync",
+                font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_HEADER,
+                padx=6, pady=2,
+            ).pack()
+            x = self._mute_btn.winfo_rootx()
+            y = self._mute_btn.winfo_rooty() + self._mute_btn.winfo_height() + 4
+            tip.geometry(f"+{x}+{y}")
+            self._mute_tooltip = tip
+        except Exception:
+            logger.debug("Mute tooltip failed", exc_info=True)
+
+    def _hide_mute_tooltip(self) -> None:
+        """Destroy the mute button hover hint."""
+        tip = self._mute_tooltip
+        self._mute_tooltip = None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
 
     def _show_context_menu(self, event) -> None:
         """Show right-click context menu."""

@@ -246,6 +246,51 @@ class TestDashboardStateMethods:
 
 
 # ---------------------------------------------------------------------------
+# Mute button affordances (manual toggle + resume auto-sync)
+# ---------------------------------------------------------------------------
+
+class TestMuteButtonAffordances:
+    """Left-click toggles mute; right-click resumes auto-sync."""
+
+    def test_handle_mute_toggle_calls_callback(self):
+        called = []
+        dash = GameBarDashboard(on_toggle_mute=lambda: called.append(True))
+        dash._handle_mute_toggle()
+        assert called == [True]
+
+    def test_handle_resume_auto_sync_calls_callback(self):
+        called = []
+        dash = GameBarDashboard(on_resume_auto_sync=lambda: called.append(True))
+        dash._handle_resume_auto_sync()
+        assert called == [True]
+
+    def test_resume_does_not_call_toggle(self):
+        """Right-click must not also fire the manual toggle."""
+        events = []
+        dash = GameBarDashboard(
+            on_toggle_mute=lambda: events.append("toggle"),
+            on_resume_auto_sync=lambda: events.append("resume"),
+        )
+        dash._handle_resume_auto_sync()
+        assert events == ["resume"]
+
+    def test_handle_resume_safe_without_callback(self):
+        dash = GameBarDashboard()
+        dash._handle_resume_auto_sync()  # should not raise
+
+    def test_right_click_returns_break(self):
+        """Stops the window-level context-menu binding from also firing."""
+        dash = GameBarDashboard(on_resume_auto_sync=lambda: None)
+        assert dash._on_mute_right_click(None) == "break"
+
+    def test_tooltip_methods_safe_without_window(self):
+        dash = GameBarDashboard()
+        dash._show_mute_tooltip()  # no window -> no-op
+        dash._hide_mute_tooltip()
+        assert dash._mute_tooltip is None
+
+
+# ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
 

@@ -15,6 +15,8 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes
 import logging
+import ntpath
+import re
 import threading
 import time
 from typing import Optional
@@ -46,6 +48,8 @@ class MuteSync:
         target_pids: set[int],
         start_muted: bool = False,
         on_mute_changed: Optional[callable] = None,
+        use_uia_detection: bool = True,
+        use_registry_fallback: bool = True,
     ):
         self._app_key = app_key.lower()
         self._target_pids = target_pids
@@ -55,11 +59,24 @@ class MuteSync:
         self._started = False
         self._manual_hotkey: str = ""
         # Sticky once the user takes manual control (dashboard button or
-        # manual hotkey). The registry poller stops overriding so the
+        # manual hotkey). The detection poller stops overriding so the
         # user can mute the recording independently of the meeting app —
         # e.g. to silence a noisy environment without muting Zoom.
+        # Cleared by resume_auto_sync() (dashboard right-click).
         self._manual_override = False
-        # Registry poller: watches the Windows mic-usage registry so
+        # Detection backends. UIA reads the actual mute-button state from
+        # the meeting window and always wins when conclusive; the registry
+        # mic-usage signal is only a fallback because Zoom/Teams keep the
+        # mic device open while soft-muted (registry says "unmuted" all
+        # meeting).
+        self._use_uia_detection = use_uia_detection
+        self._use_registry_fallback = use_registry_fallback
+        # Last conclusive UIA reading this recording. While set, the
+        # poller holds the current state through inconclusive polls
+        # (toolbar hidden, window minimized) instead of flapping to the
+        # registry signal.
+        self._last_uia_state: Optional[bool] = None
+        # Detection poller: watches the meeting app's mute state so
         # mouse clicks on Zoom's mute button (which don't trigger the
         # hotkey hook) are still picked up within ~1 second.
         self._poll_thread: Optional[threading.Thread] = None
@@ -132,13 +149,13 @@ class MuteSync:
         except Exception:
             logger.exception("Failed to register mute sync hotkeys")
 
-        # Start registry-polling fallback: detects mute toggles from
-        # mouse clicks on the meeting app's mute button (which don't
-        # trigger our hotkey hook).
+        # Start detection polling: detects mute toggles from mouse
+        # clicks on the meeting app's mute button (which don't trigger
+        # our hotkey hook). UIA-first, registry fallback.
         self._poll_stop.clear()
         self._poll_thread = threading.Thread(
-            target=self._poll_registry_loop,
-            name="mute-registry-poller",
+            target=self._poll_detection_loop,
+            name="mute-state-poller",
             daemon=True,
         )
         self._poll_thread.start()
@@ -163,17 +180,32 @@ class MuteSync:
             self._poll_thread = None
         self._started = False
 
-    def _poll_registry_loop(self) -> None:
-        """Poll Windows registry for meeting-app mic usage changes.
+    def resume_auto_sync(self) -> None:
+        """Clear the manual override and immediately re-run detection once.
 
-        The ``LastUsedTimeStop`` value under
-        ``HKCU\\...\\CapabilityAccessManager\\ConsentStore\\microphone``
-        is 0 while an app is actively using the mic and nonzero otherwise.
-        This works regardless of how the user toggled mute (hotkey or
-        mouse click on the app's button).
+        Hands mute control back to auto-detection after a manual
+        dashboard/hotkey correction (which is otherwise sticky for the
+        rest of the recording).
         """
-        interval = 1.0  # seconds between polls
-        # Find any live PID from the target set to query
+        with self._lock:
+            self._manual_override = False
+        logger.info("Mute sync: manual override cleared (auto-sync resumed)")
+        try:
+            self._run_detection_cycle(apply_held=True)
+        except Exception:
+            logger.debug("Mute re-detection after resume failed", exc_info=True)
+
+    def _poll_detection_loop(self) -> None:
+        """Poll the meeting app's mute state while not manually overridden.
+
+        Detection order per cycle (see _run_detection_cycle):
+        UIA mute-button state first, held UIA state second, registry
+        mic-usage signal last. Backs off to a slow interval after
+        repeated errors and restores the fast interval on recovery.
+        """
+        poll_interval = 1.0  # seconds between polls
+        backoff_interval = 10.0  # after repeated errors, avoid log spam
+        interval = poll_interval
         consecutive_errors = 0
 
         while not self._poll_stop.is_set():
@@ -183,47 +215,102 @@ class MuteSync:
                 if overridden:
                     self._poll_stop.wait(interval)
                     continue
-                detected = self._detect_via_any_pid()
-                if detected is not None:
-                    with self._lock:
-                        changed = detected != self._muted and not self._manual_override
-                        if changed:
-                            self._muted = detected
-                            state = "MUTED" if detected else "UNMUTED"
-                    if changed:
-                        logger.info("Mute sync: registry detected %s", state)
-                        self._fire_mute_changed(detected)
-                    consecutive_errors = 0
+                self._run_detection_cycle(apply_held=False)
+                # Successful poll (even if inconclusive): undo any backoff.
+                consecutive_errors = 0
+                interval = poll_interval
             except Exception:
                 consecutive_errors += 1
                 if consecutive_errors == 1:
-                    logger.debug("Registry mute polling failed", exc_info=True)
+                    logger.debug("Mute state polling failed", exc_info=True)
                 if consecutive_errors > 10:
-                    # Registry not accessible; back off to avoid log spam
-                    interval = 10.0
+                    interval = backoff_interval
 
             self._poll_stop.wait(interval)
+
+    def _run_detection_cycle(self, apply_held: bool) -> None:
+        """Run one detection pass and apply the result (override-gated).
+
+        Order:
+        1. UIA: read the actual mute-button state from the meeting
+           window. Conclusive UIA always wins over registry.
+        2. Held UIA state: once UIA has been conclusive this recording,
+           inconclusive polls hold the current state rather than
+           flapping to the registry signal. Only re-applied when
+           ``apply_held`` is True (resume_auto_sync); the periodic
+           poller must not undo hotkey blind-toggles.
+        3. Registry mic-usage fallback (legacy behavior), only when UIA
+           never concluded and the constructor flag allows.
+        """
+        detected: Optional[bool] = None
+        source = ""
+        if self._use_uia_detection:
+            detected = self._detect_via_uia()
+            if detected is not None:
+                with self._lock:
+                    self._last_uia_state = detected
+                source = "uia"
+        if detected is None:
+            with self._lock:
+                held = self._last_uia_state
+            if held is not None:
+                if not apply_held:
+                    return
+                detected = held
+                source = "uia-held"
+        if detected is None and self._use_registry_fallback:
+            detected = self._detect_via_any_pid()
+            source = "registry"
+        if detected is None:
+            return
+        self._apply_detected_state(detected, source)
+
+    def _apply_detected_state(self, detected: bool, source: str) -> None:
+        """Apply an auto-detected mute state unless manually overridden."""
+        with self._lock:
+            changed = detected != self._muted and not self._manual_override
+            if changed:
+                self._muted = detected
+        if changed:
+            logger.info(
+                "Mute sync: %s detected %s",
+                source, "MUTED" if detected else "UNMUTED",
+            )
+            self._fire_mute_changed(detected)
+
+    def _detect_via_uia(self) -> Optional[bool]:
+        """Read the mute-button state from the meeting app's UIA tree."""
+        try:
+            from meeting_recorder.audio.uia_mute_detector import detect_mute_state
+        except Exception:
+            return None
+        return detect_mute_state(self._expanded_target_pids())
+
+    def _expanded_target_pids(self) -> set[int]:
+        """Target PIDs plus their children (WebView2, renderer, etc.).
+
+        Meeting apps often spawn child processes; the window- or
+        mic-owning PID may not be the top-level PID we were given.
+        """
+        import psutil
+
+        pids: set[int] = set(self._target_pids)
+        for pid in list(self._target_pids):
+            try:
+                for child in psutil.Process(pid).children(recursive=True):
+                    pids.add(child.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return pids
 
     def _detect_via_any_pid(self) -> Optional[bool]:
         """Try detect_initial_mute_state against each target PID.
 
-        Meeting apps often spawn child processes; the mic-owning PID
-        may not be the top-level PID we were given. Try them all and
-        return the first conclusive answer.
+        Returns the first conclusive answer across targets and their
+        child processes.
         """
-        import psutil
-
-        # Include target_pids plus their children (WebView2, renderer, etc.)
-        pids_to_try: set[int] = set(self._target_pids)
-        for pid in list(self._target_pids):
-            try:
-                for child in psutil.Process(pid).children(recursive=True):
-                    pids_to_try.add(child.pid)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-        for pid in pids_to_try:
-            result = detect_initial_mute_state(pid)
+        for pid in self._expanded_target_pids():
+            result = detect_initial_mute_state(pid, include_packaged=True)
             if result is not None:
                 return result
         return None
@@ -278,7 +365,15 @@ def get_all_pids_for_process(process_name: str) -> set[int]:
     return pids
 
 
-def detect_initial_mute_state(pid: int) -> Optional[bool]:
+_MIC_CONSENT_KEY_PATH = (
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+    r"\CapabilityAccessManager\ConsentStore\microphone"
+)
+
+
+def detect_initial_mute_state(
+    pid: int, include_packaged: bool = False,
+) -> Optional[bool]:
     """Detect whether the meeting app is currently muted via registry.
 
     Checks the Windows CapabilityAccessManager registry for microphone
@@ -286,15 +381,24 @@ def detect_initial_mute_state(pid: int) -> Optional[bool]:
     > 0), the app is likely muted. If the mic is actively in use
     (LastUsedTimeStop == 0), the app is likely unmuted.
 
+    Scans the ``NonPackaged`` subtree (classic exes like Zoom) first,
+    then — only when ``include_packaged`` — packaged-app keys (MSIX,
+    e.g. new Teams ``MSTeams_*``).
+
+    ``include_packaged`` defaults to False because the initial-state call
+    must stay conservative: Teams holds the mic device open while
+    soft-muted, so the packaged signal would flip the safe MUTED default
+    to UNMUTED at recording start and capture mic audio from t=0. The
+    poller opts in (UIA-gated) where a wrong read self-corrects.
+
     Args:
         pid: Process ID of the meeting app.
+        include_packaged: Also scan MSIX packaged-app consent keys.
 
     Returns:
         False if unmuted (mic in use), True if muted (mic not in use),
         None if detection failed.
     """
-    import winreg
-
     import psutil
 
     try:
@@ -303,13 +407,22 @@ def detect_initial_mute_state(pid: int) -> Optional[bool]:
         logger.debug("Could not get exe path for PID %d", pid)
         return None
 
+    result = _detect_nonpackaged_mute_state(pid, exe_path)
+    if result is not None:
+        return result
+    if not include_packaged:
+        return None
+    return _detect_packaged_mute_state(pid, exe_path)
+
+
+def _detect_nonpackaged_mute_state(pid: int, exe_path: str) -> Optional[bool]:
+    """Scan the NonPackaged consent subtree (classic Win32 exes)."""
+    import winreg
+
     # Convert exe path to registry format: replace \ and / with #
     exe_registry = exe_path.replace("\\", "#").replace("/", "#")
 
-    base_key_path = (
-        r"SOFTWARE\Microsoft\Windows\CurrentVersion"
-        r"\CapabilityAccessManager\ConsentStore\microphone\NonPackaged"
-    )
+    base_key_path = _MIC_CONSENT_KEY_PATH + r"\NonPackaged"
 
     try:
         base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, base_key_path)
@@ -332,29 +445,33 @@ def detect_initial_mute_state(pid: int) -> Optional[bool]:
             try:
                 subkey = winreg.OpenKey(base_key, subkey_name)
                 try:
-                    value, _ = winreg.QueryValueEx(subkey, "LastUsedTimeStop")
-                    if value == 0:
-                        logger.info(
-                            "Registry mute detection: PID %d (%s) mic IN USE "
-                            "(unmuted)",
-                            pid, exe_path,
-                        )
-                        return False
-                    else:
-                        logger.info(
-                            "Registry mute detection: PID %d (%s) mic NOT in "
-                            "use (muted)",
-                            pid, exe_path,
-                        )
-                        return True
+                    value = _query_last_used_stop(subkey)
                 finally:
                     winreg.CloseKey(subkey)
             except OSError:
+                logger.debug(
+                    "Could not open subkey %s", subkey_name,
+                )
+                continue
+            if value is None:
                 logger.debug(
                     "Could not read LastUsedTimeStop from subkey %s",
                     subkey_name,
                 )
                 continue
+            if value == 0:
+                logger.info(
+                    "Registry mute detection: PID %d (%s) mic IN USE "
+                    "(unmuted)",
+                    pid, exe_path,
+                )
+                return False
+            logger.info(
+                "Registry mute detection: PID %d (%s) mic NOT in "
+                "use (muted)",
+                pid, exe_path,
+            )
+            return True
     finally:
         winreg.CloseKey(base_key)
 
@@ -363,3 +480,105 @@ def detect_initial_mute_state(pid: int) -> Optional[bool]:
         exe_path, exe_registry,
     )
     return None
+
+
+def _detect_packaged_mute_state(pid: int, exe_path: str) -> Optional[bool]:
+    """Scan packaged-app (MSIX) consent keys for mic usage.
+
+    Packaged apps — e.g. new Teams, package family ``MSTeams_...`` —
+    do not appear under ``NonPackaged``; their keys sit directly under
+    ``ConsentStore\\microphone`` named by package family name, with
+    ``LastUsedTimeStop`` on the key itself or on its subkeys. The exe
+    name is matched against the family name with separators stripped
+    (``ms-teams`` -> ``msteams`` matches ``MSTeams_8wekyb3d8bbwe``).
+    """
+    import winreg
+
+    exe_name = ntpath.splitext(ntpath.basename(exe_path))[0]
+    norm_exe = re.sub(r"[^a-z0-9]", "", exe_name.lower())
+    if not norm_exe:
+        return None
+
+    try:
+        base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _MIC_CONSENT_KEY_PATH)
+    except OSError:
+        logger.debug("Registry key not found: HKCU\\%s", _MIC_CONSENT_KEY_PATH)
+        return None
+
+    try:
+        idx = 0
+        while True:
+            try:
+                subkey_name = winreg.EnumKey(base_key, idx)
+            except OSError:
+                break
+            idx += 1
+
+            if subkey_name == "NonPackaged":
+                continue
+            # Family names look like "MSTeams_8wekyb3d8bbwe".
+            family = subkey_name.split("_", 1)[0]
+            norm_family = re.sub(r"[^a-z0-9]", "", family.lower())
+            if not norm_family:
+                continue
+            if norm_exe not in norm_family and norm_family not in norm_exe:
+                continue
+
+            try:
+                subkey = winreg.OpenKey(base_key, subkey_name)
+            except OSError:
+                continue
+            try:
+                value = _query_last_used_stop(subkey)
+                if value is None:
+                    value = _query_last_used_stop_in_children(subkey)
+            finally:
+                winreg.CloseKey(subkey)
+            if value is None:
+                continue
+            muted = value != 0
+            logger.info(
+                "Registry mute detection (packaged %s): PID %d (%s) mic %s",
+                subkey_name, pid, exe_path,
+                "NOT in use (muted)" if muted else "IN USE (unmuted)",
+            )
+            return muted
+    finally:
+        winreg.CloseKey(base_key)
+
+    logger.debug("No matching packaged consent key for exe %s", exe_path)
+    return None
+
+
+def _query_last_used_stop(key) -> Optional[int]:
+    """Read the LastUsedTimeStop value from an open registry key."""
+    import winreg
+
+    try:
+        value, _ = winreg.QueryValueEx(key, "LastUsedTimeStop")
+        return value
+    except OSError:
+        return None
+
+
+def _query_last_used_stop_in_children(key) -> Optional[int]:
+    """Read LastUsedTimeStop from the first child subkey that has it."""
+    import winreg
+
+    idx = 0
+    while True:
+        try:
+            child_name = winreg.EnumKey(key, idx)
+        except OSError:
+            return None
+        idx += 1
+        try:
+            child = winreg.OpenKey(key, child_name)
+        except OSError:
+            continue
+        try:
+            value = _query_last_used_stop(child)
+        finally:
+            winreg.CloseKey(child)
+        if value is not None:
+            return value
