@@ -13,8 +13,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-# Supersampling factor for smooth edges.
-_SS = 4
+# Supersampling factor for smooth edges (high, since the glyph is simple).
+_SS = 8
 
 # Palette (top, bottom) gradient per state.
 _IDLE_TOP, _IDLE_BOTTOM = (99, 102, 241), (67, 56, 202)       # indigo
@@ -43,14 +43,6 @@ def _squircle_base(size: int, top, bottom) -> Image.Image:
     md.rounded_rectangle([0, 0, s - 1, s - 1], radius=radius, fill=255)
 
     base = _vertical_gradient(s, top, bottom).convert("RGBA")
-    # Soft top highlight for a little depth.
-    hi = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(hi)
-    hd.rounded_rectangle(
-        [int(s * 0.08), int(s * 0.06), int(s * 0.92), int(s * 0.5)],
-        radius=int(s * 0.18), fill=(255, 255, 255, 38),
-    )
-    base = Image.alpha_composite(base, hi)
     base.putalpha(mask)
     return base.resize((size, size), Image.LANCZOS)
 
@@ -61,28 +53,29 @@ def _draw_mic(img: Image.Image, color=(255, 255, 255, 255)) -> None:
     layer = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     cx = s // 2
-    # Slim, tall capsule so it reads as a microphone (not an egg).
-    body_w = int(s * 0.135)
-    top = int(s * 0.22)
-    bot = int(s * 0.52)
+    # Tall vertical capsule (clearly a mic head, not a ball): width < height.
+    body_w = int(s * 0.130)        # full width 0.26
+    top = int(s * 0.145)
+    bot = int(s * 0.545)           # height 0.40 -> distinctly vertical
     d.rounded_rectangle(
         [cx - body_w, top, cx + body_w, bot], radius=body_w, fill=color,
     )
-    # Cradle arc hugging the lower half of the capsule.
-    lw = max(int(s * 0.040), 2)
-    arc_w = int(s * 0.215)
+    # Thick U-cradle wrapping the lower half — the cue that says "microphone".
+    lw = int(s * 0.058)
+    arc_w = int(s * 0.235)
     arc_top = int(s * 0.34)
-    arc_bot = int(s * 0.60)
+    arc_bot = int(s * 0.625)
     d.arc(
         [cx - arc_w, arc_top, cx + arc_w, arc_bot],
-        start=15, end=165, fill=color, width=lw,
+        start=12, end=168, fill=color, width=lw,
     )
-    # Stand + base
-    d.line([cx, arc_bot - lw // 2, cx, int(s * 0.74)], fill=color, width=lw)
-    base_w = int(s * 0.15)
+    # Stand (from cradle bottom) + base bar.
+    stand_top = arc_bot - lw // 2
+    base_y = int(s * 0.755)
+    d.line([cx, stand_top, cx, base_y], fill=color, width=lw)
+    base_w = int(s * 0.155)
     d.line(
-        [cx - base_w, int(s * 0.76), cx + base_w, int(s * 0.76)],
-        fill=color, width=lw,
+        [cx - base_w, base_y, cx + base_w, base_y], fill=color, width=lw,
     )
     img.alpha_composite(layer.resize(img.size, Image.LANCZOS))
 
@@ -143,22 +136,38 @@ def create_error_icon(size: int = 64) -> Image.Image:
     return img
 
 
+# Bump when the icon art changes so a stale cached .ico is regenerated.
+_ICON_VERSION = 4
+
+
 @lru_cache(maxsize=1)
 def app_icon_path() -> str:
     """Write (once) a multi-size .ico for the app/taskbar and return its path.
 
-    Cached in the user config dir so Tk's iconbitmap (which needs a file) gets
-    a crisp multi-resolution icon. Falls back to a temp path if the config dir
-    is unavailable. Returns "" if writing fails.
+    Each size is rendered NATIVELY (its own supersampled draw) rather than
+    downsampling one large image, so the 16/24/32px taskbar icons stay crisp
+    instead of muddy. Cached in the user config dir (Tk's iconbitmap needs a
+    file). Returns "" if writing fails.
     """
     try:
         target_dir = Path.home() / ".meeting_recorder"
         target_dir.mkdir(parents=True, exist_ok=True)
-        ico = target_dir / "app_icon.ico"
+        ico = target_dir / f"app_icon_v{_ICON_VERSION}.ico"
         if not ico.exists():
-            sizes = [16, 24, 32, 48, 64, 128, 256]
-            base = create_idle_icon(256)
-            base.save(ico, format="ICO", sizes=[(s, s) for s in sizes])
+            # Clean up older versions.
+            for old in target_dir.glob("app_icon*.ico"):
+                if old != ico:
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+            sizes = [256, 128, 64, 48, 32, 24, 16]
+            imgs = [create_idle_icon(s) for s in sizes]
+            imgs[0].save(
+                ico, format="ICO",
+                sizes=[(s, s) for s in sizes],
+                append_images=imgs[1:],
+            )
         return str(ico)
     except Exception:
         return ""
