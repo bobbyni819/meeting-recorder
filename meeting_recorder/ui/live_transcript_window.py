@@ -101,6 +101,7 @@ class LiveTranscriptWindow:
         self._visible = False
 
     def close(self) -> None:
+        """Destroy the window. Must be called on the Tk thread."""
         self._visible = False
         if self._window is not None:
             try:
@@ -110,13 +111,25 @@ class LiveTranscriptWindow:
             self._window = None
             self._text = None
 
+    def request_close(self) -> None:
+        """Destroy the window from any thread (marshals onto the Tk thread)."""
+        self._visible = False
+        win = self._window
+        if win is not None:
+            try:
+                win.after(0, self.close)
+            except tk.TclError:
+                self._window = None
+                self._text = None
+
     def update_text(self, text: str) -> None:
         """Replace the displayed rolling transcript and scroll to the end."""
-        if not self._visible or self._window is None or self._text is None:
+        win = self._window  # snapshot — close() may null it on another thread
+        if not self._visible or win is None or self._text is None:
             return
         try:
-            self._window.after(0, self._set_text, text)
-        except tk.TclError:
+            win.after(0, self._set_text, text)
+        except (tk.TclError, RuntimeError, AttributeError):
             pass
 
     def _set_text(self, text: str) -> None:

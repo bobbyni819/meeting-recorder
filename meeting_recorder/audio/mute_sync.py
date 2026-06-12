@@ -25,6 +25,22 @@ logger = logging.getLogger(__name__)
 
 user32 = ctypes.windll.user32
 
+# Declare 64-bit-safe handle types. Window handles are pointers; left
+# untyped (default c_int) they overflow with "int too long to convert" once
+# another library (uiautomation, for mute detection) sets .restype on a
+# shared user32 function. See the same fix in video/screen_capture.py.
+try:
+    import ctypes.wintypes as _wintypes
+
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetWindowThreadProcessId.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = _wintypes.DWORD
+except Exception:  # pragma: no cover - non-Windows / stubbed ctypes
+    pass
+
 # Mute shortcuts per meeting app
 APP_MUTE_SHORTCUTS = {
     "zoom": "alt+a",
@@ -94,6 +110,9 @@ class MuteSync:
         # hotkey hook) are still picked up within ~1 second.
         self._poll_thread: Optional[threading.Thread] = None
         self._poll_stop = threading.Event()
+        # Background thread that re-detects after resume_auto_sync (joined in
+        # tests; the UIA walk must not run on the dashboard's Tk thread).
+        self._resume_thread: Optional[threading.Thread] = None
 
     @property
     def is_muted(self) -> bool:
@@ -202,7 +221,19 @@ class MuteSync:
         """
         with self._lock:
             self._manual_override = False
+            # Restart the privacy-first blind grace window from NOW. Otherwise
+            # the timer inherits a stale _last_uia_ts frozen during the
+            # override period and could re-mute the user instantly on resume.
+            self._last_uia_ts = self._clock()
         logger.info("Mute sync: manual override cleared (auto-sync resumed)")
+        # Run detection off the UI thread — the UIA tree walk can take up to
+        # ~1s and resume_auto_sync is called from the dashboard (Tk) thread.
+        self._resume_thread = threading.Thread(
+            target=self._resume_detect, name="mute-resume-detect", daemon=True,
+        )
+        self._resume_thread.start()
+
+    def _resume_detect(self) -> None:
         try:
             self._run_detection_cycle(apply_held=True)
         except Exception:

@@ -221,10 +221,10 @@ class GameBarDashboard:
         tw = self._transcript_window
         self._transcript_window = None
         if tw is not None:
-            try:
-                tw.close()
-            except Exception:
-                pass
+            # Tear down the pop-out on the Tk thread (close() is called from a
+            # non-Tk daemon thread); destroying a Toplevel cross-thread
+            # corrupts the interpreter.
+            tw.request_close()
         w = self._window
         self._window = None  # prevent further after() calls from other threads
         if w is not None:

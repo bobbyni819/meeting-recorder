@@ -219,10 +219,18 @@ class GeminiTranscriber:
                 "Try again or check the Gemini API status."
             )
 
-        # Transcribe with retries for transient API errors
-        raw_text = self._transcribe_with_retry(
-            client, uploaded, prompt=self._build_prompt(attendees),
-        )
+        # Transcribe with retries for transient API errors. Always delete the
+        # uploaded Files-API object afterwards — including when all retries
+        # fail (sustained free-tier 429) — so it doesn't linger server-side.
+        try:
+            raw_text = self._transcribe_with_retry(
+                client, uploaded, prompt=self._build_prompt(attendees),
+            )
+        finally:
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                logger.debug("Could not delete uploaded Gemini file (non-fatal)")
 
         logger.info("Transcript received: %d chars", len(raw_text))
 
@@ -230,12 +238,6 @@ class GeminiTranscriber:
         raw_path = audio_path.parent / "transcript_raw.txt"
         raw_path.write_text(raw_text, encoding="utf-8")
         logger.info("Raw Gemini transcript saved: %s", raw_path.name)
-
-        # Best-effort cleanup of the uploaded file
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            logger.debug("Could not delete uploaded Gemini file (non-fatal)")
 
         return self._parse(raw_text, audio_duration=self._wav_duration(audio_path))
 

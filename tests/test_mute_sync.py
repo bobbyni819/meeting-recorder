@@ -800,6 +800,7 @@ class TestResumeAutoSync:
         ms._detect_via_uia = mock.MagicMock(return_value=None)
         ms._detect_via_any_pid = mock.MagicMock(return_value=False)
         ms.resume_auto_sync()
+        ms._resume_thread.join(timeout=2)  # detection runs off-thread now
 
         assert ms.is_muted is True  # held UIA state re-applied
         ms._detect_via_any_pid.assert_not_called()
@@ -814,6 +815,7 @@ class TestResumeAutoSync:
         ms._detect_via_uia = mock.MagicMock(return_value=None)
         ms._detect_via_any_pid = mock.MagicMock(return_value=False)
         ms.resume_auto_sync()
+        ms._resume_thread.join(timeout=2)
 
         assert ms._manual_override is False
         assert ms.is_muted is False
@@ -823,7 +825,29 @@ class TestResumeAutoSync:
         ms.toggle()
         ms._detect_via_uia = mock.MagicMock(side_effect=RuntimeError("boom"))
         ms.resume_auto_sync()  # must not raise
+        ms._resume_thread.join(timeout=2)
         assert ms._manual_override is False
+
+    def test_resume_resets_remute_timer(self):
+        """Resuming auto-sync must restart the privacy grace clock.
+
+        Regression: a stale _last_uia_ts frozen during a long manual-override
+        period would otherwise re-mute the user instantly on resume.
+        """
+        t = [0.0]
+        ms = MuteSync(
+            app_key="zoom", target_pids={100}, start_muted=True,
+            privacy_first=True, remute_grace_seconds=10.0, clock=lambda: t[0],
+        )
+        ms.toggle()  # manual unmute at t=0, override on
+        assert ms.is_muted is False
+        t[0] = 100.0  # long override period; _last_uia_ts stays frozen at 0
+        ms._detect_via_uia = mock.MagicMock(return_value=None)  # blind on resume
+        ms.resume_auto_sync()
+        ms._resume_thread.join(timeout=2)
+        # Without the reset, blind_for would be 100s >> 10s grace -> instant
+        # re-mute. With the reset it is ~0 -> stays unmuted.
+        assert ms.is_muted is False
 
     def test_manual_toggle_after_resume_is_sticky_again(self):
         ms = MuteSync(app_key="zoom", target_pids={100}, start_muted=False)
@@ -831,6 +855,7 @@ class TestResumeAutoSync:
         ms._detect_via_uia = mock.MagicMock(return_value=None)
         ms._detect_via_any_pid = mock.MagicMock(return_value=None)
         ms.resume_auto_sync()
+        ms._resume_thread.join(timeout=2)
         assert ms._manual_override is False
 
         ms.toggle()  # user takes manual control again

@@ -75,9 +75,12 @@ def parse_vtt(path: Path) -> list[TranscriptSegment]:
         if not payload:
             continue
         speaker = ""
+        # A cue with more than one <v> span has overlapping speakers; don't
+        # confidently attribute all of it to the first one — leave unnamed.
+        multi_voice = payload.lower().count("<v ") > 1
         vm = _VOICE_RE.match(payload)
         if vm:
-            speaker = vm.group(1).strip()
+            speaker = "" if multi_voice else vm.group(1).strip()
             payload = vm.group(2)
         # Strip any remaining tags and collapse whitespace.
         body = _TAG_RE.sub("", payload)
