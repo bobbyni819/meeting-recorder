@@ -12,6 +12,18 @@ import pytest
 
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
 
+# Skip the e2e suite when its optional dependencies are missing. This must
+# live here (the parent conftest) as collect_ignore: a module-level
+# pytest.skip inside tests/e2e/conftest.py aborts collection of the entire
+# tests/ package because the tests directories are packages (__init__.py).
+collect_ignore: list[str] = []
+try:
+    import playwright  # noqa: F401
+    import sounddevice  # noqa: F401
+    import soundfile  # noqa: F401
+except ImportError:
+    collect_ignore.append("e2e")
+
 
 # ---------------------------------------------------------------------------
 # Temporary directory helpers

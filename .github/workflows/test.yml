@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,local,cloud,gemini,gdrive,outlook]"
+
+      # e2e tests need VB-Cable + a meeting app and are excluded; the unit
+      # suite is fully mocked and runs headless.
+      - name: Run unit tests
+        run: python -m pytest tests/ -q --ignore=tests/e2e
