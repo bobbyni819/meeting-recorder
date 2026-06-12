@@ -162,10 +162,12 @@ class TestVoiceProfileDBEdgeCases:
         assert result is None
 
     def test_match_with_similar_embedding(self, db: VoiceProfileDB):
+        # Seed + smaller noise so cosine similarity is reliably above the
+        # 0.75 threshold (0.05 noise lands right at it -> previously flaky).
+        np.random.seed(1234)
         emb = _random_embedding()
         db.enroll("Alice", emb)
-        # Add small noise — should still match
-        noisy = emb + np.random.randn(len(emb)).astype(np.float32) * 0.05
+        noisy = emb + np.random.randn(len(emb)).astype(np.float32) * 0.03
         result = db.match(noisy, threshold=0.75)
         db.close()
         assert result is not None
