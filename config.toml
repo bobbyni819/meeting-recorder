@@ -6,6 +6,7 @@ live_transcription = true  # real-time transcription preview during recording (u
 live_transcript_mic = true  # also feed your mic into the live preview (labelled [You])
 auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
 auto_retry_failed = true  # heal failed/stuck recordings at startup (summary, upload, transcription)
+smart_rename = true  # rename the folder from transcript content (disambiguates same-slot meetings via calendar); only the folder moves, files inside are untouched
 
 [audio]
 sample_rate = 16000

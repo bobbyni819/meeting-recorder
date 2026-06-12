@@ -98,6 +98,10 @@ class RecordingConfig:
     auto_start: bool = False  # auto-detect meetings and start recording
     # Heal failed/stuck/partially-processed recordings at startup
     auto_retry_failed: bool = True
+    # Rename the recording folder from transcript content after processing,
+    # disambiguating between meetings booked in the same slot via the
+    # calendar. Only the folder moves; files inside are untouched.
+    smart_rename: bool = True
 
 
 @dataclass

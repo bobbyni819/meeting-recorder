@@ -59,6 +59,9 @@ class RecordingMetadata:
     quality_scores: dict = field(default_factory=dict)
     # User-defined tags
     tags: list[str] = field(default_factory=list)
+    # Folder name at creation, before smart_rename moved it (additive; lets
+    # external tools that cached the old path find the recording).
+    original_dir_name: str = ""
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory.

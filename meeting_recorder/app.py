@@ -828,6 +828,15 @@ class MeetingRecorderApp:
                 elapsed_seconds=elapsed_seconds,
             )
 
+            # Smart rename from transcript content. Runs BEFORE the parallel
+            # pool so the search index and Drive upload see the final name.
+            if self.config.recording.smart_rename:
+                new_dir = self._smart_rename_recording(
+                    recording_dir, segments, metadata, summary_config,
+                )
+                if new_dir is not None:
+                    recording_dir = new_dir
+
             # Run summary, indexing, quality scoring, and Drive upload in parallel
             _update_progress("saving & indexing...")
             from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -943,6 +952,84 @@ class MeetingRecorderApp:
                 f"Drive upload failed for {recording_dir.name} — will retry at next startup",
                 source="pipeline",
             )
+
+    def _smart_rename_recording(
+        self, recording_dir: Path, segments, metadata: RecordingMetadata,
+        summary_config,
+    ) -> Optional[Path]:
+        """Rename the folder to match the meeting, disambiguating by content.
+
+        Best-effort and additive: returns the new path on a successful
+        rename, else None (folder unchanged). Files inside are untouched;
+        only the directory moves, with the timestamp prefix preserved.
+        """
+        try:
+            from meeting_recorder.storage import smart_naming
+
+            # Gather candidate calendar events overlapping this recording.
+            candidates = self._calendar_candidates(metadata)
+            if metadata.meeting_subject and metadata.meeting_subject not in candidates:
+                candidates.append(metadata.meeting_subject)
+            # 0 candidates → keep the current name (don't spend quota naming
+            # ad-hoc meetings); 1 → use it; 2+ → disambiguate by transcript.
+            if not candidates:
+                return None
+
+            excerpt = "\n".join(
+                f"{s.speaker or 'Speaker'}: {s.text}" for s in segments[:60]
+            )
+            title, source = smart_naming.select_meeting_title(
+                excerpt, candidates, summary_config,
+            )
+            if not title:
+                return None
+            # Don't rename if the title already matches the current folder.
+            app_name = metadata.app_name or "Meeting"
+            if smart_naming.current_subject(
+                recording_dir.name, app_name
+            ).lower() == smart_naming.sanitize_subject(title).lower():
+                return None
+
+            new_dir = smart_naming.rename_recording_dir(
+                recording_dir, title, app_name,
+            )
+            if new_dir is None:
+                return None
+
+            metadata.original_dir_name = recording_dir.name
+            metadata.meeting_subject = title
+            metadata.save(new_dir)
+            logger.info(
+                "Smart rename (%s): %s -> %s", source, recording_dir.name, new_dir.name,
+            )
+            self._main_window.add_notification(
+                "info", f"Named meeting: {title}", source="naming",
+            )
+            return new_dir
+        except Exception:
+            logger.exception("Smart rename failed (non-fatal)")
+            return None
+
+    def _calendar_candidates(self, metadata: RecordingMetadata) -> list[str]:
+        """Calendar event subjects overlapping this recording's time slot."""
+        if not self.config.outlook.enabled:
+            return []
+        try:
+            from datetime import datetime
+
+            from meeting_recorder.integrations.outlook import get_upcoming_meetings
+
+            ref = None
+            if metadata.start_time:
+                try:
+                    ref = datetime.fromisoformat(metadata.start_time)
+                except ValueError:
+                    ref = None
+            events = get_upcoming_meetings(window_minutes=30, reference_time=ref)
+            return [e.subject for e in events if e.subject]
+        except Exception:
+            logger.debug("Calendar candidate fetch failed", exc_info=True)
+            return []
 
     def _generate_summary(
         self, recording_dir: Path, segments, metadata: RecordingMetadata,
