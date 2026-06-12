@@ -21,11 +21,18 @@ from typing import Iterator, Optional
 logger = logging.getLogger(__name__)
 
 # Per-poll search limits: the mute button lives in the meeting toolbar,
-# which is shallow in Zoom (~depth 5) and deeper in the WebView-based
-# new Teams. The time budget is the hard limit; the depth limit keeps
-# the walk from drowning in chat/transcript subtrees.
-DEFAULT_BUDGET_SECONDS = 0.15
-DEFAULT_MAX_DEPTH = 16
+# which is shallow in Zoom (~depth 5) but DEEP in the WebView2-based new
+# Teams — verified live at depth 21 (id='microphone-button'). The depth
+# and budget must be generous enough to reach it; early-exit on the first
+# conclusive control keeps the typical poll fast.
+DEFAULT_BUDGET_SECONDS = 1.2
+DEFAULT_MAX_DEPTH = 30
+
+# Stable AutomationIds of the mic toggle, independent of UI language.
+# When matched, the control IS the mic button, so its name is classified
+# without requiring a "mic/microphone" context word (handles localized or
+# terse labels like a bare "Mute"/"Unmute").
+_MIC_BUTTON_AUTOMATION_IDS = frozenset({"microphone-button"})
 
 # UIA control types worth inspecting for a mute toggle.
 _BUTTON_CONTROL_TYPE_NAMES = frozenset(
@@ -200,6 +207,24 @@ def _control_mute_state(control) -> Optional[bool]:
         name = control.Name
     except Exception:
         return None
+
+    # Stable AutomationId match (Teams 'microphone-button'): we know this
+    # is the mic toggle, so classify the action verb without the context-
+    # word guard. 'Unmute…' -> currently muted, 'Mute…' -> currently unmuted.
+    try:
+        automation_id = control.AutomationId
+    except Exception:
+        automation_id = ""
+    if automation_id in _MIC_BUTTON_AUTOMATION_IDS:
+        text = (name or "").strip().lower()
+        if "unmute" in text:
+            return True
+        if "mute" in text:
+            return False
+        toggled = _toggle_pattern_state(control, "mic")
+        if toggled is not None:
+            return toggled
+
     state = classify_mute_button_name(name)
     if state is not None:
         return state
