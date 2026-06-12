@@ -35,8 +35,10 @@ class TranscriptionPipeline:
     def __init__(self, config: Config):
         self.config = config
         self._transcriber = None
+        self._fallback_transcriber = None
         self._diarizer = None
         self._last_speaker_mapping = None
+        self._last_backend_used = None
 
     def _get_transcriber(self):
         """Get or create the transcription backend."""
@@ -88,10 +90,45 @@ class TranscriptionPipeline:
             )
         return self._diarizer
 
+    def _get_local_fallback(self, original_error: Exception) -> LocalWhisperTranscriber:
+        """Build (and cache) the local Whisper transcriber used as Gemini fallback.
+
+        Loads the model eagerly so import/model-load failures surface here.
+        If the fallback is unavailable, re-raises *original_error* (the
+        Gemini failure) so the user sees the root cause rather than a
+        misleading local-stack error.
+        """
+        try:
+            if self._fallback_transcriber is None:
+                tc = self.config.transcription
+                transcriber = LocalWhisperTranscriber(
+                    model_size=tc.model_size,
+                    device=tc.device,
+                    compute_type=tc.compute_type,
+                    language=self.config.recording.language,
+                )
+                transcriber.load()
+                self._fallback_transcriber = transcriber
+            return self._fallback_transcriber
+        except Exception:
+            logger.exception(
+                "Local Whisper fallback unavailable — re-raising original Gemini error"
+            )
+            raise original_error
+
     @property
     def last_speaker_mapping(self):
         """Return the speaker mapping from the last process() call, or None."""
         return self._last_speaker_mapping
+
+    @property
+    def last_backend_used(self) -> str | None:
+        """Backend that actually produced the last transcript, or None.
+
+        One of "gemini", "cloud", or "local" — "local" is also reported when
+        the Gemini backend failed and the local Whisper fallback kicked in.
+        """
+        return self._last_backend_used
 
     def process(
         self,
@@ -110,8 +147,8 @@ class TranscriptionPipeline:
             List of TranscriptSegment with speaker labels and timestamps.
         """
         self._last_speaker_mapping = None
+        self._last_backend_used = None
         app_audio = recording_dir / "app_audio.wav"
-        mic_audio = recording_dir / "mic_audio.wav"
         mixed_audio = recording_dir / "mixed.wav"
 
         user_name = self.config.recording.user_name
@@ -123,8 +160,25 @@ class TranscriptionPipeline:
             audio_path = mixed_audio if mixed_audio.exists() else app_audio
             if not audio_path.exists():
                 raise FileNotFoundError(f"No audio file found in {recording_dir}")
-            transcriber = self._get_transcriber()
-            segments = transcriber.transcribe(audio_path)
+            try:
+                transcriber = self._get_transcriber()
+                segments = transcriber.transcribe(audio_path)
+            except Exception as gemini_error:
+                logger.exception(
+                    "Gemini transcription failed; attempting local Whisper fallback"
+                )
+                # Re-raises gemini_error if faster-whisper is unavailable
+                fallback = self._get_local_fallback(gemini_error)
+                segments = self._process_with_fallback_transcriber(
+                    recording_dir, audio_path, fallback,
+                    attendees, organizer, user_name,
+                )
+                self._last_backend_used = "local"
+                logger.info(
+                    "Local Whisper fallback complete: %d segments", len(segments)
+                )
+                return segments
+            self._last_backend_used = "gemini"
             # Still attempt calendar-based speaker name resolution on top of
             # Gemini's generic "Speaker 1 / Speaker 2" labels.
             self._resolve_speakers(
@@ -134,6 +188,31 @@ class TranscriptionPipeline:
             return segments
 
         transcriber = self._get_transcriber()
+        segments = self._process_standard(
+            recording_dir, transcriber, attendees, organizer, user_name
+        )
+        self._last_backend_used = (
+            "cloud" if self.config.transcription.backend == "cloud" else "local"
+        )
+        return segments
+
+    def _process_standard(
+        self,
+        recording_dir: Path,
+        transcriber,
+        attendees: list[str] | None,
+        organizer: str,
+        user_name: str,
+    ) -> list[TranscriptSegment]:
+        """Transcribe via the separate-tracks / mixed-audio strategy.
+
+        Shared by the local/cloud backends and the Gemini-to-local fallback
+        so the fallback flows through the exact same diarization + merge
+        logic as a normal local run.
+        """
+        app_audio = recording_dir / "app_audio.wav"
+        mic_audio = recording_dir / "mic_audio.wav"
+        mixed_audio = recording_dir / "mixed.wav"
 
         # Strategy: Transcribe both tracks separately for better speaker identification
         # If separate tracks exist, transcribe them independently
@@ -160,6 +239,32 @@ class TranscriptionPipeline:
             return segments
 
         raise FileNotFoundError(f"No audio files found in {recording_dir}")
+
+    def _process_with_fallback_transcriber(
+        self,
+        recording_dir: Path,
+        audio_path: Path,
+        transcriber,
+        attendees: list[str] | None,
+        organizer: str,
+        user_name: str,
+    ) -> list[TranscriptSegment]:
+        """Run the standard local path for a recording Gemini failed on.
+
+        The standard path requires app+mic tracks or mixed.wav; recordings
+        with only app_audio.wav (e.g. imported audio) are transcribed
+        directly from the file Gemini would have used.
+        """
+        try:
+            return self._process_standard(
+                recording_dir, transcriber, attendees, organizer, user_name
+            )
+        except FileNotFoundError:
+            segments = self._process_mixed(audio_path, transcriber, user_name)
+            self._resolve_speakers(
+                segments, attendees, organizer, user_name, audio_path=audio_path,
+            )
+            return segments
 
     def _resolve_speakers(
         self,

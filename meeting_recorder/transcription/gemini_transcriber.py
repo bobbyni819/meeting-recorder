@@ -12,14 +12,24 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+# Server-suggested retry delays embedded in Gemini error payloads, e.g.
+# "'retryDelay': '7s'" (google.rpc.RetryInfo as dict/JSON) or the gRPC
+# textproto form "retry_delay { seconds: 7 }".
+_RETRY_DELAY_PATTERNS = (
+    re.compile(r"retry_?delay[\"']?\s*:\s*[\"']?(\d+(?:\.\d+)?)\s*s", re.IGNORECASE),
+    re.compile(r"retry_?delay\s*\{\s*seconds:\s*(\d+)", re.IGNORECASE),
+)
 
 _TRANSCRIPTION_PROMPT = """\
 Transcribe this meeting audio recording completely and accurately.
@@ -134,6 +144,15 @@ class GeminiTranscriber:
 
     DEFAULT_MODEL = "gemini-2.5-flash"
 
+    # Files API processing can take minutes for long recordings; 2 min was
+    # not enough.  Poll fast at first, then back off.
+    FILE_POLL_TIMEOUT_SECONDS = 600.0
+    FILE_POLL_FAST_INTERVAL = 2.0   # for the first minute
+    FILE_POLL_SLOW_INTERVAL = 5.0   # after the first minute
+    # Free-tier 429s are routine; retry generously but keep the worst-case
+    # total wait bounded.
+    MAX_TOTAL_RETRY_WAIT = 120.0
+
     def __init__(
         self,
         api_key: str,
@@ -181,12 +200,9 @@ class GeminiTranscriber:
             if flac_temp is not None and flac_temp.exists():
                 flac_temp.unlink()
 
-        # Poll until the file has been processed server-side (usually < 30 s)
-        for _ in range(60):  # up to 2 minutes
-            if uploaded.state.name != "PROCESSING":
-                break
-            time.sleep(2)
-            uploaded = client.files.get(name=uploaded.name)
+        # Poll until the file has been processed server-side (usually < 30 s,
+        # but long recordings can take several minutes)
+        uploaded = self._wait_for_file_active(client, uploaded)
 
         if uploaded.state.name != "ACTIVE":
             raise RuntimeError(
@@ -210,7 +226,7 @@ class GeminiTranscriber:
         except Exception:
             logger.debug("Could not delete uploaded Gemini file (non-fatal)")
 
-        return self._parse(raw_text)
+        return self._parse(raw_text, audio_duration=self._wav_duration(audio_path))
 
     def transcribe_dictation(
         self,
@@ -253,11 +269,7 @@ class GeminiTranscriber:
             if flac_temp is not None and flac_temp.exists():
                 flac_temp.unlink()
 
-        for _ in range(60):
-            if uploaded.state.name != "PROCESSING":
-                break
-            time.sleep(2)
-            uploaded = client.files.get(name=uploaded.name)
+        uploaded = self._wait_for_file_active(client, uploaded)
 
         if uploaded.state.name != "ACTIVE":
             raise RuntimeError(
@@ -276,16 +288,58 @@ class GeminiTranscriber:
 
         return parse_dictation_response(raw_text, choices, default_project, self.model)
 
+    def _wait_for_file_active(self, client, uploaded):
+        """Poll the Files API until *uploaded* leaves the PROCESSING state.
+
+        Polls every ``FILE_POLL_FAST_INTERVAL`` seconds for the first minute,
+        then every ``FILE_POLL_SLOW_INTERVAL`` seconds, up to
+        ``FILE_POLL_TIMEOUT_SECONDS`` total.  Returns the final file object
+        (which may still be in PROCESSING if the timeout was reached — the
+        caller checks for ACTIVE).
+        """
+        waited = 0.0
+        while (
+            uploaded.state.name == "PROCESSING"
+            and waited < self.FILE_POLL_TIMEOUT_SECONDS
+        ):
+            interval = (
+                self.FILE_POLL_FAST_INTERVAL
+                if waited < 60.0
+                else self.FILE_POLL_SLOW_INTERVAL
+            )
+            time.sleep(interval)
+            waited += interval
+            uploaded = client.files.get(name=uploaded.name)
+        return uploaded
+
+    @staticmethod
+    def _server_retry_delay(error: Exception) -> float | None:
+        """Extract a server-suggested retry delay (seconds) from a Gemini error."""
+        text = str(error)
+        for pattern in _RETRY_DELAY_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                try:
+                    return float(m.group(1))
+                except ValueError:
+                    continue
+        return None
+
     def _transcribe_with_retry(
-        self, client, uploaded, max_retries: int = 3, prompt: str | None = None,
+        self, client, uploaded, max_retries: int = 5, prompt: str | None = None,
     ):
         """Call Gemini generate_content with retries for transient errors.
 
-        Retries on rate-limit (429), server errors (5xx), and network
-        issues.  Raises the final error if all attempts fail.
+        Retries on rate-limit (429 RESOURCE_EXHAUSTED — routine on the free
+        tier), server errors (5xx), and network issues, with exponential
+        backoff plus jitter (~4/8/16/32 s between attempts).  Honors a
+        server-suggested retry delay when the error payload carries one.
+        Total wait across all attempts is bounded by ``MAX_TOTAL_RETRY_WAIT``.
+        Raises the final error if all attempts fail.
         """
         last_error = None
         contents_prompt = prompt if prompt is not None else _TRANSCRIPTION_PROMPT
+        total_waited = 0.0
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(
@@ -302,19 +356,33 @@ class GeminiTranscriber:
                 err_str = str(e).lower()
                 # Retry on rate-limit, server errors, and network issues
                 retryable = any(k in err_str for k in (
-                    "429", "500", "502", "503", "resource exhausted",
+                    "429", "500", "502", "503",
+                    "resource exhausted", "resource_exhausted",
                     "rate limit", "timeout", "connection",
-                    "deadline exceeded", "unavailable",
+                    "deadline exceeded", "unavailable", "overloaded",
                 ))
-                if not retryable or attempt == max_retries:
+                if not retryable or attempt >= max_retries:
                     logger.error(
                         "Gemini transcription failed (attempt %d/%d): %s",
                         attempt, max_retries, e,
                     )
                     raise
-                wait = 2 ** attempt  # 2s, 4s, 8s
+                wait = 2.0 ** (attempt + 1)  # 4s, 8s, 16s, 32s
+                server_delay = self._server_retry_delay(e)
+                if server_delay is not None:
+                    wait = max(wait, server_delay)
+                # Jitter avoids synchronized retries hammering the API
+                wait += random.uniform(0, wait * 0.25)
+                wait = min(wait, self.MAX_TOTAL_RETRY_WAIT - total_waited)
+                if wait <= 0:
+                    logger.error(
+                        "Gemini retry budget exhausted after %.0fs; giving up: %s",
+                        total_waited, e,
+                    )
+                    raise
+                total_waited += wait
                 logger.warning(
-                    "Gemini API error (attempt %d/%d), retrying in %ds: %s",
+                    "Gemini API error (attempt %d/%d), retrying in %.0fs: %s",
                     attempt, max_retries, wait, e,
                 )
                 time.sleep(wait)
@@ -380,7 +448,22 @@ class GeminiTranscriber:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse(self, raw: str) -> list[TranscriptSegment]:
+    @staticmethod
+    def _wav_duration(audio_path: Path) -> float | None:
+        """Read the duration in seconds from a WAV file header, or None."""
+        try:
+            with wave.open(str(audio_path), "rb") as wf:
+                rate = wf.getframerate()
+                if rate <= 0:
+                    return None
+                return wf.getnframes() / float(rate)
+        except Exception:
+            logger.debug("Could not read WAV duration: %s", audio_path, exc_info=True)
+            return None
+
+    def _parse(
+        self, raw: str, audio_duration: float | None = None,
+    ) -> list[TranscriptSegment]:
         """Parse Gemini's ``[MM:SS] Speaker: text`` output into TranscriptSegments.
 
         Lines that match the strict ``[MM:SS] Speaker: text`` format become
@@ -389,6 +472,10 @@ class GeminiTranscriber:
         still preserved — they're appended to the previous segment's text so
         nothing is dropped.  The verbatim raw output is also always saved
         to ``transcript_raw.txt`` alongside this structured output.
+
+        When *audio_duration* is known, segment ends are clamped to it —
+        in particular the final segment, whose end would otherwise be a
+        fabricated ``start + 60`` placeholder.
         """
         # Matches both [MM:SS] and [H:MM:SS]
         pattern = re.compile(
@@ -443,10 +530,20 @@ class GeminiTranscriber:
         if not segments and unmatched_prefix:
             segments.append(TranscriptSegment(
                 start=0.0,
-                end=0.0,
+                end=audio_duration if audio_duration and audio_duration > 0 else 0.0,
                 text="\n".join(unmatched_prefix),
                 speaker="",
             ))
+
+        # Clamp ends to the real audio length (fixes the last segment's
+        # start+60 placeholder) and guarantee end >= start everywhere.
+        if audio_duration is not None and audio_duration > 0:
+            for seg in segments:
+                if seg.end > audio_duration:
+                    seg.end = audio_duration
+        for seg in segments:
+            if seg.end < seg.start:
+                seg.end = seg.start
 
         logger.info("Parsed %d segments from Gemini transcript", len(segments))
         return segments
