@@ -267,6 +267,7 @@ class CaptureManager:
                     output_path=output_dir / "screen.mp4",
                     fps=screen_recording_fps,
                     encoder_preference=video_encoder_preference,
+                    on_window_closed=self._on_screen_window_closed,
                 )
             except ImportError:
                 logger.warning("Screen capture dependencies not available.")
@@ -566,6 +567,23 @@ class CaptureManager:
                 _patch_wav_header(wav_path)
             except Exception:
                 logger.debug("Final WAV header patch failed (%s)", label, exc_info=True)
+
+    def _on_screen_window_closed(self) -> None:
+        """The tracked window was closed — auto-stop the whole recording.
+
+        Fires from the screen-capture thread when the recorded window is gone
+        (not just minimized). Reuses the process-exit auto-stop path so the
+        app runs a full stop + post-processing, instead of the recorder
+        continuing to capture the desktop / post-meeting audio.
+        """
+        if self._stop_event.is_set() or not self._is_recording:
+            return
+        logger.info("Recorded window closed — auto-stopping recording.")
+        if self._on_stopped:
+            try:
+                self._on_stopped()
+            except Exception:
+                logger.exception("on_stopped (window-closed) callback error")
 
     def _monitor_process(self) -> None:
         """Monitor the target process and auto-stop if it exits.

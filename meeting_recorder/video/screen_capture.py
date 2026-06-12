@@ -35,6 +35,13 @@ _DIB_RGB_COLORS = 0
 # entire share. Audio capture (by PID) is unaffected either way.
 _SHARE_FALLBACK_SECONDS = 3.0
 
+# When the tracked window is CLOSED (not merely minimized) for this long, stop
+# screen capture instead of falling back to full-desktop capture. Recording
+# the user's private desktop after a meeting window is closed is a privacy
+# leak. Distinguished from a minimized window via IsWindow(): a minimized
+# window still exists, a closed one does not.
+_WINDOW_CLOSED_SECONDS = 3.0
+
 # Frame hand-off queue between the grab loop and the encode thread. Small on
 # purpose: when the encoder falls behind we drop the oldest frame (the writer
 # rebuilds timing from timestamps), so a deep queue only adds latency.
@@ -236,6 +243,11 @@ class FFmpegVideoWriter:
         self._open = True
         if self._proc.poll() is not None:
             self._open = False
+            try:
+                if self._proc.stdin is not None:
+                    self._proc.stdin.close()  # don't leak the PIPE fd
+            except OSError:
+                pass
             raise RuntimeError(
                 f"ffmpeg exited immediately (code {self._proc.returncode})"
             )
@@ -296,11 +308,17 @@ class ScreenCapture:
         output_path: Path,
         fps: float = 30.0,
         encoder_preference: str = "nvenc",
+        on_window_closed: Optional[callable] = None,
     ):
         self.pid = pid
         self.process_name = process_name
         self.output_path = str(output_path)
         self.fps = fps
+        # Fired once when the tracked window is closed (not minimized) for
+        # _WINDOW_CLOSED_SECONDS, so the recording can auto-stop instead of
+        # recording the desktop.
+        self._on_window_closed = on_window_closed
+        self._window_closed_fired = False
         # "nvenc" (try GPU first), "software" (libx264 ffmpeg), or "cv2"
         # (skip ffmpeg entirely — for machines that can't afford software
         # H.264). The ffmpeg path still self-falls-back if a probe fails.
@@ -335,6 +353,7 @@ class ScreenCapture:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._window_closed_fired = False
         self._thread = threading.Thread(
             target=self._capture_loop, name="screen-capture", daemon=True
         )
@@ -741,7 +760,14 @@ class ScreenCapture:
             share_mode = False
             share_monitor: Optional[dict] = None
             minimized_since: Optional[float] = None
+            # When the tracked window is CLOSED (not minimized); used to
+            # auto-stop instead of capturing the desktop.
+            window_gone_since: Optional[float] = None
             last_rect: Optional[tuple[int, int, int, int]] = None
+            # Type the GDI/User32 calls (incl. IsWindow) up front so the
+            # window-closed check is 64-bit-handle safe even before the first
+            # PrintWindow grab.
+            _ensure_gdi_prototypes(ctypes.windll.user32, ctypes.windll.gdi32)
 
             # Determine capture method: try PrintWindow first, fall back to mss
             use_printwindow = True
@@ -804,6 +830,8 @@ class ScreenCapture:
                             share_mode = False
                             share_monitor = None
                             minimized_since = None
+                            window_gone_since = None
+                            self._window_closed_fired = False
                             last_rect = None
                         else:
                             logger.warning(
@@ -817,11 +845,55 @@ class ScreenCapture:
                 # Get current window position/size
                 rect = get_window_rect(current_hwnd)
                 if rect is None:
-                    # Window minimized or transiently unavailable. If it stays
-                    # minimized past the share-fallback threshold, capture the
-                    # whole monitor instead — this handles screen-shares where
-                    # Zoom/Teams minimize the meeting window while presenting.
                     now = time.monotonic()
+
+                    # Distinguish a CLOSED window (meeting ended) from a
+                    # MINIMIZED one (legit screen-share). A minimized window
+                    # still exists; a closed one fails IsWindow(). NEVER
+                    # capture the desktop for a closed window — that would
+                    # record whatever is on screen after the meeting ends.
+                    try:
+                        window_alive = bool(
+                            ctypes.windll.user32.IsWindow(current_hwnd)
+                        )
+                    except Exception:
+                        window_alive = False
+
+                    if not window_alive:
+                        if window_gone_since is None:
+                            window_gone_since = now
+                        elif (now - window_gone_since >= _WINDOW_CLOSED_SECONDS
+                              and not self._window_closed_fired):
+                            self._window_closed_fired = True
+                            logger.info(
+                                "Tracked window closed — stopping screen capture "
+                                "(not capturing the desktop)."
+                            )
+                            if self._on_window_closed is not None:
+                                try:
+                                    self._on_window_closed()
+                                except Exception:
+                                    logger.debug(
+                                        "on_window_closed callback error",
+                                        exc_info=True,
+                                    )
+                        # Freeze the last frame; do NOT grab the desktop.
+                        if last_good_frame is not None:
+                            self._submit_frame(last_good_frame, frame_start)
+                        else:
+                            black = np.zeros(
+                                (init_height, init_width, 3), dtype=np.uint8
+                            )
+                            self._submit_frame(black, frame_start)
+                        _sleep_remaining(frame_start, interval)
+                        continue
+
+                    # Window still exists -> minimized or transiently
+                    # unavailable. If it stays minimized past the share-fallback
+                    # threshold, capture the whole monitor instead — this
+                    # handles screen-shares where Zoom/Teams minimize the
+                    # meeting window while presenting.
+                    window_gone_since = None
                     if minimized_since is None:
                         minimized_since = now
                     elapsed_min = now - minimized_since
@@ -891,6 +963,7 @@ class ScreenCapture:
                     share_mode = False
                     share_monitor = None
                 minimized_since = None
+                window_gone_since = None
 
                 left, top, cur_w, cur_h = rect
                 last_rect = (left, top, cur_w, cur_h)
