@@ -42,9 +42,9 @@ class PerformanceTier:
     """Resolved capability decisions for the current machine."""
 
     name: str
-    # Live transcription preview at all (tiny model, CPU).
+    # Live transcription preview at all (tiny model).
     live_transcription: bool
-    # Feed the user's mic as a second live source (≈ doubles live CPU).
+    # Feed the user's mic as a second live source.
     live_transcript_mic: bool
     # Local Whisper fallback model size when Gemini is unavailable.
     fallback_model_size: str
@@ -52,6 +52,16 @@ class PerformanceTier:
     video_encoder: str
     # Run live concept extraction (keyword/topic). Always cheap.
     live_insights: bool
+    # Device for the live transcription model. "cuda" is ~10x faster than
+    # "cpu" for the tiny model and the GPU is idle during a meeting (cloud
+    # transcription; the local fallback only runs post-meeting). Resolved
+    # from real hardware in resolve_tier — "cuda" only when CUDA exists.
+    live_device: str = "cpu"
+    # Compute type paired with the device (float16 on GPU, int8 on CPU).
+    live_compute_type: str = "int8"
+    # Seconds between live transcription passes. Lower = less lag; safe to
+    # shorten on GPU where inference is ~100ms.
+    live_interval: float = 3.0
 
 
 # Static tier definitions. "auto" resolves to one of these.
@@ -144,18 +154,34 @@ def _auto_tier_name(hw: HardwareInfo) -> str:
 def resolve_tier(profile: str, hw: HardwareInfo | None = None) -> PerformanceTier:
     """Resolve a configured profile string to a concrete tier.
 
+    The live-transcription device is filled in from real hardware (CUDA only
+    when present), so an explicit profile still gets GPU acceleration on a
+    GPU machine and safely falls to CPU on one without.
+
     Args:
         profile: "auto", "light", "balanced", or "full" (case-insensitive).
         hw: Detected hardware (detected on demand if omitted).
     """
+    from dataclasses import replace
+
     profile = (profile or "auto").strip().lower()
-    if profile in _TIER_PRESETS:
-        return _TIER_PRESETS[profile]
-    if profile != "auto":
-        logger.warning(
-            "Unknown performance.profile %r — using auto detection", profile,
-        )
     hw = hw or detect_hardware()
-    name = _auto_tier_name(hw)
-    logger.info("Performance profile 'auto' resolved to '%s' tier", name)
-    return _TIER_PRESETS[name]
+    if profile in _TIER_PRESETS:
+        preset = _TIER_PRESETS[profile]
+    else:
+        if profile != "auto":
+            logger.warning(
+                "Unknown performance.profile %r — using auto detection", profile,
+            )
+        name = _auto_tier_name(hw)
+        logger.info("Performance profile 'auto' resolved to '%s' tier", name)
+        preset = _TIER_PRESETS[name]
+
+    # Live transcription on the GPU when one exists and the tier runs live
+    # preview at all; faster inference + a shorter poll interval cut the lag.
+    if hw.has_cuda and preset.live_transcription:
+        return replace(
+            preset, live_device="cuda", live_compute_type="float16",
+            live_interval=1.5,
+        )
+    return preset

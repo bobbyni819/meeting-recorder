@@ -63,6 +63,8 @@ class GameBarDashboard:
         opacity: float = 0.92,
         start_collapsed: bool = False,
         show_transcript: bool = True,
+        transcript_font_size: int = 13,
+        transcript_lines: int = 7,
         position_x: int = -1,
         position_y: int = -1,
         position: str = "top-right",
@@ -79,6 +81,8 @@ class GameBarDashboard:
         self._opacity = opacity
         self._start_collapsed = start_collapsed
         self._show_transcript = show_transcript
+        self._transcript_font_size = max(8, int(transcript_font_size))
+        self._transcript_lines = max(2, int(transcript_lines))
         self._position_x = position_x
         self._position_y = position_y
         self._position = position
@@ -287,8 +291,13 @@ class GameBarDashboard:
         if not self._show_transcript:
             return
         try:
-            if len(text) > 200:
-                text = "..." + text[-197:]
+            # Keep roughly as many chars as the visible area can show: wider
+            # at smaller fonts, taller with more lines. Trim from the FRONT so
+            # the newest speech stays on screen (rolling tail).
+            chars_per_line = max(20, int(2400 / self._transcript_font_size))
+            budget = chars_per_line * self._transcript_lines
+            if len(text) > budget:
+                text = "..." + text[-(budget - 3):]
             self._window.after(0, self._set_transcript, text)
         except tk.TclError:
             pass
@@ -551,16 +560,21 @@ class GameBarDashboard:
             )
             self._preview_label.pack(expand=True)
 
-        # --- Transcript preview (60px) ---
+        # --- Transcript preview (height scales with font size and lines) ---
         if self._show_transcript:
-            transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=60)
+            # ~1.6 px line height per point, plus padding, so larger fonts and
+            # more lines give a genuinely bigger rolling readable area.
+            preview_height = int(
+                self._transcript_font_size * 1.6 * self._transcript_lines + 12
+            )
+            transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=preview_height)
             transcript_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
             transcript_frame.pack_propagate(False)
 
             self._transcript_label = tk.Label(
                 transcript_frame,
                 text="Waiting for speech...",
-                font=("Segoe UI", 9),
+                font=("Segoe UI", self._transcript_font_size),
                 fg=TEXT_COLOR, bg=BG_COLOR,
                 wraplength=355, justify=tk.LEFT, anchor=tk.NW,
             )

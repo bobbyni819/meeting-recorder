@@ -239,23 +239,42 @@ class LiveTranscriber:
         return buf.getvalue()
 
     def _load_model(self) -> None:
-        """Load the whisper model for live transcription."""
+        """Load the whisper model for live transcription.
+
+        Tries the configured device first (usually CUDA), then falls back to
+        CPU/int8 if the GPU load fails (driver/cuDNN mismatch, VRAM) so a GPU
+        hiccup degrades to slower live preview instead of none at all.
+        """
         try:
             from faster_whisper import WhisperModel
-
-            logger.info("Loading live transcription model: %s", self._model_size)
-            self._model = WhisperModel(
-                self._model_size,
-                device=self._device,
-                compute_type=self._compute_type,
-            )
-            logger.info("Live transcription model loaded.")
         except ImportError:
             logger.error("faster-whisper not installed. Live transcription unavailable.")
             self._stop_event.set()
-        except Exception:
-            logger.exception("Failed to load live transcription model")
-            self._stop_event.set()
+            return
+
+        attempts = [(self._device, self._compute_type)]
+        if self._device != "cpu":
+            attempts.append(("cpu", "int8"))
+        for device, compute_type in attempts:
+            try:
+                logger.info(
+                    "Loading live transcription model: %s on %s (%s)",
+                    self._model_size, device, compute_type,
+                )
+                self._model = WhisperModel(
+                    self._model_size, device=device, compute_type=compute_type,
+                )
+                self._device, self._compute_type = device, compute_type
+                logger.info("Live transcription model loaded on %s.", device)
+                return
+            except Exception:
+                logger.warning(
+                    "Live model load failed on %s; %s",
+                    device,
+                    "trying CPU" if device != "cpu" else "giving up",
+                    exc_info=True,
+                )
+        self._stop_event.set()
 
     def _transcription_loop(self) -> None:
         """Background loop that periodically transcribes the audio buffers."""

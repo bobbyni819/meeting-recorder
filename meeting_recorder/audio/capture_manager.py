@@ -144,6 +144,9 @@ class CaptureManager:
         live_transcription_enabled: bool = False,
         live_transcript_mic: bool = True,
         on_live_insight: Optional[callable] = None,
+        live_transcription_device: str = "cpu",
+        live_transcription_compute_type: str = "int8",
+        live_transcription_interval: float = 3.0,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
         on_health_warning: Optional[callable] = None,
@@ -180,6 +183,9 @@ class CaptureManager:
         self._live_transcription_enabled = live_transcription_enabled
         self._live_transcript_mic = live_transcript_mic
         self._on_live_insight = on_live_insight
+        self._live_transcription_device = live_transcription_device
+        self._live_transcription_compute_type = live_transcription_compute_type
+        self._live_transcription_interval = live_transcription_interval
 
         # VAD (accept pre-loaded instance to avoid loading in background threads)
         self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
@@ -378,6 +384,9 @@ class CaptureManager:
                     on_transcript=self._on_live_transcript,
                     output_path=self.output_dir / "live_transcript.txt",
                     on_insight=self._on_live_insight,
+                    device=self._live_transcription_device,
+                    compute_type=self._live_transcription_compute_type,
+                    transcribe_interval=self._live_transcription_interval,
                 )
                 lt.start()
                 with self._transcriber_lock:

@@ -96,8 +96,14 @@ class RecordingConfig:
     # app audio (other participants) is always fed when live preview is on.
     live_transcript_mic: bool = True
     auto_start: bool = False  # auto-detect meetings and start recording
-    # Heal failed/stuck/partially-processed recordings at startup
+    # Heal failed/stuck/partially-processed recordings at startup. Tail
+    # retries (missing summary/upload) always run; full re-transcription is
+    # gated separately below because it can burn a free-tier API quota.
     auto_retry_failed: bool = True
+    # Auto full-RE-TRANSCRIBE failed/stuck recordings at startup. OFF by
+    # default: re-transcription hits the (often free-tier) backend and can
+    # exhaust the daily quota — reprocess those manually when ready.
+    auto_retry_full_reprocess: bool = False
     # Rename the recording folder from transcript content after processing,
     # disambiguating between meetings booked in the same slot via the
     # calendar. Only the folder moves; files inside are untouched.
@@ -171,6 +177,10 @@ class DashboardConfig:
     start_collapsed: bool = False
     show_transcript: bool = True
     show_screen_preview: bool = True
+    # Live transcript readability: font point size and how many on-screen
+    # lines of rolling context to keep. Larger = easier to read along.
+    transcript_font_size: int = 13
+    transcript_lines: int = 7
 
 
 @dataclass

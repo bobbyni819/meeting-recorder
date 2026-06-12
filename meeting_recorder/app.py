@@ -528,6 +528,9 @@ class MeetingRecorderApp:
             on_live_insight=(
                 self._on_live_insight if self._perf_tier.live_insights else None
             ),
+            live_transcription_device=self._perf_tier.live_device,
+            live_transcription_compute_type=self._perf_tier.live_compute_type,
+            live_transcription_interval=self._perf_tier.live_interval,
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
             on_health_warning=self._on_health_warning,
@@ -556,6 +559,8 @@ class MeetingRecorderApp:
                 opacity=dash_cfg.opacity,
                 start_collapsed=dash_cfg.start_collapsed,
                 show_transcript=dash_cfg.show_transcript,
+                transcript_font_size=dash_cfg.transcript_font_size,
+                transcript_lines=dash_cfg.transcript_lines,
                 position_x=dash_cfg.position_x,
                 position_y=dash_cfg.position_y,
                 position=dash_cfg.position,
@@ -1629,6 +1634,13 @@ class MeetingRecorderApp:
         from meeting_recorder import recovery
 
         _time.sleep(15.0)  # let startup settle first
+
+        # Never run heavy re-processing while a meeting is being recorded —
+        # both would hit the (often free-tier) transcription API at once.
+        if self._capture_manager and self._capture_manager.is_recording:
+            logger.info("Startup retry sweep skipped: recording in progress")
+            return
+
         try:
             found = recovery.find_recoverable(self.config.output_dir)
         except Exception:
@@ -1639,12 +1651,19 @@ class MeetingRecorderApp:
         if not full and not found.incomplete_tail:
             return
         logger.info(
-            "Startup retry sweep: %d full re-process(es), %d tail retr%s",
-            len(full), len(found.incomplete_tail),
+            "Startup retry sweep: %d tail retr%s, %d full re-process(es) %s",
+            len(found.incomplete_tail),
             "y" if len(found.incomplete_tail) == 1 else "ies",
+            len(full),
+            "(enabled)" if self.config.recording.auto_retry_full_reprocess
+            else "(manual — auto full re-process is off)",
         )
 
+        # Tail retries (a missing summary / Drive upload on an already-
+        # transcribed recording) are cheap and bounded — always run them.
         for rec_dir in found.incomplete_tail:
+            if self._capture_manager and self._capture_manager.is_recording:
+                return
             try:
                 performed = recovery.retry_tail(rec_dir, self.config)
                 if performed:
@@ -1656,19 +1675,30 @@ class MeetingRecorderApp:
             except Exception:
                 logger.exception("Tail retry failed for %s", rec_dir.name)
 
-        for rec_dir in full:
-            # Don't fight an active recording's post-processing
-            if self._post_thread and self._post_thread.is_alive():
-                self._post_thread.join(timeout=600)
-            if self._capture_manager and self._capture_manager.is_recording:
-                logger.info("Retry sweep paused: recording in progress")
-                return
-            try:
-                self.reprocess_recording(rec_dir)
-                if self._post_thread:
+        # Full re-processing RE-TRANSCRIBES via the configured backend — on a
+        # free-tier Gemini key this can exhaust the daily quota and starve a
+        # live meeting's transcription/summary. Off by default; surface the
+        # count so the user can reprocess manually (button or CLI) when ready.
+        if full and not self.config.recording.auto_retry_full_reprocess:
+            self._main_window.add_notification(
+                "info",
+                f"{len(full)} recording(s) need re-processing — open one and "
+                f"click Re-process (auto is off to protect API quota).",
+                source="recovery",
+            )
+        elif self.config.recording.auto_retry_full_reprocess:
+            for rec_dir in full:
+                if self._post_thread and self._post_thread.is_alive():
                     self._post_thread.join(timeout=600)
-            except Exception:
-                logger.exception("Sweep re-process failed for %s", rec_dir.name)
+                if self._capture_manager and self._capture_manager.is_recording:
+                    logger.info("Retry sweep paused: recording in progress")
+                    return
+                try:
+                    self.reprocess_recording(rec_dir)
+                    if self._post_thread:
+                        self._post_thread.join(timeout=600)
+                except Exception:
+                    logger.exception("Sweep re-process failed for %s", rec_dir.name)
 
         self._main_window.refresh_history()
 
