@@ -2,8 +2,16 @@
 output_dir = "~/MeetingRecordings"
 language = "en"
 user_name = "User"
-live_transcription = false  # real-time transcription preview during recording (uses tiny model on CPU)
+live_transcription = true  # real-time transcription preview during recording (uses tiny model on CPU)
+live_transcript_mic = true  # also feed your mic into the live preview (labelled [You])
 auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
+auto_retry_failed = true  # heal failed/stuck recordings at startup (cheap tail steps: missing summary/upload)
+auto_retry_full_reprocess = false  # auto RE-TRANSCRIBE failed recordings at startup — off to protect free-tier API quota (reprocess manually instead)
+start_muted = true  # start every recording with the mic muted (you usually join muted); auto-detection unmutes within ~1.5s if you're actually unmuted
+mute_privacy_first = true  # only record mic when positively confirmed unmuted; re-mutes if the meeting mute button becomes unreadable (toolbar hidden) — never records the room behind your back
+mute_remute_seconds = 12.0  # how long the mute button can stay unreadable while unmuted before privacy-first re-mutes
+smart_rename = true  # rename the folder from transcript content (disambiguates same-slot meetings via calendar); only the folder moves, files inside are untouched
+capture_speaker_events = false  # EXPERIMENTAL: poll Zoom/Teams UI for active speaker to name diarized speakers (needs live-meeting validation; writes additive speaker_events.jsonl)
 
 [audio]
 sample_rate = 16000
@@ -30,6 +38,7 @@ enabled = true
 huggingface_token = ""
 min_speakers = 2
 max_speakers = 6
+model = "pyannote/speaker-diarization-community-1"  # newer/more accurate; auto-falls back to 3.1 if not accepted on HF
 
 [output]
 formats = ["json", "txt", "srt"]
@@ -57,7 +66,7 @@ folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
 enabled = true         # generate AI summary after transcription
 provider = "gemini"    # "openai", "anthropic", or "gemini"
 api_key = ""
-model = "gemini-2.0-flash"  # empty = provider default (gpt-4o / claude-sonnet-4-20250514)
+model = "gemini-2.5-flash"  # gemini-2.0-flash free tier was zeroed (429 limit: 0) — keep in sync with transcription model
 max_transcript_tokens = 0  # 0 = no limit
 
 [retention]
@@ -85,3 +94,13 @@ position_y = -1
 start_collapsed = false
 show_transcript = true
 show_screen_preview = true  # show live screen capture thumbnail in dashboard
+
+[performance]
+# Per-machine tier gating heavy features. LOCAL-ONLY: this value is written
+# to ~/.meeting_recorder/secrets.toml, NOT synced via git, so each machine
+# keeps its own setting. "auto" detects GPU/CPU/RAM at startup.
+#   auto     — detect and pick (recommended)
+#   light    — weak/no-GPU machine: live transcription off, small fallback model, cv2 video
+#   balanced — capable GPU (e.g. RTX 3060): live on, medium fallback, NVENC video
+#   full     — strong GPU (>=10GB) + many cores: everything on, large-v3 fallback
+profile = "auto"

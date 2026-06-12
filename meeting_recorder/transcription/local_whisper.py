@@ -38,18 +38,36 @@ class LocalWhisperTranscriber:
         self._model = None
 
     def load(self) -> None:
-        """Load the whisper model."""
+        """Load the whisper model.
+
+        If the configured compute type is rejected (some GPU/driver combos
+        refuse float16), retries once with int8_float32 before giving up.
+        """
         from faster_whisper import WhisperModel
 
         logger.info(
             "Loading faster-whisper model: %s (device=%s, compute=%s)",
             self.model_size, self.device, self.compute_type,
         )
-        self._model = WhisperModel(
-            self.model_size,
-            device=self.device,
-            compute_type=self.compute_type,
-        )
+        try:
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
+        except Exception as e:
+            if self.compute_type == "int8_float32":
+                raise
+            logger.warning(
+                "Model load failed with compute_type=%s (%s); "
+                "retrying with int8_float32",
+                self.compute_type, e,
+            )
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type="int8_float32",
+            )
         logger.info("Whisper model loaded.")
 
     def transcribe(self, audio_path: Path) -> list[TranscriptSegment]:

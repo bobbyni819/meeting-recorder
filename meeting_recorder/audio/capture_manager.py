@@ -134,12 +134,22 @@ class CaptureManager:
         on_stopped: Optional[callable] = None,
         screen_recording_enabled: bool = False,
         screen_recording_fps: float = 30.0,
+        video_encoder_preference: str = "nvenc",
+        capture_speaker_events: bool = False,
         process_name: str = "",
         app_key: str = "",
         mute_toggle_hotkey: str = "ctrl+shift+u",
         on_audio_levels: Optional[callable] = None,
         on_live_transcript: Optional[callable] = None,
         live_transcription_enabled: bool = False,
+        live_transcript_mic: bool = True,
+        on_live_insight: Optional[callable] = None,
+        live_transcription_device: str = "cpu",
+        live_transcription_compute_type: str = "int8",
+        live_transcription_interval: float = 3.0,
+        start_muted_default: bool = True,
+        mute_privacy_first: bool = True,
+        mute_remute_seconds: float = 12.0,
         on_mute_changed: Optional[callable] = None,
         vad: Optional[VoiceActivityDetector] = None,
         on_health_warning: Optional[callable] = None,
@@ -174,6 +184,11 @@ class CaptureManager:
         self._live_transcriber = None
         self._on_live_transcript = on_live_transcript
         self._live_transcription_enabled = live_transcription_enabled
+        self._live_transcript_mic = live_transcript_mic
+        self._on_live_insight = on_live_insight
+        self._live_transcription_device = live_transcription_device
+        self._live_transcription_compute_type = live_transcription_compute_type
+        self._live_transcription_interval = live_transcription_interval
 
         # VAD (accept pre-loaded instance to avoid loading in background threads)
         self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
@@ -190,14 +205,38 @@ class CaptureManager:
         if app_key and process_name:
             target_pids = get_all_pids_for_process(process_name)
             if target_pids:
-                detected = detect_initial_mute_state(pid)
-                start_muted = detected if detected is not None else True
+                if start_muted_default:
+                    # Always start MUTED: users typically join meetings muted,
+                    # and starting muted means the recorder never captures the
+                    # room before the user actively unmutes. Auto-detection
+                    # (UIA poller) unmutes within ~1.5s if they are in fact
+                    # already unmuted with the meeting toolbar visible.
+                    start_muted = True
+                else:
+                    detected = detect_initial_mute_state(pid)
+                    start_muted = detected if detected is not None else True
                 self._mute_sync = MuteSync(
                     app_key=app_key,
                     target_pids=target_pids,
                     start_muted=start_muted,
                     on_mute_changed=on_mute_changed,
+                    privacy_first=mute_privacy_first,
+                    remute_grace_seconds=mute_remute_seconds,
                 )
+
+        # Active-speaker event capture (experimental, opt-in).
+        self._speaker_capture = None
+        if capture_speaker_events and process_name:
+            try:
+                from meeting_recorder.audio.speaker_events import SpeakerEventCapture
+
+                spk_pids = get_all_pids_for_process(process_name) or {pid}
+                self._speaker_capture = SpeakerEventCapture(
+                    pids=set(spk_pids),
+                    output_path=output_dir / "speaker_events.jsonl",
+                )
+            except Exception:
+                logger.debug("Speaker-event capture unavailable", exc_info=True)
 
         # Capture instances
         self._app_capture = AppAudioCapture(
@@ -227,6 +266,8 @@ class CaptureManager:
                     process_name=process_name,
                     output_path=output_dir / "screen.mp4",
                     fps=screen_recording_fps,
+                    encoder_preference=video_encoder_preference,
+                    on_window_closed=self._on_screen_window_closed,
                 )
             except ImportError:
                 logger.warning("Screen capture dependencies not available.")
@@ -271,6 +312,10 @@ class CaptureManager:
         # Start mute sync (hooks meeting app's mute shortcut + manual toggle)
         if self._mute_sync is not None:
             self._mute_sync.start(manual_hotkey=self._mute_toggle_hotkey)
+
+        # Start active-speaker event capture (experimental, opt-in)
+        if self._speaker_capture is not None:
+            self._speaker_capture.start()
 
         # Start capture threads
         self._app_capture.start()
@@ -351,6 +396,11 @@ class CaptureManager:
 
                 lt = LiveTranscriber(
                     on_transcript=self._on_live_transcript,
+                    output_path=self.output_dir / "live_transcript.txt",
+                    on_insight=self._on_live_insight,
+                    device=self._live_transcription_device,
+                    compute_type=self._live_transcription_compute_type,
+                    transcribe_interval=self._live_transcription_interval,
                 )
                 lt.start()
                 with self._transcriber_lock:
@@ -385,6 +435,9 @@ class CaptureManager:
         # Stop mute sync
         if self._mute_sync is not None:
             self._mute_sync.stop()
+
+        if self._speaker_capture is not None:
+            self._speaker_capture.stop()
 
         # Stop capture threads (stops producing new chunks)
         self._app_capture.stop()
@@ -447,26 +500,27 @@ class CaptureManager:
             while not self._stop_event.is_set():
                 chunks = buffer.get_all()
                 if chunks:
+                    feeds_transcriber = is_app or self._live_transcript_mic
                     # When paused, drain the buffer but don't write to disk.
                     # Still feed the live transcriber so it stays time-aligned.
                     if self._paused:
-                        if is_app:
+                        if feeds_transcriber:
                             with self._transcriber_lock:
                                 lt = self._live_transcriber
                             if lt is not None:
                                 for chunk in chunks:
-                                    lt.feed_audio(chunk)
+                                    lt.feed_audio(chunk, source=label)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
                     else:
                         for chunk in chunks:
                             wf.writeframes(chunk)
                             frames_since_flush += len(chunk) // 2
                             level_update(chunk)
-                            if is_app:
+                            if feeds_transcriber:
                                 with self._transcriber_lock:
                                     lt = self._live_transcriber
                                 if lt is not None:
-                                    lt.feed_audio(chunk)
+                                    lt.feed_audio(chunk, source=label)
                         self._thread_heartbeats[f"{label}_writer"] = time.time()
 
                     # Periodic WAV header flush: patch the RIFF/data chunk
@@ -513,6 +567,23 @@ class CaptureManager:
                 _patch_wav_header(wav_path)
             except Exception:
                 logger.debug("Final WAV header patch failed (%s)", label, exc_info=True)
+
+    def _on_screen_window_closed(self) -> None:
+        """The tracked window was closed — auto-stop the whole recording.
+
+        Fires from the screen-capture thread when the recorded window is gone
+        (not just minimized). Reuses the process-exit auto-stop path so the
+        app runs a full stop + post-processing, instead of the recorder
+        continuing to capture the desktop / post-meeting audio.
+        """
+        if self._stop_event.is_set() or not self._is_recording:
+            return
+        logger.info("Recorded window closed — auto-stopping recording.")
+        if self._on_stopped:
+            try:
+                self._on_stopped()
+            except Exception:
+                logger.exception("on_stopped (window-closed) callback error")
 
     def _monitor_process(self) -> None:
         """Monitor the target process and auto-stop if it exits.

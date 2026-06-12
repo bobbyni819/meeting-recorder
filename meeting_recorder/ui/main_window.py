@@ -495,13 +495,17 @@ class MainWindow:
             )
         self._window.report_callback_exception = _tk_error
 
-        # Try to set window icon
+        # Set the window/taskbar icon. iconbitmap with a real multi-size .ico
+        # gives the crispest taskbar result; iconphoto is the fallback.
         try:
-            from meeting_recorder.ui.icons import create_idle_icon
-            icon = create_idle_icon()
-            import io
+            from meeting_recorder.ui.icons import app_icon_path, create_idle_icon
+
+            ico = app_icon_path()
+            if ico:
+                self._window.iconbitmap(default=ico)
             from PIL import ImageTk
-            self._window.iconphoto(False, ImageTk.PhotoImage(icon))
+            self._icon_photo = ImageTk.PhotoImage(create_idle_icon(64))
+            self._window.iconphoto(True, self._icon_photo)
         except Exception:
             pass
 

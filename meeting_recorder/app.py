@@ -57,6 +57,11 @@ class MeetingRecorderApp:
         self._pipeline = TranscriptionPipeline(self.config)
         self._hotkey_registered = False
 
+        # Resolve the per-machine performance tier once (auto-detects GPU/CPU).
+        from meeting_recorder.performance import resolve_tier
+        self._perf_tier = resolve_tier(self.config.performance.profile)
+        logger.info("Performance tier: %s", self._perf_tier.name)
+
         # Pre-loaded VAD model (loaded once in run(), reused across recordings)
         self._vad: Optional[VoiceActivityDetector] = None
 
@@ -173,6 +178,13 @@ class MeetingRecorderApp:
         threading.Thread(
             target=self._sync_search_index, daemon=True, name="search-index-sync"
         ).start()
+
+        # Heal failed/stuck/partially-processed recordings in background
+        if self.config.recording.auto_retry_failed:
+            threading.Thread(
+                target=self._startup_retry_sweep, daemon=True,
+                name="startup-retry-sweep",
+            ).start()
 
         # Start meeting auto-detection scanner
         if self.config.recording.auto_start:
@@ -495,12 +507,33 @@ class MeetingRecorderApp:
             on_stopped=self._on_capture_auto_stopped,
             screen_recording_enabled=self.config.screen_recording.enabled,
             screen_recording_fps=self.config.screen_recording.fps,
+            video_encoder_preference=self._perf_tier.video_encoder,
+            capture_speaker_events=self.config.recording.capture_speaker_events,
             process_name=process.name,
             app_key=process.app_key,
             mute_toggle_hotkey=self.config.hotkey.toggle_mute,
             on_audio_levels=self._on_audio_levels,
             on_live_transcript=self._on_live_transcript,
-            live_transcription_enabled=self.config.recording.live_transcription,
+            # The performance tier can only RESTRICT, never force-enable: a
+            # light machine turns live preview off even if the synced config
+            # has it on, but a strong machine never overrides a user's "off".
+            live_transcription_enabled=(
+                self.config.recording.live_transcription
+                and self._perf_tier.live_transcription
+            ),
+            live_transcript_mic=(
+                self.config.recording.live_transcript_mic
+                and self._perf_tier.live_transcript_mic
+            ),
+            on_live_insight=(
+                self._on_live_insight if self._perf_tier.live_insights else None
+            ),
+            live_transcription_device=self._perf_tier.live_device,
+            live_transcription_compute_type=self._perf_tier.live_compute_type,
+            live_transcription_interval=self._perf_tier.live_interval,
+            start_muted_default=self.config.recording.start_muted,
+            mute_privacy_first=self.config.recording.mute_privacy_first,
+            mute_remute_seconds=self.config.recording.mute_remute_seconds,
             on_mute_changed=self._on_mute_changed,
             vad=self._vad,
             on_health_warning=self._on_health_warning,
@@ -520,6 +553,7 @@ class MeetingRecorderApp:
                 on_stop=lambda: threading.Thread(target=self.stop_recording, daemon=True).start(),
                 on_toggle_pause=self._toggle_pause,
                 on_toggle_mute=self._toggle_mute,
+                on_resume_auto_sync=self._resume_mute_auto_sync,
                 on_open_recordings=self._open_recordings_folder,
                 on_open_settings=self._open_settings,
                 on_list_windows=self._capture_manager.list_capturable_windows,
@@ -528,6 +562,8 @@ class MeetingRecorderApp:
                 opacity=dash_cfg.opacity,
                 start_collapsed=dash_cfg.start_collapsed,
                 show_transcript=dash_cfg.show_transcript,
+                transcript_font_size=dash_cfg.transcript_font_size,
+                transcript_lines=dash_cfg.transcript_lines,
                 position_x=dash_cfg.position_x,
                 position_y=dash_cfg.position_y,
                 position=dash_cfg.position,
@@ -722,7 +758,7 @@ class MeetingRecorderApp:
                 logger.warning("app_audio.wav is corrupt or empty — skipping transcription")
                 notifications.notify_error(
                     "App audio corrupt or empty — try re-recording. "
-                    "Right-click tray → Re-process to retry."
+                    "Use Re-process in the recording's detail view to retry."
                 )
                 metadata.status = "error"
                 metadata.error_message = "App audio file corrupt or empty"
@@ -753,6 +789,21 @@ class MeetingRecorderApp:
                 if mixed_audio.exists():
                     mixed_audio.unlink()
                     logger.info("Cleaned up transient mixed.wav")
+
+            # Persist which backend actually produced the transcript — the
+            # pipeline may have fallen back from Gemini to local Whisper.
+            backend_used = getattr(self._pipeline, "last_backend_used", None)
+            if isinstance(backend_used, str) and backend_used:
+                if (
+                    backend_used != cfg.transcription.backend
+                    and cfg.transcription.backend == "gemini"
+                ):
+                    self._main_window.add_notification(
+                        "warning",
+                        "Gemini unavailable — transcribed with local Whisper instead",
+                        source="pipeline",
+                    )
+                metadata.transcription_backend = backend_used
 
             # Store speaker mapping from pipeline
             mapping = self._pipeline.last_speaker_mapping
@@ -785,6 +836,15 @@ class MeetingRecorderApp:
                 segment_count=len(segments),
                 elapsed_seconds=elapsed_seconds,
             )
+
+            # Smart rename from transcript content. Runs BEFORE the parallel
+            # pool so the search index and Drive upload see the final name.
+            if self.config.recording.smart_rename:
+                new_dir = self._smart_rename_recording(
+                    recording_dir, segments, metadata, summary_config,
+                )
+                if new_dir is not None:
+                    recording_dir = new_dir
 
             # Run summary, indexing, quality scoring, and Drive upload in parallel
             _update_progress("saving & indexing...")
@@ -884,12 +944,101 @@ class MeetingRecorderApp:
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
                 metadata.google_drive_folder_id = folder_id
+                metadata.upload_pending = False
                 self._save_metadata(metadata, recording_dir)
                 logger.info("Google Drive upload complete: %s", folder_id)
             else:
                 logger.warning("Google Drive upload returned no folder ID.")
+                metadata.upload_pending = True
+                self._save_metadata(metadata, recording_dir)
         except Exception:
+            # Flag it so the startup retry sweep can re-upload later.
+            metadata.upload_pending = True
+            self._save_metadata(metadata, recording_dir)
             logger.exception("Google Drive upload failed (non-fatal)")
+            self._main_window.add_notification(
+                "warning",
+                f"Drive upload failed for {recording_dir.name} — will retry at next startup",
+                source="pipeline",
+            )
+
+    def _smart_rename_recording(
+        self, recording_dir: Path, segments, metadata: RecordingMetadata,
+        summary_config,
+    ) -> Optional[Path]:
+        """Rename the folder to match the meeting, disambiguating by content.
+
+        Best-effort and additive: returns the new path on a successful
+        rename, else None (folder unchanged). Files inside are untouched;
+        only the directory moves, with the timestamp prefix preserved.
+        """
+        try:
+            from meeting_recorder.storage import smart_naming
+
+            # Gather candidate calendar events overlapping this recording.
+            candidates = self._calendar_candidates(metadata)
+            if metadata.meeting_subject and metadata.meeting_subject not in candidates:
+                candidates.append(metadata.meeting_subject)
+            # 0 candidates → keep the current name (don't spend quota naming
+            # ad-hoc meetings); 1 → use it; 2+ → disambiguate by transcript.
+            if not candidates:
+                return None
+
+            excerpt = "\n".join(
+                f"{s.speaker or 'Speaker'}: {s.text}" for s in segments[:60]
+            )
+            title, source = smart_naming.select_meeting_title(
+                excerpt, candidates, summary_config,
+            )
+            if not title:
+                return None
+            # Don't rename if the title already matches the current folder.
+            app_name = metadata.app_name or "Meeting"
+            if smart_naming.current_subject(
+                recording_dir.name, app_name
+            ).lower() == smart_naming.sanitize_subject(title).lower():
+                return None
+
+            new_dir = smart_naming.rename_recording_dir(
+                recording_dir, title, app_name,
+            )
+            if new_dir is None:
+                return None
+
+            metadata.original_dir_name = recording_dir.name
+            metadata.meeting_subject = title
+            metadata.save(new_dir)
+            logger.info(
+                "Smart rename (%s): %s -> %s", source, recording_dir.name, new_dir.name,
+            )
+            self._main_window.add_notification(
+                "info", f"Named meeting: {title}", source="naming",
+            )
+            return new_dir
+        except Exception:
+            logger.exception("Smart rename failed (non-fatal)")
+            return None
+
+    def _calendar_candidates(self, metadata: RecordingMetadata) -> list[str]:
+        """Calendar event subjects overlapping this recording's time slot."""
+        if not self.config.outlook.enabled:
+            return []
+        try:
+            from datetime import datetime
+
+            from meeting_recorder.integrations.outlook import get_upcoming_meetings
+
+            ref = None
+            if metadata.start_time:
+                try:
+                    ref = datetime.fromisoformat(metadata.start_time)
+                except ValueError:
+                    ref = None
+            events = get_upcoming_meetings(window_minutes=30, reference_time=ref)
+            return [e.subject for e in events if e.subject]
+        except Exception:
+            logger.debug("Calendar candidate fetch failed", exc_info=True)
+            return []
 
     def _generate_summary(
         self, recording_dir: Path, segments, metadata: RecordingMetadata,
@@ -909,11 +1058,19 @@ class MeetingRecorderApp:
             )
             save_summary(summary, recording_dir)
             metadata.has_summary = True
+            metadata.summary_failed = False
             metadata.summary_provider = summary.provider_used
             metadata.summary_model = summary.model_used
             logger.info("AI summary generated successfully.")
         except Exception:
+            # Flag it so the startup retry sweep can heal this recording.
+            metadata.summary_failed = True
             logger.exception("AI summary generation failed (non-fatal)")
+            self._main_window.add_notification(
+                "warning",
+                f"Summary failed for {recording_dir.name} — will retry at next startup",
+                source="pipeline",
+            )
 
     @staticmethod
     def _save_thumbnail(capture_manager: CaptureManager, recording_dir: Path) -> None:
@@ -1117,6 +1274,31 @@ class MeetingRecorderApp:
                 self._dashboard.update_transcript(text)
             self._main_window.update_transcript(text)
 
+    def _on_live_insight(self, event: dict) -> None:
+        """Handle live concept-extraction events (topic shifts, watchlist hits).
+
+        Fired from the live transcriber thread; keyword hits matter most —
+        the watchlist is the user's own "ping me when this comes up" list.
+        """
+        try:
+            kind = event.get("type")
+            if kind == "keyword":
+                keyword = event.get("keyword", "")
+                logger.info("Live keyword alert: %r mentioned", keyword)
+                notifications.notify_info(f'Watched keyword mentioned: "{keyword}"')
+                self._main_window.add_notification(
+                    "info", f'Watched keyword mentioned live: "{keyword}"',
+                    source="live",
+                )
+            elif kind == "topic":
+                topic = event.get("topic", "")
+                logger.info("Live topic detected: %s", topic)
+                self._main_window.add_notification(
+                    "info", f"Discussion topic: {topic}", source="live",
+                )
+        except Exception:
+            logger.exception("Live insight handling failed")
+
     def _on_mute_changed(self, is_muted: bool) -> None:
         """Handle mute state changes from MuteSync."""
         if self._dashboard and self._dashboard.is_visible:
@@ -1146,6 +1328,12 @@ class MeetingRecorderApp:
         cm = self._capture_manager
         if cm and cm.mute_sync:
             cm.mute_sync.toggle()
+
+    def _resume_mute_auto_sync(self) -> None:
+        """Resume auto mute sync (clears the sticky manual override)."""
+        cm = self._capture_manager
+        if cm and cm.mute_sync:
+            cm.mute_sync.resume_auto_sync()
 
     def _toggle_audio_mode(self) -> None:
         """Toggle between per-process and desktop-wide audio capture."""
@@ -1434,6 +1622,88 @@ class MeetingRecorderApp:
             daemon=False,
         )
         self._post_thread.start()
+
+    def _startup_retry_sweep(self) -> None:
+        """Heal recordings left broken by crashes or transient failures.
+
+        Runs once in the background shortly after startup: fully
+        re-processes retryable failures and stale 'processing' leftovers
+        (capped to avoid hour-long startup churn), and re-runs just the
+        missing tail steps (summary, Drive upload) for completed
+        recordings flagged summary_failed/upload_pending.
+        """
+        import time as _time
+
+        from meeting_recorder import recovery
+
+        _time.sleep(15.0)  # let startup settle first
+
+        # Never run heavy re-processing while a meeting is being recorded —
+        # both would hit the (often free-tier) transcription API at once.
+        if self._capture_manager and self._capture_manager.is_recording:
+            logger.info("Startup retry sweep skipped: recording in progress")
+            return
+
+        try:
+            found = recovery.find_recoverable(self.config.output_dir)
+        except Exception:
+            logger.exception("Startup retry sweep scan failed")
+            return
+
+        full = (found.failed_retryable + found.stuck_processing)[:5]
+        if not full and not found.incomplete_tail:
+            return
+        logger.info(
+            "Startup retry sweep: %d tail retr%s, %d full re-process(es) %s",
+            len(found.incomplete_tail),
+            "y" if len(found.incomplete_tail) == 1 else "ies",
+            len(full),
+            "(enabled)" if self.config.recording.auto_retry_full_reprocess
+            else "(manual — auto full re-process is off)",
+        )
+
+        # Tail retries (a missing summary / Drive upload on an already-
+        # transcribed recording) are cheap and bounded — always run them.
+        for rec_dir in found.incomplete_tail:
+            if self._capture_manager and self._capture_manager.is_recording:
+                return
+            try:
+                performed = recovery.retry_tail(rec_dir, self.config)
+                if performed:
+                    self._main_window.add_notification(
+                        "success",
+                        f"Recovered {' + '.join(performed)} for {rec_dir.name}",
+                        source="recovery",
+                    )
+            except Exception:
+                logger.exception("Tail retry failed for %s", rec_dir.name)
+
+        # Full re-processing RE-TRANSCRIBES via the configured backend — on a
+        # free-tier Gemini key this can exhaust the daily quota and starve a
+        # live meeting's transcription/summary. Off by default; surface the
+        # count so the user can reprocess manually (button or CLI) when ready.
+        if full and not self.config.recording.auto_retry_full_reprocess:
+            self._main_window.add_notification(
+                "info",
+                f"{len(full)} recording(s) need re-processing — open one and "
+                f"click Re-process (auto is off to protect API quota).",
+                source="recovery",
+            )
+        elif self.config.recording.auto_retry_full_reprocess:
+            for rec_dir in full:
+                if self._post_thread and self._post_thread.is_alive():
+                    self._post_thread.join(timeout=600)
+                if self._capture_manager and self._capture_manager.is_recording:
+                    logger.info("Retry sweep paused: recording in progress")
+                    return
+                try:
+                    self.reprocess_recording(rec_dir)
+                    if self._post_thread:
+                        self._post_thread.join(timeout=600)
+                except Exception:
+                    logger.exception("Sweep re-process failed for %s", rec_dir.name)
+
+        self._main_window.refresh_history()
 
     def reprocess_all_failed(self) -> None:
         """Re-process all recordings with status 'error', one at a time."""

@@ -54,6 +54,7 @@ class GameBarDashboard:
         on_stop: Optional[Callable[[], None]] = None,
         on_toggle_pause: Optional[Callable[[], None]] = None,
         on_toggle_mute: Optional[Callable[[], None]] = None,
+        on_resume_auto_sync: Optional[Callable[[], None]] = None,
         on_open_recordings: Optional[Callable[[], None]] = None,
         on_open_settings: Optional[Callable[[], None]] = None,
         on_list_windows: Optional[Callable[[], list]] = None,
@@ -62,6 +63,8 @@ class GameBarDashboard:
         opacity: float = 0.92,
         start_collapsed: bool = False,
         show_transcript: bool = True,
+        transcript_font_size: int = 13,
+        transcript_lines: int = 7,
         position_x: int = -1,
         position_y: int = -1,
         position: str = "top-right",
@@ -69,6 +72,7 @@ class GameBarDashboard:
         self._on_stop = on_stop
         self._on_toggle_pause = on_toggle_pause
         self._on_toggle_mute = on_toggle_mute
+        self._on_resume_auto_sync = on_resume_auto_sync
         self._on_open_recordings = on_open_recordings
         self._on_open_settings = on_open_settings
         self._on_list_windows = on_list_windows
@@ -77,6 +81,8 @@ class GameBarDashboard:
         self._opacity = opacity
         self._start_collapsed = start_collapsed
         self._show_transcript = show_transcript
+        self._transcript_font_size = max(8, int(transcript_font_size))
+        self._transcript_lines = max(2, int(transcript_lines))
         self._position_x = position_x
         self._position_y = position_y
         self._position = position
@@ -95,8 +101,11 @@ class GameBarDashboard:
         self._app_db_label: Optional[tk.Label] = None
         self._mic_db_label: Optional[tk.Label] = None
         self._mute_btn: Optional[tk.Label] = None
+        self._mute_tooltip: Optional[tk.Toplevel] = None
         self._pause_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
+        self._transcript_window = None  # LiveTranscriptWindow pop-out
+        self._last_transcript_text: str = ""
         self._capture_warning_label: Optional[tk.Label] = None
         self._audio_mode_btn: Optional[tk.Label] = None
         self._collapsed_elapsed: Optional[tk.Label] = None
@@ -209,6 +218,13 @@ class GameBarDashboard:
     def close(self) -> None:
         """Destroy the dashboard window entirely."""
         self._is_visible = False
+        tw = self._transcript_window
+        self._transcript_window = None
+        if tw is not None:
+            # Tear down the pop-out on the Tk thread (close() is called from a
+            # non-Tk daemon thread); destroying a Toplevel cross-thread
+            # corrupts the interpreter.
+            tw.request_close()
         w = self._window
         self._window = None  # prevent further after() calls from other threads
         if w is not None:
@@ -278,17 +294,51 @@ class GameBarDashboard:
             pass
 
     def update_transcript(self, text: str) -> None:
-        """Update the transcript preview text (thread-safe)."""
+        """Update the transcript preview text (thread-safe).
+
+        The pop-out window (if open) gets the FULL rolling text; the compact
+        strip gets a front-trimmed tail sized to its visible area.
+        """
+        self._last_transcript_text = text
+        tw = self._transcript_window
+        if tw is not None and tw.is_visible:
+            tw.update_text(text)
+
         if self._window is None or not self._is_visible or self._is_collapsed:
             return
         if not self._show_transcript:
             return
         try:
-            if len(text) > 200:
-                text = "..." + text[-197:]
-            self._window.after(0, self._set_transcript, text)
+            # Keep roughly as many chars as the visible area can show: wider
+            # at smaller fonts, taller with more lines. Trim from the FRONT so
+            # the newest speech stays on screen (rolling tail).
+            chars_per_line = max(20, int(2400 / self._transcript_font_size))
+            budget = chars_per_line * self._transcript_lines
+            strip = text if len(text) <= budget else "..." + text[-(budget - 3):]
+            self._window.after(0, self._set_transcript, strip)
         except tk.TclError:
             pass
+
+    def _toggle_transcript_window(self) -> None:
+        """Open/close the larger pop-out transcript reader (dashboard thread)."""
+        try:
+            from meeting_recorder.ui.live_transcript_window import (
+                LiveTranscriptWindow,
+            )
+
+            tw = self._transcript_window
+            if tw is not None and tw.is_visible:
+                tw.hide()
+                return
+            if tw is None:
+                self._transcript_window = LiveTranscriptWindow(
+                    self._window, font_size=self._transcript_font_size + 4,
+                )
+            self._transcript_window.show()
+            if self._last_transcript_text:
+                self._transcript_window.update_text(self._last_transcript_text)
+        except Exception:
+            logger.debug("Could not open transcript window", exc_info=True)
 
     def update_screen_preview(self, frame) -> None:
         """Update the screen preview thumbnail (thread-safe).
@@ -487,6 +537,11 @@ class GameBarDashboard:
         )
         self._mute_btn.pack(side=tk.LEFT, padx=4, pady=6)
         self._mute_btn.bind("<Button-1>", lambda e: self._handle_mute_toggle())
+        # Right-click hands mute control back to auto-detection after a
+        # manual (left-click) correction made the override sticky.
+        self._mute_btn.bind("<Button-3>", self._on_mute_right_click)
+        self._mute_btn.bind("<Enter>", lambda e: self._show_mute_tooltip())
+        self._mute_btn.bind("<Leave>", lambda e: self._hide_mute_tooltip())
 
         # Window picker button (only when screen recording is active)
         if self._on_list_windows and self._on_pick_window:
@@ -543,20 +598,35 @@ class GameBarDashboard:
             )
             self._preview_label.pack(expand=True)
 
-        # --- Transcript preview (60px) ---
+        # --- Transcript preview (height scales with font size and lines) ---
         if self._show_transcript:
-            transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=60)
+            # ~1.6 px line height per point, plus padding, so larger fonts and
+            # more lines give a genuinely bigger rolling readable area.
+            preview_height = int(
+                self._transcript_font_size * 1.6 * self._transcript_lines + 12
+            )
+            transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=preview_height)
             transcript_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
             transcript_frame.pack_propagate(False)
 
             self._transcript_label = tk.Label(
                 transcript_frame,
                 text="Waiting for speech...",
-                font=("Segoe UI", 9),
+                font=("Segoe UI", self._transcript_font_size),
                 fg=TEXT_COLOR, bg=BG_COLOR,
                 wraplength=355, justify=tk.LEFT, anchor=tk.NW,
             )
             self._transcript_label.pack(fill=tk.BOTH, expand=True)
+
+            # Pop-out button: opens a larger, scrollable, resizable reader.
+            expand_btn = tk.Label(
+                transcript_frame, text="⤢", font=("Segoe UI", 11),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2",
+            )
+            expand_btn.place(relx=1.0, rely=0.0, anchor="ne")
+            expand_btn.bind(
+                "<Button-1>", lambda e: self._toggle_transcript_window()
+            )
 
         # --- Footer (32px) ---
         footer_frame = tk.Frame(parent, bg=BG_COLOR, height=32)
@@ -889,6 +959,53 @@ class GameBarDashboard:
         """Handle the mute toggle click."""
         if self._on_toggle_mute:
             self._on_toggle_mute()
+
+    def _on_mute_right_click(self, _event) -> str:
+        """Right-click on the mute button: resume auto mute sync.
+
+        Returns "break" so the window-level context menu binding does
+        not also fire.
+        """
+        self._handle_resume_auto_sync()
+        return "break"
+
+    def _handle_resume_auto_sync(self) -> None:
+        """Hand mute control back to auto-detection."""
+        if self._on_resume_auto_sync:
+            self._on_resume_auto_sync()
+
+    def _show_mute_tooltip(self) -> None:
+        """Show a small hint below the mute button on hover."""
+        if self._window is None or self._mute_btn is None:
+            return
+        if self._mute_tooltip is not None:
+            return
+        try:
+            tip = tk.Toplevel(self._window)
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(
+                tip,
+                text="Click: mute/unmute recording · Right-click: resume auto-sync",
+                font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_HEADER,
+                padx=6, pady=2,
+            ).pack()
+            x = self._mute_btn.winfo_rootx()
+            y = self._mute_btn.winfo_rooty() + self._mute_btn.winfo_height() + 4
+            tip.geometry(f"+{x}+{y}")
+            self._mute_tooltip = tip
+        except Exception:
+            logger.debug("Mute tooltip failed", exc_info=True)
+
+    def _hide_mute_tooltip(self) -> None:
+        """Destroy the mute button hover hint."""
+        tip = self._mute_tooltip
+        self._mute_tooltip = None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
 
     def _show_context_menu(self, event) -> None:
         """Show right-click context menu."""

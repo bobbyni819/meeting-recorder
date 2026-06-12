@@ -177,7 +177,13 @@ class TrayIcon:
 
         if self._icon is not None:
             self._icon.icon = self._icons.get(state, self._icons["idle"])
-            self._icon.title = f"Meeting Recorder - {self._status_text}"
+            # Windows caps the tray tooltip (Shell_NotifyIcon szTip) at 128
+            # chars; a long meeting title would otherwise raise on every
+            # update. Truncate with an ellipsis well under the limit.
+            title = f"Meeting Recorder - {self._status_text}"
+            if len(title) > 120:
+                title = title[:117] + "..."
+            self._icon.title = title
             # Force menu update
             self._icon.update_menu()
 

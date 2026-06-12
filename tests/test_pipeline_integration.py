@@ -446,3 +446,317 @@ class TestGeminiPipeline:
 
         with pytest.raises(FileNotFoundError, match="No audio file found"):
             pipeline.process(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Gemini -> local Whisper fallback tests (no API / whisper-load dependency)
+# ---------------------------------------------------------------------------
+
+class TestGeminiLocalFallback:
+    """When Gemini fails, the pipeline falls back to local Whisper."""
+
+    def _gemini_pipeline(self, api_key: str = "test-key"):
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = api_key
+        config.diarization.enabled = False
+        return TranscriptionPipeline(config)
+
+    def test_fallback_triggered_on_gemini_error(self, tmp_path: Path):
+        """Gemini raising after retries should trigger the local fallback."""
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        pipeline = self._gemini_pipeline()
+
+        gemini = MagicMock()
+        gemini.transcribe.side_effect = Exception("503 Service Unavailable")
+        pipeline._transcriber = gemini
+
+        local_segments = [TranscriptSegment(start=0.0, end=1.0, text="local rescue")]
+        local = MagicMock()
+        local.transcribe.return_value = local_segments
+
+        with patch.object(pipeline, "_get_local_fallback", return_value=local) as mock_get:
+            segments = pipeline.process(tmp_path)
+
+        mock_get.assert_called_once()
+        # The original Gemini error is passed in so it can be re-raised
+        assert "503" in str(mock_get.call_args.args[0])
+        assert segments == local_segments
+        assert pipeline.last_backend_used == "local"
+
+    def test_fallback_triggered_when_key_missing(self, tmp_path: Path):
+        """Missing Gemini key (ValueError from _get_transcriber) also falls back."""
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        pipeline = self._gemini_pipeline(api_key="")
+
+        local_segments = [TranscriptSegment(start=0.0, end=1.0, text="no key needed")]
+        local = MagicMock()
+        local.transcribe.return_value = local_segments
+
+        with patch.object(pipeline, "_get_local_fallback", return_value=local):
+            segments = pipeline.process(tmp_path)
+
+        assert segments == local_segments
+        assert pipeline.last_backend_used == "local"
+
+    def test_original_error_reraised_when_local_unavailable(self, tmp_path: Path):
+        """If faster-whisper import/load fails, the ORIGINAL Gemini error is raised."""
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        pipeline = self._gemini_pipeline()
+
+        original = RuntimeError("429 RESOURCE_EXHAUSTED after all retries")
+        gemini = MagicMock()
+        gemini.transcribe.side_effect = original
+        pipeline._transcriber = gemini
+
+        with patch(
+            "meeting_recorder.transcription.pipeline.LocalWhisperTranscriber"
+        ) as mock_cls:
+            mock_cls.return_value.load.side_effect = ImportError("no faster_whisper")
+            with pytest.raises(RuntimeError) as excinfo:
+                pipeline.process(tmp_path)
+
+        assert excinfo.value is original
+        assert pipeline.last_backend_used is None
+
+    def test_fallback_flows_through_diarization(self, tmp_path: Path):
+        """The local fallback must use the same diarization/merge path as 'local'."""
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        pipeline = self._gemini_pipeline()
+        pipeline.config.diarization.enabled = True
+        pipeline.config.diarization.huggingface_token = "fake-token"
+
+        gemini = MagicMock()
+        gemini.transcribe.side_effect = Exception("503 unavailable")
+        pipeline._transcriber = gemini
+
+        local = MagicMock()
+        local.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=1.0, text="hello")
+        ]
+
+        from meeting_recorder.transcription.diarization import SpeakerSegment
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = [
+            SpeakerSegment(start=0.0, end=1.0, speaker="SPEAKER_00")
+        ]
+        pipeline._diarizer = mock_diarizer
+
+        with patch.object(pipeline, "_get_local_fallback", return_value=local):
+            segments = pipeline.process(tmp_path)
+
+        mock_diarizer.diarize.assert_called_once()
+        assert len(segments) == 1
+        assert segments[0].speaker  # labelled by diarization merge
+
+    def test_fallback_handles_app_audio_only(self, tmp_path: Path):
+        """Imported recordings have only app_audio.wav; fallback must handle them."""
+        generate_silence_wav(tmp_path / "app_audio.wav", duration=1.0)
+
+        pipeline = self._gemini_pipeline()
+
+        gemini = MagicMock()
+        gemini.transcribe.side_effect = Exception("503 unavailable")
+        pipeline._transcriber = gemini
+
+        local_segments = [TranscriptSegment(start=0.0, end=1.0, text="import rescue")]
+        local = MagicMock()
+        local.transcribe.return_value = local_segments
+
+        with patch.object(pipeline, "_get_local_fallback", return_value=local):
+            segments = pipeline.process(tmp_path)
+
+        assert segments == local_segments
+        called_path = local.transcribe.call_args[0][0]
+        assert called_path.name == "app_audio.wav"
+
+    def test_get_local_fallback_caches_loaded_model(self):
+        """The fallback transcriber is loaded once and reused."""
+        pipeline = self._gemini_pipeline()
+
+        with patch(
+            "meeting_recorder.transcription.pipeline.LocalWhisperTranscriber"
+        ) as mock_cls:
+            instance = mock_cls.return_value
+            first = pipeline._get_local_fallback(Exception("err1"))
+            second = pipeline._get_local_fallback(Exception("err2"))
+
+        assert first is second is instance
+        instance.load.assert_called_once()
+
+    def test_get_local_fallback_uses_configured_model(self):
+        """Fallback uses the configured model size / device / compute type."""
+        pipeline = self._gemini_pipeline()
+        # Pin the 'full' tier so the per-machine model cap doesn't downsize
+        # large-v3 (the cap itself is covered in test_performance.py).
+        pipeline.config.performance.profile = "full"
+        pipeline.config.transcription.model_size = "large-v3"
+        pipeline.config.transcription.device = "cuda"
+        pipeline.config.transcription.compute_type = "float16"
+
+        with patch(
+            "meeting_recorder.transcription.pipeline.LocalWhisperTranscriber"
+        ) as mock_cls:
+            pipeline._get_local_fallback(Exception("boom"))
+
+        mock_cls.assert_called_once_with(
+            model_size="large-v3",
+            device="cuda",
+            compute_type="float16",
+            language=pipeline.config.recording.language,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Backend-used reporting tests
+# ---------------------------------------------------------------------------
+
+class TestBackendUsedReporting:
+    """last_backend_used reflects the backend that actually produced segments."""
+
+    def test_initially_none(self):
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        pipeline = TranscriptionPipeline(Config())
+        assert pipeline.last_backend_used is None
+
+    def test_gemini_success_reports_gemini(self, tmp_path: Path):
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "gemini"
+        config.transcription.gemini_api_key = "test-key"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=1.0, text="hi", speaker="S1")
+        ]
+        pipeline._transcriber = mock_transcriber
+
+        pipeline.process(tmp_path)
+        assert pipeline.last_backend_used == "gemini"
+
+    def test_local_backend_reports_local(self, tmp_path: Path):
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "local"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=1.0, text="hi")
+        ]
+        pipeline._transcriber = mock_transcriber
+
+        pipeline.process(tmp_path)
+        assert pipeline.last_backend_used == "local"
+
+    def test_cloud_backend_reports_cloud(self, tmp_path: Path):
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "cloud"
+        config.transcription.openai_api_key = "test-key"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=1.0, text="hi")
+        ]
+        pipeline._transcriber = mock_transcriber
+
+        pipeline.process(tmp_path)
+        assert pipeline.last_backend_used == "cloud"
+
+    def test_reset_between_calls(self, tmp_path: Path):
+        """A failing process() call resets last_backend_used to None."""
+        from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+
+        generate_silence_wav(tmp_path / "mixed.wav", duration=1.0)
+
+        config = Config()
+        config.transcription.backend = "local"
+        config.diarization.enabled = False
+
+        pipeline = TranscriptionPipeline(config)
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = [
+            TranscriptSegment(start=0.0, end=1.0, text="hi")
+        ]
+        pipeline._transcriber = mock_transcriber
+
+        pipeline.process(tmp_path)
+        assert pipeline.last_backend_used == "local"
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with pytest.raises(FileNotFoundError):
+            pipeline.process(empty_dir)
+        assert pipeline.last_backend_used is None
+
+
+# ---------------------------------------------------------------------------
+# LocalWhisperTranscriber compute-type fallback tests (mocked model load)
+# ---------------------------------------------------------------------------
+
+class TestLocalWhisperComputeTypeFallback:
+    """load() retries with int8_float32 when the configured compute type fails."""
+
+    def test_retries_with_int8_float32_on_load_failure(self):
+        transcriber = LocalWhisperTranscriber(
+            model_size="tiny", device="cuda", compute_type="float16",
+        )
+
+        good_model = MagicMock()
+        with patch(
+            "faster_whisper.WhisperModel",
+            side_effect=[ValueError("float16 not supported on this device"), good_model],
+        ) as mock_model:
+            transcriber.load()
+
+        assert transcriber._model is good_model
+        assert mock_model.call_count == 2
+        assert mock_model.call_args_list[1].kwargs["compute_type"] == "int8_float32"
+
+    def test_no_retry_when_already_int8_float32(self):
+        transcriber = LocalWhisperTranscriber(
+            model_size="tiny", device="cuda", compute_type="int8_float32",
+        )
+
+        with patch(
+            "faster_whisper.WhisperModel",
+            side_effect=RuntimeError("CUDA driver missing"),
+        ) as mock_model:
+            with pytest.raises(RuntimeError, match="CUDA driver missing"):
+                transcriber.load()
+
+        assert mock_model.call_count == 1
+
+    def test_successful_load_does_not_retry(self):
+        transcriber = LocalWhisperTranscriber(
+            model_size="tiny", device="cpu", compute_type="int8",
+        )
+
+        good_model = MagicMock()
+        with patch("faster_whisper.WhisperModel", return_value=good_model) as mock_model:
+            transcriber.load()
+
+        assert transcriber._model is good_model
+        assert mock_model.call_count == 1

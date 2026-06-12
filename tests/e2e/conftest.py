@@ -8,16 +8,9 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
-# Auto-skip if e2e dependencies are not installed
-try:
-    import sounddevice  # noqa: F401
-    import soundfile  # noqa: F401
-    import playwright  # noqa: F401
-except ImportError as _e:
-    pytest.skip(
-        "E2E dependencies not installed (pip install -e '.[e2e]')",
-        allow_module_level=True,
-    )
+# NOTE: do NOT add a module-level pytest.skip here — it aborts collection of
+# the entire tests/ package. Missing e2e dependencies are handled by
+# collect_ignore in tests/conftest.py instead.
 
 
 @pytest.fixture

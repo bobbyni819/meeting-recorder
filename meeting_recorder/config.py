@@ -44,6 +44,9 @@ _LOCAL_ONLY_FIELDS: dict[str, dict[str, object]] = {
     "summary": {"api_key": ""},
     "audio": {"mic_device": ""},
     "dashboard": {"position_x": -1, "position_y": -1},
+    # Per-machine performance tier — must NOT sync via git (the workstation
+    # and the old PC have different hardware). "auto" detects at startup.
+    "performance": {"profile": "auto"},
 }
 
 
@@ -89,7 +92,40 @@ class RecordingConfig:
     language: str = "en"
     user_name: str = "User"
     live_transcription: bool = False
+    # Feed the user's mic into the live preview too (labelled [You]);
+    # app audio (other participants) is always fed when live preview is on.
+    live_transcript_mic: bool = True
     auto_start: bool = False  # auto-detect meetings and start recording
+    # Heal failed/stuck/partially-processed recordings at startup. Tail
+    # retries (missing summary/upload) always run; full re-transcription is
+    # gated separately below because it can burn a free-tier API quota.
+    auto_retry_failed: bool = True
+    # Auto full-RE-TRANSCRIBE failed/stuck recordings at startup. OFF by
+    # default: re-transcription hits the (often free-tier) backend and can
+    # exhaust the daily quota — reprocess those manually when ready.
+    auto_retry_full_reprocess: bool = False
+    # Start every recording with the mic MUTED (recording-only), since users
+    # usually join meetings muted. Auto-detection unmutes within ~1.5s if the
+    # meeting app shows you are actually unmuted. Prevents capturing the room
+    # before you actively speak.
+    start_muted: bool = True
+    # Privacy-first mute: only record the mic when positively confirmed
+    # unmuted. The recorder auto-unmutes ONLY when the meeting app's mute
+    # button reads "unmuted"; if that becomes unreadable (toolbar hidden)
+    # for longer than mute_remute_seconds while unmuted, it re-mutes — so it
+    # can never keep capturing the room after losing sight of your real
+    # mute state. Manual unmute (hotkey/dashboard) still overrides.
+    mute_privacy_first: bool = True
+    mute_remute_seconds: float = 12.0
+    # Rename the recording folder from transcript content after processing,
+    # disambiguating between meetings booked in the same slot via the
+    # calendar. Only the folder moves; files inside are untouched.
+    smart_rename: bool = True
+    # EXPERIMENTAL: poll the Zoom/Teams UI for the active speaker during the
+    # meeting and use it to put real names on diarized speakers. Off by
+    # default — the accessibility names vary by app version and need a
+    # live-meeting validation pass. Writes an additive speaker_events.jsonl.
+    capture_speaker_events: bool = False
 
 
 @dataclass
@@ -124,6 +160,9 @@ class DiarizationConfig:
     huggingface_token: str = ""
     min_speakers: int = 2
     max_speakers: int = 6
+    # Diarization model. "community-1" is newer/more accurate but must be
+    # accepted on HF; falls back to speaker-diarization-3.1 if it won't load.
+    model: str = "pyannote/speaker-diarization-community-1"
 
 
 @dataclass
@@ -151,6 +190,10 @@ class DashboardConfig:
     start_collapsed: bool = False
     show_transcript: bool = True
     show_screen_preview: bool = True
+    # Live transcript readability: font point size and how many on-screen
+    # lines of rolling context to keep. Larger = easier to read along.
+    transcript_font_size: int = 13
+    transcript_lines: int = 7
 
 
 @dataclass
@@ -189,6 +232,13 @@ class RetentionConfig:
 
 
 @dataclass
+class PerformanceConfig:
+    # "auto" | "light" | "balanced" | "full". Local-only (per machine).
+    # "auto" detects GPU/CPU/RAM at startup. See meeting_recorder/performance.py.
+    profile: str = "auto"
+
+
+@dataclass
 class DictationConfig:
     enabled: bool = False
     drive_root: str = "~/Documents"
@@ -221,6 +271,7 @@ class Config:
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     dictation: DictationConfig = field(default_factory=DictationConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -310,6 +361,7 @@ class Config:
             dashboard=_safe_init(DashboardConfig, data, "dashboard"),
             retention=_safe_init(RetentionConfig, data, "retention"),
             dictation=_safe_init(DictationConfig, data, "dictation"),
+            performance=_safe_init(PerformanceConfig, data, "performance"),
         )
 
     def save(self) -> None:

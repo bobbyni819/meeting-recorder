@@ -51,10 +51,20 @@ class RecordingMetadata:
     has_summary: bool = False
     summary_provider: str = ""
     summary_model: str = ""
+    # Tail-step failure flags: set when a non-fatal post-processing step
+    # fails so the startup retry sweep can heal the recording later.
+    summary_failed: bool = False
+    upload_pending: bool = False
     # Quality scores (computed during post-processing)
     quality_scores: dict = field(default_factory=dict)
     # User-defined tags
     tags: list[str] = field(default_factory=list)
+    # Folder name at creation, before smart_rename moved it (additive; lets
+    # external tools that cached the old path find the recording).
+    original_dir_name: str = ""
+    # Where the current transcript came from: "" (our pipeline) or
+    # "teams_vtt" (imported Teams/Zoom VTT with real speaker names).
+    transcription_source: str = ""
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory.

@@ -1,9 +1,47 @@
 # Meeting Recorder — Claude Code Context
 
 ## What this project does
-Automatically records meeting audio (app + mic), screen, transcribes with Whisper large-v3,
-diarizes speakers with pyannote, generates AI summaries, and uploads to Google Drive.
-Runs as a Windows system-tray app (`launch.pyw`).
+Automatically records meeting audio (app + mic), screen, transcribes (Gemini by default,
+local Whisper large-v3 fallback), diarizes speakers with pyannote, generates AI summaries,
+and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
+
+## Reliability & feature additions (branch: improvements/reliability-capture-live)
+- **Transcription reliability** (`transcription/pipeline.py`, `gemini_transcriber.py`):
+  Gemini retries 5× with real 4/8/16/32s backoff + jitter, treats 429/RESOURCE_EXHAUSTED
+  as retryable (free tier), honors server retryDelay, 120s budget. On persistent failure,
+  auto-falls back to local Whisper (`pipeline.last_backend_used` records which ran). Gemini
+  segment end-timestamps clamped to real WAV duration. Files-API poll cap 10min.
+- **App self-healing** (`recovery.py`, `app.py:_startup_retry_sweep`): startup scan heals
+  status==error (retryable) + stale status==processing + summary_failed/upload_pending
+  recordings. Summary/Drive failures now set `metadata.summary_failed`/`upload_pending` +
+  notify. CLI: `python -m meeting_recorder reprocess <dir> [--backend ..|--tail-only]`.
+- **Performance profile** (`performance.py`): local-only `performance.profile`
+  (auto/light/balanced/full) gates live transcription, fallback model size, video encoder
+  by detected GPU/CPU/RAM. Can only RESTRICT features, never force-enable. `auto` detects.
+- **Video** (`video/screen_capture.py`): writer-side frame-slot timing compensation fixes
+  the fast/jerky playback; grab/encode decoupled via bounded queue; `FFmpegVideoWriter`
+  (h264_nvenc → libx264, bundled imageio-ffmpeg) with cv2 fallback. `encoder_preference`
+  from the perf tier.
+- **Live transcription** (`transcription/live_transcriber.py`): ON by default; accumulates
+  a stable rolling transcript (per-source watermarks) to `live_transcript.txt`; mic fed as
+  a second `[You]` source; free local concept extraction (topic/keyword) via `on_insight`.
+- **Mute sync** (`audio/uia_mute_detector.py`, `mute_sync.py`): UIA-first reads the real
+  Zoom/Teams mute-button state (registry "mic open" ≠ soft-mute); packaged-Teams registry;
+  `resume_auto_sync()` (dashboard right-click) un-sticks a manual override. Initial-state
+  call stays NonPackaged-only so the safe MUTED default holds. See [[feedback_mute_semantics]].
+- **Speaker accuracy** (`transcription/mic_attribution.py`, `audio/speaker_events.py`):
+  mic track is ground truth for "you" → relabels the mic-matched Gemini speaker to the
+  user's name; attendee list fed into the Gemini prompt for real names from the roster;
+  configurable diarization model (community-1 → 3.1 fallback). Experimental opt-in
+  active-speaker UI capture (`capture_speaker_events`, default off — needs live-meeting
+  validation; `python -m meeting_recorder probe-speakers` to test).
+- **Smart naming** (`storage/smart_naming.py`): renames the folder from transcript content
+  after processing, disambiguating same-slot meetings via the calendar (folder moves only,
+  files untouched, timestamp prefix preserved, `metadata.original_dir_name` kept).
+- **Tests/CI**: `tests/e2e/conftest.py` module-level skip was aborting collection of the
+  WHOLE suite (0/2256). Fixed via `collect_ignore` in `tests/conftest.py`; added
+  `.github/workflows/test.yml`. **External transcript files (transcript.json/.txt/.srt/.vtt)
+  are a stable contract — additive changes only** (see [[transcript-files-external-contract]]).
 
 ## Key files
 - `meeting_recorder/app.py` — top-level orchestrator (tray, hotkeys, recording lifecycle)
@@ -92,6 +130,16 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   than the one `process_finder` selects — use the **⊙ Window** picker in the dashboard
   to switch both screen and audio capture to the correct window mid-recording
 - `switch_screen_window(hwnd)` hot-swaps both screen capture AND audio PID atomically
+- **Screen-share fallback**: when the tracked window stays minimized for
+  `_SHARE_FALLBACK_SECONDS` (3s), switches to full-monitor capture via `mss`.
+  Monitor is chosen by `_find_share_monitor()` — enumerates visible non-minimized
+  windows owned by the meeting process (Zoom spawns sharing toolbar / overlay
+  on the shared monitor) and uses the largest candidate's monitor. Falls back
+  to `_pick_monitor_for_rect(last_rect)` if no candidate is found (e.g., Teams
+  with toolbar docked elsewhere). Log line prints `[source: share-overlay]` or
+  `[source: last-window-position]` so you can tell which heuristic fired.
+  Audio (ProcTap by PID) is unaffected. Exits automatically when the window is
+  restored. Resets when the user manually switches target via `switch_window()`.
 
 ## Record Anything mode
 - If no meeting app (Zoom/Teams/Webex) is detected, `start_recording()` opens a window picker

@@ -26,15 +26,22 @@ class SpeakerDiarizer:
     Requires a HuggingFace token with access to pyannote models.
     """
 
+    # Tried in order; the first that loads wins. A newer model that the user
+    # hasn't accepted on HF (or that needs a newer pyannote) falls through to
+    # the pinned 3.1 baseline.
+    _FALLBACK_MODEL = "pyannote/speaker-diarization-3.1"
+
     def __init__(
         self,
         huggingface_token: str,
         min_speakers: int = 2,
         max_speakers: int = 6,
+        model: str = "pyannote/speaker-diarization-3.1",
     ):
         self.huggingface_token = huggingface_token
         self.min_speakers = min_speakers
         self.max_speakers = max_speakers
+        self.model = model or self._FALLBACK_MODEL
         self._pipeline = None
 
     def load(self) -> None:
@@ -77,10 +84,30 @@ class SpeakerDiarizer:
         except Exception:
             logger.debug("Could not patch hf_hub_download", exc_info=True)
 
-        logger.info("Loading pyannote diarization pipeline...")
-        self._pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-        )
+        # Try the configured model first; on any load failure (not accepted
+        # on HF, needs a newer pyannote, network), fall back to the pinned
+        # 3.1 baseline so diarization still works.
+        candidates = [self.model]
+        if self._FALLBACK_MODEL not in candidates:
+            candidates.append(self._FALLBACK_MODEL)
+        last_error: Exception | None = None
+        for model_name in candidates:
+            try:
+                logger.info("Loading pyannote diarization pipeline: %s", model_name)
+                self._pipeline = Pipeline.from_pretrained(model_name)
+                self.model = model_name
+                break
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Could not load diarization model %s (%s)%s",
+                    model_name, e,
+                    "; trying fallback" if model_name != candidates[-1] else "",
+                )
+        if self._pipeline is None:
+            raise RuntimeError(
+                f"No diarization model could be loaded: {last_error}"
+            )
 
         # Move to GPU if available and cuDNN works
         try:

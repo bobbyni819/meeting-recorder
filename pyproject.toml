@@ -44,6 +44,9 @@ dependencies = [
     "mss>=9.0",
     "opencv-python>=4.8",
     "pycaw>=20230407",
+    # resampling.py imports scipy unconditionally; previously arrived only
+    # transitively via the [local] extra's pyannote chain.
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +73,16 @@ summary-anthropic = [
 ]
 gemini = [
     "google-genai>=1.0",
+]
+# Bundled ffmpeg binary for the decoupled video encoder (h264_nvenc/libx264);
+# screen recording falls back to cv2.VideoWriter without it.
+video-encode = [
+    "imageio-ffmpeg>=0.5",
+]
+# UIAutomation-based Zoom/Teams mute-state detection; mute sync falls back
+# to the keyboard-hook + registry paths without it.
+uia = [
+    "uiautomation>=2.0",
 ]
 dev = [
     "pytest>=7.0",

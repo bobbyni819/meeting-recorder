@@ -100,11 +100,17 @@ class TestStartRecording:
         mock_cm_instance.start.assert_called_once()
 
     def test_start_recording_failure_resets_state(self):
-        """If _start_recording_for_process raises, state is cleaned up."""
+        """If _start_recording_for_process raises, state is cleaned up.
+
+        Patches _pick_window_for_recording: start_recording() always goes
+        through the window picker now, and the real picker opens a blocking
+        Tk window that would hang the test run.
+        """
         app = _make_app()
 
-        with mock.patch.object(_app_mod, "find_primary_meeting_process") as mock_find:
-            mock_find.return_value = _make_process()
+        with mock.patch.object(
+            app, "_pick_window_for_recording", return_value=_make_process()
+        ):
             with mock.patch.object(
                 app, "_start_recording_for_process", side_effect=RuntimeError("boom")
             ):
@@ -118,7 +124,12 @@ class TestStartRecording:
 
 class TestStopRecording:
     def test_stop_recording_spawns_post_process_thread(self):
-        """Verify stop_recording starts a post-processing thread."""
+        """Verify stop_recording starts a post-processing thread.
+
+        _post_process blocks on an event until the assertion has run:
+        the post thread clears _post_thread when it finishes, so an
+        instantly-returning mock races the assert.
+        """
         app = _make_app()
 
         mock_cm = MagicMock()
@@ -129,12 +140,23 @@ class TestStopRecording:
         app._current_metadata = MagicMock()
         app._recording_config = Config()
 
-        with mock.patch.object(app, "_post_process"):
-            app.stop_recording()
+        started = threading.Event()
+        release = threading.Event()
 
-        assert app._post_thread is not None
-        # Wait briefly for thread to start
-        app._post_thread.join(timeout=2.0)
+        def blocking_post_process(*args, **kwargs):
+            started.set()
+            release.wait(timeout=5.0)
+
+        with mock.patch.object(
+            app, "_post_process", side_effect=blocking_post_process
+        ):
+            app.stop_recording()
+            assert started.wait(timeout=2.0), "post-process thread never ran"
+            post_thread = app._post_thread
+            assert post_thread is not None
+            release.set()
+            post_thread.join(timeout=2.0)
+
         mock_cm.stop.assert_called_once()
 
     def test_stop_recording_lock_prevents_double_stop(self):
