@@ -132,6 +132,9 @@ class DiarizationConfig:
     huggingface_token: str = ""
     min_speakers: int = 2
     max_speakers: int = 6
+    # Diarization model. "community-1" is newer/more accurate but must be
+    # accepted on HF; falls back to speaker-diarization-3.1 if it won't load.
+    model: str = "pyannote/speaker-diarization-community-1"
 
 
 @dataclass

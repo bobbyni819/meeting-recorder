@@ -87,6 +87,7 @@ class TranscriptionPipeline:
                 huggingface_token=dc.huggingface_token,
                 min_speakers=dc.min_speakers,
                 max_speakers=dc.max_speakers,
+                model=getattr(dc, "model", "") or SpeakerDiarizer._FALLBACK_MODEL,
             )
         return self._diarizer
 
@@ -208,6 +209,10 @@ class TranscriptionPipeline:
                 )
                 return segments
             self._last_backend_used = "gemini"
+            # Use the separate mic track as ground truth to label the user's
+            # own turns (Gemini only ever sees the mixed audio, so it can't
+            # know which generic speaker is "you").
+            self._attribute_user_from_mic(segments, recording_dir, user_name)
             # Still attempt calendar-based speaker name resolution on top of
             # Gemini's generic "Speaker 1 / Speaker 2" labels.
             self._resolve_speakers(
@@ -294,6 +299,34 @@ class TranscriptionPipeline:
                 segments, attendees, organizer, user_name, audio_path=audio_path,
             )
             return segments
+
+    def _attribute_user_from_mic(
+        self,
+        segments: list[TranscriptSegment],
+        recording_dir: Path,
+        user_name: str,
+    ) -> None:
+        """Relabel the mic-matched speaker to the user's name (best-effort)."""
+        mic_audio = recording_dir / "mic_audio.wav"
+        if not mic_audio.exists():
+            return
+        try:
+            from meeting_recorder.transcription.mic_attribution import attribute_user
+
+            duration = None
+            try:
+                import wave
+
+                with wave.open(str(mic_audio), "rb") as wf:
+                    if wf.getframerate():
+                        duration = wf.getnframes() / wf.getframerate()
+            except Exception:
+                pass
+            renamed = attribute_user(segments, mic_audio, user_name, duration)
+            if renamed:
+                logger.info("Mic attribution: relabelled %s -> %s", renamed, user_name)
+        except Exception:
+            logger.debug("Mic attribution skipped (non-fatal)", exc_info=True)
 
     def _resolve_speakers(
         self,

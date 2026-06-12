@@ -32,6 +32,7 @@ enabled = true
 huggingface_token = ""
 min_speakers = 2
 max_speakers = 6
+model = "pyannote/speaker-diarization-community-1"  # newer/more accurate; auto-falls back to 3.1 if not accepted on HF
 
 [output]
 formats = ["json", "txt", "srt"]
