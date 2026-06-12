@@ -512,6 +512,39 @@ class TestFFmpegVideoWriter:
         proc.wait.assert_called_once()
         assert w.isOpened() is False
 
+    def _captured_args(self, **kwargs):
+        """Build a writer and return the argv passed to ffmpeg's Popen."""
+        proc = self._live_proc()
+        with mock.patch.dict(sys.modules, {"imageio_ffmpeg": self._fake_imageio()}), \
+             mock.patch.object(
+                 screen_capture.subprocess, "Popen", return_value=proc
+             ) as popen, \
+             mock.patch.object(
+                 screen_capture, "_probe_best_encoder", return_value="h264_nvenc"
+             ):
+            FFmpegVideoWriter(Path("out.mp4"), fps=30.0, width=4, height=4, **kwargs)
+        return popen.call_args.args[0]
+
+    def test_uses_fragmented_mp4_for_crash_resilience(self):
+        # Without these flags a crash mid-recording leaves an unplayable file
+        # (no final moov atom). Fragments + packet flush make partials playable.
+        args = self._captured_args()
+        assert "-movflags" in args
+        movflags = args[args.index("-movflags") + 1]
+        assert "frag_keyframe" in movflags
+        assert "empty_moov" in movflags
+        assert "-flush_packets" in args
+        assert "-frag_duration" in args
+
+    def test_quality_flows_into_nvenc_cq(self):
+        args = self._captured_args(quality=18)
+        assert "-cq" in args
+        assert args[args.index("-cq") + 1] == "18"
+
+    def test_quality_is_clamped(self):
+        args = self._captured_args(quality=999)
+        assert args[args.index("-cq") + 1] == "51"
+
 
 class TestCreateWriterFallback:
     """ScreenCapture._create_writer: ffmpeg preferred, cv2 fallback."""

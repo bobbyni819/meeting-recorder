@@ -208,12 +208,18 @@ class FFmpegVideoWriter:
         width: int,
         height: int,
         encoder: Optional[str] = None,
+        quality: int = 21,
     ):
         import imageio_ffmpeg
 
         self._exe = imageio_ffmpeg.get_ffmpeg_exe()
         self.encoder = encoder or _probe_best_encoder(self._exe)
         self._frame_bytes = width * height * 3
+        # CQ/CRF: lower = higher quality (crisper text/slides), larger file.
+        quality = max(1, min(51, int(quality)))
+        # Keyframe ~every 2s (seek granularity). Fragments are cut more often
+        # than this via -frag_duration below, so crash loss stays ~1s.
+        gop = max(int(fps * 2), 2)
 
         args = [
             self._exe, "-hide_banner", "-loglevel", "error", "-y",
@@ -224,12 +230,23 @@ class FFmpegVideoWriter:
         if width % 2 or height % 2:
             # H.264 yuv420p requires even dimensions; crop a 1px edge
             args += ["-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0"]
-        args += ["-c:v", self.encoder]
+        args += ["-c:v", self.encoder, "-g", str(gop)]
         if self.encoder == "h264_nvenc":
-            args += ["-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0"]
+            args += ["-preset", "p5", "-rc", "vbr", "-cq", str(quality), "-b:v", "0"]
         else:
-            args += ["-preset", "veryfast", "-crf", "23"]
-        args += ["-pix_fmt", "yuv420p", str(output_path)]
+            args += ["-preset", "veryfast", "-crf", str(quality)]
+        # Fragmented MP4: the index is written upfront in fragments, so the
+        # video is playable even if the app crashes or is killed mid-recording
+        # — instead of the whole file being unrecoverable for lack of a final
+        # moov atom. -frag_duration caps fragments at ~1s and -flush_packets
+        # pushes them to disk as they complete, so a crash loses at most ~1s.
+        args += [
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration", "1000000",
+            "-flush_packets", "1",
+            str(output_path),
+        ]
 
         # stderr -> DEVNULL: ffmpeg writes progress continuously; an unread
         # PIPE would fill its buffer and deadlock the encoder.
@@ -309,11 +326,14 @@ class ScreenCapture:
         fps: float = 30.0,
         encoder_preference: str = "nvenc",
         on_window_closed: Optional[callable] = None,
+        quality: int = 21,
     ):
         self.pid = pid
         self.process_name = process_name
         self.output_path = str(output_path)
         self.fps = fps
+        # Video CQ/CRF (lower = higher quality). See ScreenRecordingConfig.
+        self.quality = quality
         # Fired once when the tracked window is closed (not minimized) for
         # _WINDOW_CLOSED_SECONDS, so the recording can auto-stop instead of
         # recording the desktop.
@@ -490,7 +510,8 @@ class ScreenCapture:
                     "libx264" if self.encoder_preference == "software" else None
                 )
                 w = FFmpegVideoWriter(
-                    self.output_path, self.fps, width, height, encoder=forced,
+                    self.output_path, self.fps, width, height,
+                    encoder=forced, quality=self.quality,
                 )
                 logger.info("Screen recording codec: %s (ffmpeg)", w.encoder)
                 return w

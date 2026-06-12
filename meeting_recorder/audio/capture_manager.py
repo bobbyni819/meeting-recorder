@@ -154,6 +154,7 @@ class CaptureManager:
         on_stopped: Optional[callable] = None,
         screen_recording_enabled: bool = False,
         screen_recording_fps: float = 30.0,
+        screen_recording_quality: int = 21,
         video_encoder_preference: str = "nvenc",
         capture_speaker_events: bool = False,
         process_name: str = "",
@@ -292,6 +293,7 @@ class CaptureManager:
                     process_name=process_name,
                     output_path=output_dir / "screen.mp4",
                     fps=screen_recording_fps,
+                    quality=screen_recording_quality,
                     encoder_preference=video_encoder_preference,
                     on_window_closed=self._on_screen_window_closed,
                 )

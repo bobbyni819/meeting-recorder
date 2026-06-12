@@ -51,7 +51,8 @@ toggle_dashboard = "ctrl+shift+d"  # show/hide recording dashboard
 
 [screen_recording]
 enabled = true
-fps = 30.0  # frames per second (15-30 recommended)
+fps = 30.0  # frames per second; raise to 60 for smoother video, lower to 15 to save CPU/disk
+quality = 21  # video quality (CQ/CRF): LOWER = crisper text/slides, bigger file. 18 ~lossless, 21 high, 28 small. Resolution = the captured window's native size, so maximize the window for higher resolution.
 
 [outlook]
 enabled = true         # auto-detect meeting name from Outlook calendar

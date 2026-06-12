@@ -507,6 +507,7 @@ class MeetingRecorderApp:
             on_stopped=self._on_capture_auto_stopped,
             screen_recording_enabled=self.config.screen_recording.enabled,
             screen_recording_fps=self.config.screen_recording.fps,
+            screen_recording_quality=self.config.screen_recording.quality,
             video_encoder_preference=self._perf_tier.video_encoder,
             capture_speaker_events=self.config.recording.capture_speaker_events,
             process_name=process.name,

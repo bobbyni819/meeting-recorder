@@ -200,6 +200,10 @@ class DashboardConfig:
 class ScreenRecordingConfig:
     enabled: bool = True
     fps: float = 30.0
+    # Video quality (CQ/CRF): LOWER = crisper text/slides + larger file.
+    # ~18 visually lossless, 21 high (default), 23 was the old soft default,
+    # 28 small. Resolution is the captured window's native pixel size.
+    quality: int = 21
 
 
 @dataclass
@@ -412,6 +416,12 @@ class Config:
             warnings.append(
                 f"screen_recording.fps = {self.screen_recording.fps} "
                 f"is out of range (expected 1-120)"
+            )
+
+        if not 1 <= self.screen_recording.quality <= 51:
+            warnings.append(
+                f"screen_recording.quality = {self.screen_recording.quality} "
+                f"is out of range (expected 1-51; ~18 high, 21 default, 28 small)"
             )
 
         if self.retention.enabled and self.retention.max_age_days < 0:
