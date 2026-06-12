@@ -104,6 +104,8 @@ class GameBarDashboard:
         self._mute_tooltip: Optional[tk.Toplevel] = None
         self._pause_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
+        self._transcript_window = None  # LiveTranscriptWindow pop-out
+        self._last_transcript_text: str = ""
         self._capture_warning_label: Optional[tk.Label] = None
         self._audio_mode_btn: Optional[tk.Label] = None
         self._collapsed_elapsed: Optional[tk.Label] = None
@@ -216,6 +218,13 @@ class GameBarDashboard:
     def close(self) -> None:
         """Destroy the dashboard window entirely."""
         self._is_visible = False
+        tw = self._transcript_window
+        self._transcript_window = None
+        if tw is not None:
+            try:
+                tw.close()
+            except Exception:
+                pass
         w = self._window
         self._window = None  # prevent further after() calls from other threads
         if w is not None:
@@ -285,7 +294,16 @@ class GameBarDashboard:
             pass
 
     def update_transcript(self, text: str) -> None:
-        """Update the transcript preview text (thread-safe)."""
+        """Update the transcript preview text (thread-safe).
+
+        The pop-out window (if open) gets the FULL rolling text; the compact
+        strip gets a front-trimmed tail sized to its visible area.
+        """
+        self._last_transcript_text = text
+        tw = self._transcript_window
+        if tw is not None and tw.is_visible:
+            tw.update_text(text)
+
         if self._window is None or not self._is_visible or self._is_collapsed:
             return
         if not self._show_transcript:
@@ -296,11 +314,31 @@ class GameBarDashboard:
             # the newest speech stays on screen (rolling tail).
             chars_per_line = max(20, int(2400 / self._transcript_font_size))
             budget = chars_per_line * self._transcript_lines
-            if len(text) > budget:
-                text = "..." + text[-(budget - 3):]
-            self._window.after(0, self._set_transcript, text)
+            strip = text if len(text) <= budget else "..." + text[-(budget - 3):]
+            self._window.after(0, self._set_transcript, strip)
         except tk.TclError:
             pass
+
+    def _toggle_transcript_window(self) -> None:
+        """Open/close the larger pop-out transcript reader (dashboard thread)."""
+        try:
+            from meeting_recorder.ui.live_transcript_window import (
+                LiveTranscriptWindow,
+            )
+
+            tw = self._transcript_window
+            if tw is not None and tw.is_visible:
+                tw.hide()
+                return
+            if tw is None:
+                self._transcript_window = LiveTranscriptWindow(
+                    self._window, font_size=self._transcript_font_size + 4,
+                )
+            self._transcript_window.show()
+            if self._last_transcript_text:
+                self._transcript_window.update_text(self._last_transcript_text)
+        except Exception:
+            logger.debug("Could not open transcript window", exc_info=True)
 
     def update_screen_preview(self, frame) -> None:
         """Update the screen preview thumbnail (thread-safe).
@@ -579,6 +617,16 @@ class GameBarDashboard:
                 wraplength=355, justify=tk.LEFT, anchor=tk.NW,
             )
             self._transcript_label.pack(fill=tk.BOTH, expand=True)
+
+            # Pop-out button: opens a larger, scrollable, resizable reader.
+            expand_btn = tk.Label(
+                transcript_frame, text="⤢", font=("Segoe UI", 11),
+                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2",
+            )
+            expand_btn.place(relx=1.0, rely=0.0, anchor="ne")
+            expand_btn.bind(
+                "<Button-1>", lambda e: self._toggle_transcript_window()
+            )
 
         # --- Footer (32px) ---
         footer_frame = tk.Frame(parent, bg=BG_COLOR, height=32)

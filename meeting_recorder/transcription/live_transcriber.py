@@ -408,7 +408,7 @@ class LiveTranscriber:
         state.provisional = " ".join(provisional)
         return committed
 
-    def _build_display_text(self, tail_entries: int = 8) -> str:
+    def _build_display_text(self, tail_entries: int = 25) -> str:
         """Merged display text: recent stable entries + provisional tails.
 
         Consecutive entries from the same source share one label, e.g.
