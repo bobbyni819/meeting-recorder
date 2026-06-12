@@ -130,13 +130,44 @@ class TestSelectMeetingTitle:
         )
         assert title == "First Meeting"
 
-    def test_llm_failure_falls_back_to_first_candidate(self):
+    def test_llm_failure_falls_back_to_content_match(self):
+        """On LLM 503, pick the candidate the transcript actually matches."""
         cfg = mock.MagicMock(api_key="key")
+        transcript = (
+            "I'm more familiar with net logo for agent-based models, ABM. "
+            "Regan asked about the implementation."
+        )
         with mock.patch(
             "meeting_recorder.summary.summarizer.create_provider",
             side_effect=RuntimeError("503"),
         ):
             title, source = smart_naming.select_meeting_title(
-                "transcript", ["First", "Second"], cfg,
+                transcript,
+                ["Data+ Program breakfast 10 AM talk", "Regan ABM sync"],
+                cfg,
             )
-        assert title == "First"
+        # The ABM meeting wins on content, not the first (breakfast) candidate
+        assert title == "Regan ABM sync"
+
+
+class TestBestCandidateByContent:
+    def test_picks_content_match_over_first(self):
+        transcript = "we discussed the quarterly budget and revenue forecasts"
+        best = smart_naming._best_candidate_by_content(
+            transcript, ["Standup", "Budget planning"],
+        )
+        assert best == "Budget planning"
+
+    def test_generic_words_ignored(self):
+        # "weekly", "meeting", "sync" are stopwords -> no signal -> first
+        transcript = "totally unrelated content here"
+        best = smart_naming._best_candidate_by_content(
+            transcript, ["Weekly sync meeting", "Monthly review call"],
+        )
+        assert best == "Weekly sync meeting"  # tie -> first
+
+    def test_no_match_falls_back_to_first(self):
+        best = smart_naming._best_candidate_by_content(
+            "xyz", ["Alpha project", "Beta launch"],
+        )
+        assert best == "Alpha project"

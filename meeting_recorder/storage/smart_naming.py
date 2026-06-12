@@ -163,16 +163,60 @@ Transcript excerpt:
 """
 
 
+# Title words too generic to disambiguate meetings by.
+_TITLE_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "meeting", "call", "sync", "weekly",
+    "monthly", "talk", "chat", "discussion", "review", "session", "zoom",
+    "teams", "webex", "via", "and", "program", "team", "group", "update",
+    "catch", "standup", "check", "in", "on", "at", "to", "of", "am", "pm",
+})
+
+
+def _best_candidate_by_content(
+    transcript_excerpt: str, candidates: list[str],
+) -> str:
+    """Pick the candidate whose title words best match the transcript.
+
+    Free, local, deterministic — used when the LLM disambiguator is
+    unavailable or fails (common on the free tier). Scores each candidate by
+    the fraction of its significant title words that appear in the transcript,
+    so a same-slot meeting whose subject is actually discussed wins over an
+    unrelated one. Falls back to the first candidate only on a true tie.
+    """
+    low = transcript_excerpt.lower()
+    best = candidates[0]
+    best_score = -1
+    for cand in candidates:
+        words = {
+            w for w in re.findall(r"[a-zA-Z]{3,}", cand.lower())
+            if w not in _TITLE_STOPWORDS
+        }
+        # Total whole-word occurrences of the title's significant words in the
+        # transcript. Frequency matters: a meeting whose subject is discussed
+        # repeatedly (e.g. "ABM" 5x) beats one with a single generic hit
+        # (e.g. "data" 1x), which fraction-of-words would tie.
+        score = sum(
+            len(re.findall(rf"\b{re.escape(w)}\b", low)) for w in words
+        )
+        if score > best_score:
+            best, best_score = cand, score
+    return best
+
+
 def _llm_pick_title(
     transcript_excerpt: str,
     candidates: list[str],
     summary_config,
 ) -> Optional[str]:
-    """One small LLM call to disambiguate among candidate meeting titles."""
+    """Disambiguate among candidate meeting titles.
+
+    Prefers a small LLM call (smarter), but falls back to free local
+    content-scoring rather than blindly picking the first candidate, so a
+    free-tier 503 doesn't mislabel an overlapping meeting.
+    """
+    local_best = _best_candidate_by_content(transcript_excerpt, candidates)
     if summary_config is None or not getattr(summary_config, "api_key", ""):
-        # No LLM available: fall back to the first (calendar-best) candidate
-        # rather than guessing — better than spending no signal.
-        return candidates[0]
+        return local_best
     try:
         from meeting_recorder.summary.summarizer import create_provider
 
@@ -185,8 +229,10 @@ def _llm_pick_title(
             "You label meeting recordings. Reply with only the title.", prompt,
         )
         title = (raw or "").strip().strip('"').splitlines()[0].strip()
-        return title or candidates[0]
+        return title or local_best
     except Exception:
-        logger.debug("LLM title selection failed; using first candidate",
-                     exc_info=True)
-        return candidates[0]
+        logger.debug(
+            "LLM title selection failed; using local content match",
+            exc_info=True,
+        )
+        return local_best
