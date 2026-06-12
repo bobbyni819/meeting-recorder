@@ -140,6 +140,21 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   `[source: last-window-position]` so you can tell which heuristic fired.
   Audio (ProcTap by PID) is unaffected. Exits automatically when the window is
   restored. Resets when the user manually switches target via `switch_window()`.
+- **Crash-resilient MP4**: `FFmpegVideoWriter` writes a fragmented MP4
+  (`-movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 1s
+  -flush_packets 1`). The index lives in per-fragment moof atoms flushed to
+  disk as they encode, so if ffmpeg or the app dies mid-recording the file is
+  still playable up to the last ~1s — no final `moov` atom required. **The
+  `-flush_packets 1` is load-bearing**: without it NVENC buffers fragments in
+  ffmpeg's AVIO layer and a killed file is undecodable (this is what made the
+  first DCP recording unrecoverable). Verified by killing ffmpeg mid-write and
+  decoding the partial.
+- **Tunable quality**: `screen_recording.quality` (CQ/CRF, default 21; lower =
+  crisper text/slides + bigger file) flows app → `CaptureManager`
+  (`screen_recording_quality`) → `ScreenCapture` (`self.quality`) →
+  `FFmpegVideoWriter`. NVENC preset is p5. Clamped 1-51 in the writer;
+  `Config.validate()` warns out of range. Resolution = captured window's
+  native pixel size, so maximize the window for more detail.
 
 ## Record Anything mode
 - If no meeting app (Zoom/Teams/Webex) is detected, `start_recording()` opens a window picker
@@ -287,7 +302,7 @@ Secret/local fields: `transcription.openai_api_key`, `transcription.gemini_api_k
 - `recording.auto_start = false` (manual window picker; auto-detect available via toggle)
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
-- `screen_recording.enabled = true`, `fps = 30`
+- `screen_recording.enabled = true`, `fps = 30`, `quality = 21` (CQ/CRF; lower = crisper, bigger)
 - `retention.enabled = false`, `max_age_days = 90`, `max_total_gb = 0`
 - Output: `~/MeetingRecordings/`
 
