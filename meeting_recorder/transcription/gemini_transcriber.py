@@ -49,6 +49,41 @@ Begin the transcript immediately with no preamble:
 """
 
 
+# Gemini's timestamp format is not stable. Handle the variants seen in the
+# wild; \s* inside the brackets tolerates a leading space ("[ 00:00]").
+#   [MM:SS] / [H:MM:SS]
+_TS_COLON_RE = re.compile(
+    r"^\[\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*\]\s+(.+?):\s+(.+)$"
+)
+#   [0m0s407ms] — minutes / seconds / optional milliseconds
+_TS_UNIT_RE = re.compile(
+    r"^\[\s*(\d+)m(\d+)s(?:(\d+)ms)?\s*\]\s+(.+?):\s+(.+)$"
+)
+
+
+def _parse_timestamp_line(line: str):
+    """Parse one transcript line into (start_seconds, speaker, text), or None.
+
+    Accepts both the colon format ([MM:SS], [H:MM:SS]) and the unit format
+    ([0m0s407ms]) Gemini emits, with or without a leading space in the
+    bracket. Returns None for non-transcript lines.
+    """
+    m = _TS_COLON_RE.match(line)
+    if m:
+        h_or_m, mm, ss, speaker, text = m.groups()
+        if ss is not None:  # [H:MM:SS]
+            start = int(h_or_m) * 3600 + int(mm) * 60 + int(ss)
+        else:               # [MM:SS]
+            start = int(h_or_m) * 60 + int(mm)
+        return float(start), speaker, text
+    m = _TS_UNIT_RE.match(line)
+    if m:
+        mins, secs, ms, speaker, text = m.groups()
+        start = int(mins) * 60 + int(secs) + (int(ms) / 1000.0 if ms else 0.0)
+        return float(start), speaker, text
+    return None
+
+
 _DICTATION_PROMPT_TEMPLATE = """\
 This is a short solo dictation recording (30 seconds to 3 minutes).
 Transcribe it verbatim, infer a topic slug, and infer a project.
@@ -517,13 +552,6 @@ class GeminiTranscriber:
         in particular the final segment, whose end would otherwise be a
         fabricated ``start + 60`` placeholder.
         """
-        # Matches both [MM:SS] and [H:MM:SS]. \s* inside the brackets tolerates
-        # Gemini emitting "[ 00:00]" (a leading space) — without it NO lines
-        # match and the whole transcript collapses into one catch-all segment.
-        pattern = re.compile(
-            r"^\[\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*\]\s+(.+?):\s+(.+)$"
-        )
-
         segments: list[TranscriptSegment] = []
         unmatched_prefix: list[str] = []  # lines before first segment
 
@@ -531,8 +559,8 @@ class GeminiTranscriber:
             line = line.strip()
             if not line:
                 continue
-            m = pattern.match(line)
-            if not m:
+            parsed = _parse_timestamp_line(line)
+            if parsed is None:
                 # Preserve the line instead of dropping it:
                 # - if we already have a segment, append as context
                 # - else save for the first segment to pick up
@@ -542,13 +570,7 @@ class GeminiTranscriber:
                     unmatched_prefix.append(line)
                 continue
 
-            g1, g2, g3 = m.group(1), m.group(2), m.group(3)
-            speaker, text = m.group(4), m.group(5)
-
-            if g3:  # [H:MM:SS]
-                start = int(g1) * 3600 + int(g2) * 60 + int(g3)
-            else:   # [MM:SS]
-                start = int(g1) * 60 + int(g2)
+            start, speaker, text = parsed
 
             # Close out the previous segment now that we know where it ends
             if segments:

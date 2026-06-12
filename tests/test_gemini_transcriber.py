@@ -99,6 +99,20 @@ class TestGeminiParse:
         assert segments[1].start == 70.0
         assert segments[2].start == 166.0
 
+    def test_unit_timestamp_format(self):
+        """Gemini also emits '[0m0s407ms]' (min/sec/ms) — must parse too."""
+        raw = (
+            "[ 0m0s407ms ] Speaker 1: mm.\n"
+            "[ 0m2s41ms ] Speaker 2: Yeah, exactly.\n"
+            "[ 1m5s ] Speaker 1: Okay.\n"
+        )
+        segments = self.transcriber._parse(raw)
+        assert len(segments) == 3
+        assert segments[0].start == pytest.approx(0.407)
+        assert segments[1].start == pytest.approx(2.041)
+        assert segments[1].speaker == "Speaker 2"
+        assert segments[2].start == 65.0
+
     def test_h_mm_ss_format(self):
         raw = (
             "[1:00:00] Speaker 1: We're at the one hour mark.\n"
