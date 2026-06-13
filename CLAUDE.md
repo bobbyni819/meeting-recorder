@@ -42,6 +42,22 @@ and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
   WHOLE suite (0/2256). Fixed via `collect_ignore` in `tests/conftest.py`; added
   `.github/workflows/test.yml`. **External transcript files (transcript.json/.txt/.srt/.vtt)
   are a stable contract — additive changes only** (see [[transcript-files-external-contract]]).
+- **Robustness hardening (2026-06-13, adversarially-verified bug-hunt sweep)**: fixed
+  confirmed defects across the codebase — `capture_manager` `_thread_heartbeats` race
+  (now `_heartbeat_lock` + snapshot; monitor loop can't die) and `toggle_pause` TOCTOU
+  (`_pause_locked`/`_resume_locked`); `archive_recording` now fsyncs + verifies the ZIP
+  (namelist + testzip) before deleting originals; dictation finalize never orphans audio
+  (recovers + writes `.error` sidecar on any failure); `recovery.retry_tail` takes an
+  injectable locked saver and `RecordingMetadata.save` uses a unique tempfile +
+  `os.replace`; `live_transcriber` file-write failure now retries+backfills instead of
+  latching off; Gemini timestamps clamp `start` (not just `end`); analytics fixes
+  (`meeting_roi` action-count, even-length medians, `note_templates` malformed-JSON,
+  `daily_summary` 23:00-24:00); UI thread-safety (`settings_window`/`search_window`
+  background `after()` guards, search Status-filter var collision). **`main_window`**:
+  all deferred button-feedback resets go through `_schedule_reset(widget, delay, **cfg)`
+  (winfo_exists + TclError guard); `update_status_bar`/`update_audio_mode` validate the
+  widget inside the callback; raw-json metadata reads are null/type-hardened
+  (`meta.get(x) or []`, `isinstance(dict)`); bulk delete/re-process report failures.
 
 ## Key files
 - `meeting_recorder/app.py` — top-level orchestrator (tray, hotkeys, recording lifecycle)
