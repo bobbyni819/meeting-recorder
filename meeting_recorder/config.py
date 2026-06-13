@@ -126,6 +126,14 @@ class RecordingConfig:
     # default — the accessibility names vary by app version and need a
     # live-meeting validation pass. Writes an additive speaker_events.jsonl.
     capture_speaker_events: bool = False
+    # Drop mic frames that are just the meeting audio echoing through the
+    # user's speakers (detected by correlating the mic against the per-process
+    # loopback). Stops other participants bleeding into the mic track and
+    # being mis-attributed to "[You]". Only affects speaker (non-headphone)
+    # users — with headphones the loopback never reaches the mic so nothing is
+    # dropped. Never drops genuine speech (double-talk has low correlation).
+    # Off by default pending live validation; safe to enable.
+    echo_gate: bool = False
 
 
 @dataclass

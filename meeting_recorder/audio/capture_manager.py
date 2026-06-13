@@ -9,6 +9,8 @@ import wave
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from meeting_recorder.audio.ring_buffer import RingBuffer
 from meeting_recorder.audio.platforms import (
     AppAudioCapture,
@@ -164,6 +166,7 @@ class CaptureManager:
         on_live_transcript: Optional[callable] = None,
         live_transcription_enabled: bool = False,
         live_transcript_mic: bool = True,
+        echo_gate_enabled: bool = False,
         on_live_insight: Optional[callable] = None,
         live_transcription_device: str = "cpu",
         live_transcription_compute_type: str = "int8",
@@ -210,6 +213,18 @@ class CaptureManager:
         self._live_transcription_device = live_transcription_device
         self._live_transcription_compute_type = live_transcription_compute_type
         self._live_transcription_interval = live_transcription_interval
+
+        # Echo gate: drops mic frames that are just the meeting audio echoing
+        # through the user's speakers, using the app-audio loopback as the
+        # far-end reference. Lazily created so the import cost is only paid
+        # when enabled.
+        self._echo_gate_enabled = echo_gate_enabled
+        self._echo_gate = None
+        self._far_end_ref = None
+        if echo_gate_enabled:
+            from meeting_recorder.audio.echo_gate import EchoGate, FarEndReference
+            self._echo_gate = EchoGate(sample_rate=sample_rate)
+            self._far_end_ref = FarEndReference(sample_rate=sample_rate)
 
         # VAD (accept pre-loaded instance to avoid loading in background threads)
         self._vad = vad if vad is not None else VoiceActivityDetector(threshold=vad_threshold)
@@ -518,6 +533,23 @@ class CaptureManager:
         except Exception:
             return False
 
+    def _is_echo_chunk(self, chunk: bytes) -> bool:
+        """True if a mic *chunk* is echo of the meeting audio (drop it).
+
+        Compares the mic chunk against the current far-end (loopback)
+        reference. Defensive: any failure returns False (keep the audio) so
+        the gate can never silently swallow the user's voice on an error.
+        """
+        if self._echo_gate is None or self._far_end_ref is None:
+            return False
+        try:
+            mic = np.frombuffer(chunk, dtype=np.int16)
+            far = self._far_end_ref.snapshot()
+            return self._echo_gate.is_echo(mic, far)
+        except Exception:
+            logger.debug("echo gate check failed", exc_info=True)
+            return False
+
     def _writer_loop(self, buffer: RingBuffer, wav_path: Path, label: str) -> None:
         """Write audio chunks from a ring buffer to a WAV file."""
         wf = None
@@ -546,14 +578,29 @@ class CaptureManager:
                 chunks = buffer.get_all()
                 if chunks:
                     feeds_transcriber = is_app or self._live_transcript_mic
+                    # Echo gate (mic only): drop chunks that are just the
+                    # meeting audio echoing through the user's speakers, so
+                    # other participants don't bleed into the mic track or get
+                    # mis-attributed to "[You]" in the live transcript. Applied
+                    # once here so the WAV and the live preview stay consistent.
+                    if not is_app and self._echo_gate is not None:
+                        kept = [c for c in chunks if not self._is_echo_chunk(c)]
+                    else:
+                        kept = chunks
                     # CRITICAL PATH FIRST: write audio to the WAV (skipped when
                     # paused) and update the heartbeat BEFORE touching the live
                     # transcriber, so the recording never waits on the preview.
                     if not self._paused:
-                        for chunk in chunks:
+                        for chunk in kept:
                             wf.writeframes(chunk)
                             frames_since_flush += len(chunk) // 2
                             level_update(chunk)
+                            # Keep the far-end reference current with the app
+                            # audio actually written, for the mic gate above.
+                            if is_app and self._far_end_ref is not None:
+                                self._far_end_ref.push(
+                                    np.frombuffer(chunk, dtype=np.int16)
+                                )
                     self._thread_heartbeats[f"{label}_writer"] = time.time()
 
                     # Best-effort live preview: only feed when the writer is
@@ -563,7 +610,7 @@ class CaptureManager:
                         with self._transcriber_lock:
                             lt = self._live_transcriber
                         if lt is not None:
-                            for chunk in chunks:
+                            for chunk in kept:
                                 lt.feed_audio(chunk, source=label)
 
                     # Periodic WAV header flush: patch the RIFF/data chunk

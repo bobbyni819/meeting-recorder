@@ -526,6 +526,7 @@ class MeetingRecorderApp:
                 self.config.recording.live_transcript_mic
                 and self._perf_tier.live_transcript_mic
             ),
+            echo_gate_enabled=self.config.recording.echo_gate,
             on_live_insight=(
                 self._on_live_insight if self._perf_tier.live_insights else None
             ),
