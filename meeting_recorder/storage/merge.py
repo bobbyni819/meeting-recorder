@@ -44,11 +44,23 @@ def merge_transcripts(
     subject = first_meta.get("meeting_subject", "")
     if not subject and len(first_name) > 20:
         subject = first_name[20:].replace("_", " ").strip()
-    merged_name = f"{date_str}_merged_{subject.replace(' ', '_')}" if subject else f"{date_str}_merged"
+    # meeting_subject is raw (e.g. an Outlook title like "Q3: Planning") and
+    # may contain Windows-illegal path chars — sanitize before it becomes a dir.
+    from meeting_recorder.storage.smart_naming import sanitize_subject
 
-    # Create output directory
+    safe_subject = sanitize_subject(subject) if subject else ""
+    merged_name = f"{date_str}_merged_{safe_subject}" if safe_subject else f"{date_str}_merged"
+
+    # Create output directory (guard so a still-pathological name — reserved
+    # device name, trailing dot — degrades to a valid fallback, never aborts).
     merged_dir = output_dir / merged_name
-    merged_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        merged_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("Merged dir name invalid (%r); falling back", merged_name,
+                       exc_info=True)
+        merged_dir = output_dir / f"{date_str}_merged"
+        merged_dir.mkdir(parents=True, exist_ok=True)
 
     # Merge transcripts
     combined_transcript = _merge_text_files(sorted_dirs, "transcript.txt")

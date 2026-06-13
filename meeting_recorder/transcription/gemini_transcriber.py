@@ -119,13 +119,22 @@ class DictationResult:
     model: str
 
 
-def _slugify(text: str) -> str:
-    """Normalize text to 3-word kebab-case."""
+def _slugify(text: str, max_len: int = 60) -> str:
+    """Normalize text to <=3-word kebab-case, capped at max_len chars.
+
+    The length cap matters because the slug becomes a filename component
+    (``{hhmm}-{slug}.wav``); a single very long unbroken token (a Gemini
+    glitch or run-on word) would otherwise blow past the 255-char Windows
+    filename limit and orphan the voice memo in the temp dir.
+    """
     cleaned = re.sub(r"[^a-z0-9\s-]", "", text.lower().strip())
     words = [w for w in re.split(r"[\s_-]+", cleaned) if w]
     if not words:
         return "untitled"
-    return "-".join(words[:3])
+    slug = "-".join(words[:3])
+    if len(slug) > max_len:
+        slug = slug[:max_len].rstrip("-") or words[0][:max_len]
+    return slug
 
 
 def parse_dictation_response(

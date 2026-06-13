@@ -998,3 +998,20 @@ class TestEndClamping:
         assert len(segments) == 1
         assert segments[0].end == pytest.approx(12.0, abs=0.01)
         mock_genai.Client.return_value.__exit__.assert_called_once()
+
+
+class TestSlugifyLength:
+    """_slugify must cap length so it can't blow past the Windows filename limit."""
+
+    def test_long_unbroken_token_is_capped(self):
+        from meeting_recorder.transcription.gemini_transcriber import _slugify
+        slug = _slugify("a" * 1000)
+        assert 0 < len(slug) <= 60
+
+    def test_normal_text_unchanged(self):
+        from meeting_recorder.transcription.gemini_transcriber import _slugify
+        assert _slugify("Quarterly planning sync notes") == "quarterly-planning-sync"
+
+    def test_empty_is_untitled(self):
+        from meeting_recorder.transcription.gemini_transcriber import _slugify
+        assert _slugify("!!!") == "untitled"

@@ -395,3 +395,32 @@ class TestBuildMergedMetadata:
         merged_dir.mkdir()
         meta = _build_merged_metadata([r1, r2], merged_dir)
         assert meta["speaker_count"] == 5
+
+
+class TestMergeNameSanitization:
+    """Merged dir name must be Windows-safe even with illegal-char subjects."""
+
+    def test_illegal_chars_in_subject_do_not_crash(self, tmp_path: Path):
+        # A real Outlook title with ':' '?' '/' would make mkdir raise on Windows.
+        r1 = _make_recording(
+            tmp_path, "2026-03-10_09-00-00_A",
+            transcript="part 1",
+            meta={"meeting_subject": "Q3: Planning / Roadmap? <Draft>"},
+        )
+        r2 = _make_recording(
+            tmp_path, "2026-03-10_10-00-00_B",
+            transcript="part 2",
+            meta={"meeting_subject": "Q3: Planning / Roadmap? <Draft>"},
+        )
+        merged = merge_transcripts([r1, r2], tmp_path / "out")
+        assert merged.exists() and merged.is_dir()
+        # No Windows-illegal characters survived into the directory name.
+        assert not (set(merged.name) & set(r'<>:"/\|?*'))
+
+    def test_all_illegal_subject_falls_back(self, tmp_path: Path):
+        r1 = _make_recording(tmp_path, "2026-03-10_09-00-00_A",
+                             transcript="p1", meta={"meeting_subject": "??:::"})
+        r2 = _make_recording(tmp_path, "2026-03-10_10-00-00_B",
+                             transcript="p2", meta={"meeting_subject": "??:::"})
+        merged = merge_transcripts([r1, r2], tmp_path / "out")
+        assert merged.exists() and merged.name.endswith("_merged")
