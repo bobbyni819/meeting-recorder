@@ -89,3 +89,43 @@ class TestMicCaptureWiring:
             vad_hangover_ms=0.0,
         )
         assert cap._speech_hold.hangover_chunks == 0
+
+
+class TestMicUnavailableWarning:
+    def test_capture_loop_fires_on_error_when_no_device(self):
+        # Simulate PyAudio reporting no default input device: the capture loop
+        # must surface a health warning instead of silently losing the voice.
+        from meeting_recorder.audio.mic_audio import MicAudioCapture
+        from meeting_recorder.audio.ring_buffer import RingBuffer
+
+        errors = []
+        cap = MicAudioCapture(
+            ring_buffer=RingBuffer(max_chunks=10),
+            vad=mock.MagicMock(),
+            on_error=lambda key: errors.append(key),
+        )
+
+        fake_pa = mock.MagicMock()
+        fake_pa.PyAudio.return_value.get_default_input_device_info.side_effect = (
+            OSError("No Default Input Device Available")
+        )
+        with mock.patch.dict(
+            "sys.modules", {"pyaudiowpatch": fake_pa}
+        ):
+            cap._capture_loop()  # runs once, fails on device lookup, returns
+
+        assert errors == ["mic_unavailable"]
+
+    def test_no_error_callback_is_safe(self):
+        from meeting_recorder.audio.mic_audio import MicAudioCapture
+        from meeting_recorder.audio.ring_buffer import RingBuffer
+
+        cap = MicAudioCapture(
+            ring_buffer=RingBuffer(max_chunks=10), vad=mock.MagicMock()
+        )
+        fake_pa = mock.MagicMock()
+        fake_pa.PyAudio.return_value.get_default_input_device_info.side_effect = (
+            OSError("no device")
+        )
+        with mock.patch.dict("sys.modules", {"pyaudiowpatch": fake_pa}):
+            cap._capture_loop()  # must not raise even with on_error=None

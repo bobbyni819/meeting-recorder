@@ -1406,6 +1406,7 @@ class MeetingRecorderApp:
             "silence_auto_switch": "No app audio detected \u2014 switched to desktop audio",
             "app_write_error": "Audio write error \u2014 recording may be incomplete",
             "mic_write_error": "Mic write error \u2014 recording may be incomplete",
+            "mic_unavailable": "No microphone detected \u2014 your voice is NOT being recorded (other participants still are)",
             "window_pid_failed": "Selected window is no longer available",
         }
         msg = messages.get(warning_key, f"Warning: {warning_key} may have stalled")

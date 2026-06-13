@@ -41,6 +41,7 @@ class MicAudioCapture:
         device_index: Optional[int] = None,
         mute_sync: Optional[MuteSync] = None,
         vad_hangover_ms: float = DEFAULT_VAD_HANGOVER_MS,
+        on_error: Optional[callable] = None,
     ):
         self.ring_buffer = ring_buffer
         self.vad = vad
@@ -49,6 +50,10 @@ class MicAudioCapture:
         self.chunk_duration_ms = chunk_duration_ms
         self.device_index = device_index
         self.mute_sync = mute_sync
+        # Fired with a health-warning key if the capture loop can't run (e.g.
+        # no microphone plugged in), so the user is told their voice isn't
+        # being captured instead of silently losing it.
+        self.on_error = on_error
         # Hangover around VAD so speech tails / short pauses aren't clipped.
         # Chunk duration is fixed by the Silero requirement (512 @ 16kHz = 32ms).
         chunk_ms = VAD_CHUNK_SAMPLES / sample_rate * 1000.0
@@ -84,6 +89,15 @@ class MicAudioCapture:
                 )
             self._thread = None
         logger.info("Mic audio capture stopped.")
+
+    def _fire_error(self, key: str) -> None:
+        """Notify the owner that mic capture failed (best-effort)."""
+        if self.on_error is None:
+            return
+        try:
+            self.on_error(key)
+        except Exception:
+            logger.debug("mic on_error callback failed", exc_info=True)
 
     def _capture_loop(self) -> None:
         """Main capture loop with VAD filtering."""
@@ -174,8 +188,10 @@ class MicAudioCapture:
             logger.error(
                 "PyAudioWPatch is not installed. Install with: pip install PyAudioWPatch"
             )
+            self._fire_error("mic_unavailable")
         except Exception:
             logger.exception("Mic capture error")
+            self._fire_error("mic_unavailable")
         finally:
             if stream is not None:
                 try:

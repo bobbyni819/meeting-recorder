@@ -296,6 +296,7 @@ class CaptureManager:
             chunk_duration_ms=chunk_duration_ms,
             device_index=mic_device_index,
             mute_sync=self._mute_sync,
+            on_error=self._on_mic_capture_error,
         )
 
         # Screen capture
@@ -532,6 +533,18 @@ class CaptureManager:
             )
         except Exception:
             return False
+
+    def _on_mic_capture_error(self, key: str) -> None:
+        """Mic capture thread failed (e.g. no microphone) — surface it once."""
+        if getattr(self, "_mic_error_notified", False):
+            return
+        self._mic_error_notified = True
+        logger.warning("Microphone capture unavailable (%s)", key)
+        if self._on_health_warning:
+            try:
+                self._on_health_warning(key)
+            except Exception:
+                logger.debug("mic health warning callback failed", exc_info=True)
 
     def _is_echo_chunk(self, chunk: bytes) -> bool:
         """True if a mic *chunk* is echo of the meeting audio (drop it).
