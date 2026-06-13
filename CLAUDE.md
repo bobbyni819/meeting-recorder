@@ -122,6 +122,17 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - `proctap.ProcessAudioCapture` is the correct class (not `ProcTap`)
 - Mute sync hooks **Alt+A** (Zoom) and **Ctrl+Shift+M** (Teams) keyboard shortcuts
 - Mute sync starts **MUTED** by default when initial state can't be detected — safer because mouse-clicks on the mute button don't trigger the hotkey that mute sync hooks into
+- **Echo gate** (`audio/echo_gate.py`, `recording.echo_gate`, default OFF): when
+  the user is on speakers the mic picks up the meeting audio echoing back. The
+  mic writer drops chunks whose energy is mostly explained by a lagged copy of
+  the per-process loopback (the far-end reference AEC needs — we uniquely
+  capture it). `EchoGate.is_echo` = normalized cross-correlation (NCC²) ≥ 0.5
+  over a ±400ms lag search; `FarEndReference` is a thread-safe rolling buffer
+  fed by the app writer. Drops pure echo, keeps double-talk (uncorrelated
+  near-end speech lowers NCC) — fails safe (any error/silence/headphones keeps
+  audio). Validated on a real recording: 100% pure-echo dropped, 99.2% real
+  speech kept. **We detect, not subtract** — chosen so it can never distort
+  genuine speech. See [[project_audio_capture_research]].
 
 ## Screen capture
 - Uses Win32 `PrintWindow` API first (captures only the window, no overlays)
@@ -303,6 +314,7 @@ Secret/local fields: `transcription.openai_api_key`, `transcription.gemini_api_k
 - `transcription.model_size = "large-v3"` (base is too inaccurate)
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
 - `screen_recording.enabled = true`, `fps = 30`, `quality = 21` (CQ/CRF; lower = crisper, bigger)
+- `recording.echo_gate = false` (drop mic frames that are speaker-echo of the meeting; opt-in, validated safe)
 - `retention.enabled = false`, `max_age_days = 90`, `max_total_gb = 0`
 - Output: `~/MeetingRecordings/`
 
