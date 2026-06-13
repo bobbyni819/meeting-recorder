@@ -81,3 +81,46 @@ class VoiceActivityDetector:
         """Reset the VAD model state (call between recordings)."""
         if self._model is not None:
             self._model.reset_states()
+
+
+class SpeechHold:
+    """Hangover (hold-over) around per-chunk VAD decisions.
+
+    A raw per-chunk gate — write real audio when the chunk is speech, silence
+    otherwise — clips the onsets/tails of words and punches silence into the
+    brief pauses between words, which sounds choppy and hurts transcription at
+    word boundaries. This applies a *hangover*: once speech is detected, keep
+    treating audio as speech for a short window afterwards, so trailing sounds
+    and short inter-word pauses are preserved as real audio.
+
+    During genuinely long silence the countdown lapses and the gate closes
+    again, so the room is still not recorded while the user is idle — only a
+    bounded ~hangover window around actual speech is ever kept.
+    """
+
+    def __init__(self, hangover_chunks: int):
+        self.hangover_chunks = max(0, int(hangover_chunks))
+        self._countdown = 0
+
+    @classmethod
+    def from_ms(cls, hangover_ms: float, chunk_ms: float) -> "SpeechHold":
+        """Build a hold whose hangover is ``hangover_ms`` long, given the
+        per-chunk duration ``chunk_ms``."""
+        if chunk_ms <= 0:
+            return cls(0)
+        return cls(round(hangover_ms / chunk_ms))
+
+    def update(self, is_speech: bool) -> bool:
+        """Feed one chunk's VAD verdict; return True if it should be WRITTEN as
+        real audio (vs replaced with silence)."""
+        if is_speech:
+            self._countdown = self.hangover_chunks
+            return True
+        if self._countdown > 0:
+            self._countdown -= 1
+            return True
+        return False
+
+    def reset(self) -> None:
+        """Close the gate immediately (e.g. on mute or between recordings)."""
+        self._countdown = 0

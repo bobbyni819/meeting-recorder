@@ -10,13 +10,17 @@ import numpy as np
 
 from meeting_recorder.audio.ring_buffer import RingBuffer
 from meeting_recorder.audio.resampling import resample_to_16khz_mono
-from meeting_recorder.audio.vad import VoiceActivityDetector
+from meeting_recorder.audio.vad import VoiceActivityDetector, SpeechHold
 from meeting_recorder.audio.mute_sync import MuteSync
 
 logger = logging.getLogger(__name__)
 
 # Silero VAD requires 512 samples at 16kHz (32ms)
 VAD_CHUNK_SAMPLES = 512
+# Keep writing real mic audio for this long after the last speech chunk, so
+# word tails and short inter-word pauses aren't clipped to silence. Bounded, so
+# the room is still not recorded during genuine idle stretches.
+DEFAULT_VAD_HANGOVER_MS = 300.0
 
 
 class MicAudioCapture:
@@ -36,6 +40,7 @@ class MicAudioCapture:
         chunk_duration_ms: int = 30,
         device_index: Optional[int] = None,
         mute_sync: Optional[MuteSync] = None,
+        vad_hangover_ms: float = DEFAULT_VAD_HANGOVER_MS,
     ):
         self.ring_buffer = ring_buffer
         self.vad = vad
@@ -44,6 +49,10 @@ class MicAudioCapture:
         self.chunk_duration_ms = chunk_duration_ms
         self.device_index = device_index
         self.mute_sync = mute_sync
+        # Hangover around VAD so speech tails / short pauses aren't clipped.
+        # Chunk duration is fixed by the Silero requirement (512 @ 16kHz = 32ms).
+        chunk_ms = VAD_CHUNK_SAMPLES / sample_rate * 1000.0
+        self._speech_hold = SpeechHold.from_ms(vad_hangover_ms, chunk_ms)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -145,15 +154,18 @@ class MicAudioCapture:
 
                 # Check meeting app mute state first
                 if self.mute_sync is not None and self.mute_sync.is_muted:
+                    self._speech_hold.reset()  # don't carry hangover across mute
                     self.ring_buffer.put(silence)
                     continue
 
-                # Apply VAD
+                # Apply VAD with a hangover: keep writing real audio for a
+                # short window after the last speech chunk so word tails and
+                # brief pauses aren't clipped to silence.
                 try:
-                    if self.vad.is_speech(chunk_bytes):
-                        self.ring_buffer.put(chunk_bytes)
-                    else:
-                        self.ring_buffer.put(silence)
+                    write_real = self._speech_hold.update(
+                        self.vad.is_speech(chunk_bytes)
+                    )
+                    self.ring_buffer.put(chunk_bytes if write_real else silence)
                 except Exception as e:
                     # If VAD fails (wrong size etc), just pass audio through
                     self.ring_buffer.put(chunk_bytes)

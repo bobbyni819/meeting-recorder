@@ -119,6 +119,13 @@ ProcTap (48kHz stereo float32)  →  resample_to_16khz_mono  →  NoiseGate  →
 PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →  RingBuffer  →  WAV writer
 ```
 - Silero VAD needs **exactly 512 samples at 16kHz** per chunk
+- Mic is VAD-gated: non-speech chunks are written as **silence** (not the room),
+  so ambient noise during your silence isn't recorded. A **hangover**
+  (`SpeechHold` in `vad.py`, ~300ms, `mic_audio.DEFAULT_VAD_HANGOVER_MS`) keeps
+  writing real audio briefly after the last speech chunk so word tails and
+  short inter-word pauses aren't clipped to silence (the raw per-chunk gate was
+  punching holes mid-utterance — measured ~9s/2min of speech-adjacent audio
+  clipped). Long idle gaps still close the gate. Reset on mute.
 - `proctap.ProcessAudioCapture` is the correct class (not `ProcTap`)
 - Mute sync hooks **Alt+A** (Zoom) and **Ctrl+Shift+M** (Teams) keyboard shortcuts
 - Mute sync starts **MUTED** by default when initial state can't be detected — safer because mouse-clicks on the mute button don't trigger the hotkey that mute sync hooks into
