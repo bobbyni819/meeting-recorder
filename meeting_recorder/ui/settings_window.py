@@ -897,6 +897,18 @@ class SettingsWindow:
         self._gemini_test_btn.configure(text="...", state="disabled")
 
         def _do_test():
+            win = self._window
+
+            def _safe_after(delay, fn):
+                try:
+                    if win is not None and win.winfo_exists():
+                        win.after(delay, fn)
+                except (tk.TclError, RuntimeError, AttributeError):
+                    pass
+
+            if win is None:
+                return
+
             try:
                 from google import genai
                 client = genai.Client(api_key=key)
@@ -905,17 +917,17 @@ class SettingsWindow:
                     model=model, contents="Reply with just the word OK",
                 )
                 if response and response.text:
-                    self._window.after(0, lambda: self._gemini_test_btn.configure(text="OK!", state="normal"))
+                    _safe_after(0, lambda: self._gemini_test_btn.configure(text="OK!", state="normal"))
                 else:
-                    self._window.after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
+                    _safe_after(0, lambda: self._gemini_test_btn.configure(text="Fail", state="normal"))
             except Exception as e:
                 short_err = str(e)[:40]
                 logger.warning("Gemini API key test failed: %s", e)
                 def _show_fail(msg=short_err):
                     self._gemini_test_btn.configure(text="Fail", state="normal")
                     messagebox.showwarning("Gemini Test Failed", f"API key test failed:\n{msg}")
-                self._window.after(0, _show_fail)
-            self._window.after(3000, lambda: self._gemini_test_btn.configure(text="Test"))
+                _safe_after(0, _show_fail)
+            _safe_after(3000, lambda: self._gemini_test_btn.configure(text="Test"))
 
         import threading
         threading.Thread(target=_do_test, daemon=True).start()

@@ -94,9 +94,9 @@ class SearchWindow:
         ttk.Entry(filter_row2, textvariable=self._quality_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
 
         ttk.Label(filter_row2, text="Status:").pack(side=tk.LEFT, padx=(0, 3))
-        self._status_var = tk.StringVar()
+        self._status_filter_var = tk.StringVar()
         status_combo = ttk.Combobox(
-            filter_row2, textvariable=self._status_var, width=10,
+            filter_row2, textvariable=self._status_filter_var, width=10,
             values=["", "completed", "error", "processing"],
             state="readonly",
         )
@@ -184,7 +184,7 @@ class SearchWindow:
         date_to = self._date_to_var.get().strip()
         sentiment = self._sentiment_var.get().strip()
         quality_str = self._quality_var.get().strip()
-        status = self._status_var.get().strip()
+        status = self._status_filter_var.get().strip()
         tag = self._tag_var.get().strip()
 
         min_quality = 0
@@ -217,10 +217,10 @@ class SearchWindow:
                     status=status,
                     tag=tag,
                 )
-                self._window.after(0, self._display_results)
+                self._post_to_ui(self._display_results)
             except Exception as e:
                 logger.exception("Search failed")
-                self._window.after(0, lambda: self._status_var.set(f"Search error: {e}"))
+                self._post_to_ui(lambda: self._status_var.set(f"Search error: {e}"))
 
         threading.Thread(target=_search, daemon=True).start()
 
@@ -232,12 +232,22 @@ class SearchWindow:
         def _load():
             try:
                 self._results = self._index.search(limit=200)
-                self._window.after(0, self._display_results)
+                self._post_to_ui(self._display_results)
             except Exception as e:
                 logger.exception("Browse all failed")
-                self._window.after(0, lambda: self._status_var.set(f"Error: {e}"))
+                self._post_to_ui(lambda: self._status_var.set(f"Error: {e}"))
 
         threading.Thread(target=_load, daemon=True).start()
+
+    def _post_to_ui(self, func) -> None:
+        """Schedule a callback on the Tk thread if the window still exists."""
+        win = self._window
+        if win is None:
+            return
+        try:
+            win.after(0, func)
+        except (tk.TclError, RuntimeError, AttributeError):
+            pass
 
     def _display_results(self) -> None:
         """Display search results in the treeview."""
