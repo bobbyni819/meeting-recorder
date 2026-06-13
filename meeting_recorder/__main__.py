@@ -186,6 +186,11 @@ def main() -> None:
                     f"({result['duration']:.0f}s). "
                     f"Speakers: {', '.join(result['speakers']) or '(none named)'}"
                 )
+                if result.get("backed_up_original"):
+                    print(
+                        "Original transcript preserved as "
+                        "transcript.original.{json,txt,srt}"
+                    )
                 sys.exit(0)
             except Exception as e:
                 print(f"Import failed: {e}"); sys.exit(1)
@@ -240,6 +245,11 @@ def main() -> None:
                     f"({result['duration']:.0f}s). "
                     f"Speakers: {', '.join(result['speakers']) or '(none named)'}"
                 )
+                if result.get("backed_up_original"):
+                    print(
+                        "Original transcript preserved as "
+                        "transcript.original.{json,txt,srt}"
+                    )
                 sys.exit(0)
             except Exception as e:
                 print(f"Import failed: {e}"); sys.exit(1)

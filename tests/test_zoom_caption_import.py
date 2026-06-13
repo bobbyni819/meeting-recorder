@@ -17,6 +17,58 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
     return path
 
 
+class _NoopRecordingIndex:
+    def index_recording(self, recording_dir: Path) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _disable_search_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "meeting_recorder.search.index.RecordingIndex",
+        lambda *a, **k: _NoopRecordingIndex(),
+    )
+
+
+def _recording(tmp_path: Path) -> Path:
+    rec = tmp_path / "2026-06-12_08-00-00_Meeting_Zoom"
+    rec.mkdir()
+    (rec / "metadata.json").write_text(
+        json.dumps({"app_name": "Zoom", "status": "error", "segment_count": 0}),
+        encoding="utf-8",
+    )
+    return rec
+
+
+def _write_existing_transcripts(rec: Path) -> dict[str, str]:
+    contents = {
+        "json": json.dumps(
+            {
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "speaker": "Auto",
+                        "text": "Old auto transcript",
+                    }
+                ]
+            },
+            indent=2,
+        ),
+        "txt": "[00:00:00 - 00:00:01] Auto: Old auto transcript\n",
+        "srt": (
+            "1\n"
+            "00:00:00,000 --> 00:00:01,000\n"
+            "[Auto] Old auto transcript\n"
+        ),
+    }
+    for suffix, text in contents.items():
+        (rec / f"transcript.{suffix}").write_text(text, encoding="utf-8")
+    return contents
+
+
 class TestZoomCaptionParsing:
     def test_webvtt_name_prefix_extracts_speaker(self, tmp_path):
         caption = _write(
@@ -213,31 +265,26 @@ class TestImportZoomCaptionToRecording:
     def test_import_writes_canonical_outputs_metadata_and_raw_copy(
         self, tmp_path, monkeypatch
     ):
-        rec = tmp_path / "2026-06-12_08-00-00_Meeting_Zoom"
-        rec.mkdir()
-        (rec / "metadata.json").write_text(
-            json.dumps({"app_name": "Zoom", "status": "error", "segment_count": 0}),
-            encoding="utf-8",
-        )
+        rec = _recording(tmp_path)
         caption = _write(
             tmp_path,
             "closed_caption.txt",
             "1\n00:00:01,000 --> 00:00:03,000\nBobby Ni: Hello everyone\n\n"
             "2\n00:00:05,000 --> 00:00:06,000\nFaye Guo: Hi Bobby\n",
         )
-        monkeypatch.setattr(
-            "meeting_recorder.search.index.RecordingIndex",
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no index")),
-        )
+        _disable_search_index(monkeypatch)
 
         result = vtt_import.import_zoom_caption_to_recording(rec, caption)
 
         assert result["segments"] == 2
         assert result["speakers"] == ["Bobby Ni", "Faye Guo"]
+        assert result["backed_up_original"] is False
+        assert result["original_backup"] is None
         data = json.loads((rec / "transcript.json").read_text(encoding="utf-8"))
         assert set(data["segments"][0].keys()) == {"start", "end", "text", "speaker"}
         assert (rec / "transcript.txt").exists()
         assert (rec / "transcript.srt").exists()
+        assert not (rec / "transcript.original.json").exists()
         assert (rec / "zoom_caption.txt").read_text(encoding="utf-8") == (
             caption.read_text(encoding="utf-8")
         )
@@ -254,3 +301,77 @@ class TestImportZoomCaptionToRecording:
 
         with pytest.raises(ValueError):
             vtt_import.import_zoom_caption_to_recording(rec, caption)
+
+    def test_import_backs_up_existing_transcript_before_overwriting(
+        self, tmp_path, monkeypatch
+    ):
+        rec = _recording(tmp_path)
+        old_contents = _write_existing_transcripts(rec)
+        caption = _write(
+            tmp_path,
+            "closed_caption.txt",
+            "1\n00:00:01,000 --> 00:00:03,000\nBobby Ni: New imported caption\n",
+        )
+        _disable_search_index(monkeypatch)
+
+        result = vtt_import.import_zoom_caption_to_recording(rec, caption)
+
+        assert result["backed_up_original"] is True
+        assert result["original_backup"] == "transcript.original.json"
+        for suffix, text in old_contents.items():
+            assert (
+                rec / f"transcript.original.{suffix}"
+            ).read_text(encoding="utf-8") == text
+        data = json.loads((rec / "transcript.json").read_text(encoding="utf-8"))
+        assert data["segments"][0]["text"] == "New imported caption"
+        assert "New imported caption" in (
+            rec / "transcript.txt"
+        ).read_text(encoding="utf-8")
+        assert "New imported caption" in (
+            rec / "transcript.srt"
+        ).read_text(encoding="utf-8")
+
+    def test_second_import_does_not_overwrite_original_backup(
+        self, tmp_path, monkeypatch
+    ):
+        rec = _recording(tmp_path)
+        old_contents = _write_existing_transcripts(rec)
+        first_caption = _write(
+            tmp_path,
+            "first_caption.txt",
+            "1\n00:00:01,000 --> 00:00:03,000\nBobby Ni: First imported caption\n",
+        )
+        second_caption = _write(
+            tmp_path,
+            "second_caption.txt",
+            "1\n00:00:04,000 --> 00:00:05,000\nFaye Guo: Second imported caption\n",
+        )
+        _disable_search_index(monkeypatch)
+
+        first = vtt_import.import_zoom_caption_to_recording(rec, first_caption)
+        second = vtt_import.import_zoom_caption_to_recording(rec, second_caption)
+
+        assert first["backed_up_original"] is True
+        assert second["backed_up_original"] is False
+        assert second["original_backup"] is None
+        for suffix, text in old_contents.items():
+            assert (
+                rec / f"transcript.original.{suffix}"
+            ).read_text(encoding="utf-8") == text
+        data = json.loads((rec / "transcript.json").read_text(encoding="utf-8"))
+        assert data["segments"][0]["text"] == "Second imported caption"
+
+    def test_backup_helper_never_raises_on_missing_or_locked_dir(
+        self, tmp_path, monkeypatch
+    ):
+        assert vtt_import._backup_existing_transcript(tmp_path / "missing") is False
+
+        rec = _recording(tmp_path)
+        (rec / "transcript.json").write_text("old", encoding="utf-8")
+
+        def raise_locked(*args, **kwargs):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(vtt_import.shutil, "copy2", raise_locked)
+
+        assert vtt_import._backup_existing_transcript(rec) is False

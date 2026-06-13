@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -263,6 +264,29 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
+def _backup_existing_transcript(recording_dir: Path) -> bool:
+    """Preserve the first generated transcript before an import overwrites it."""
+    try:
+        recording_dir = Path(recording_dir)
+        transcript_json = recording_dir / "transcript.json"
+        original_json = recording_dir / "transcript.original.json"
+        if not transcript_json.exists() or original_json.exists():
+            return False
+
+        for suffix in ("json", "txt", "srt"):
+            source = recording_dir / f"transcript.{suffix}"
+            if source.exists():
+                shutil.copy2(source, recording_dir / f"transcript.original.{suffix}")
+        return True
+    except Exception:
+        logger.debug(
+            "Could not back up existing transcript in %s",
+            recording_dir,
+            exc_info=True,
+        )
+        return False
+
+
 def import_vtt_to_recording(
     recording_dir: Path,
     vtt_path: Path,
@@ -279,6 +303,7 @@ def import_vtt_to_recording(
     from meeting_recorder.storage.transcript_formatter import save_all_formats
 
     recording_dir = Path(recording_dir)
+    backed_up_original = _backup_existing_transcript(recording_dir)
     segments = parse_vtt(Path(vtt_path))
     if not segments:
         raise ValueError(f"No usable cues parsed from {vtt_path}")
@@ -326,6 +351,10 @@ def import_vtt_to_recording(
         "segments": len(segments),
         "speakers": speakers,
         "duration": segments[-1].end if segments else 0.0,
+        "backed_up_original": backed_up_original,
+        "original_backup": (
+            "transcript.original.json" if backed_up_original else None
+        ),
     }
 
 
@@ -344,6 +373,7 @@ def import_zoom_caption_to_recording(
     from meeting_recorder.storage.transcript_formatter import save_all_formats
 
     recording_dir = Path(recording_dir)
+    backed_up_original = _backup_existing_transcript(recording_dir)
     segments = parse_vtt(Path(caption_path))
     if not segments:
         raise ValueError(f"No usable cues parsed from {caption_path}")
@@ -392,4 +422,8 @@ def import_zoom_caption_to_recording(
         "segments": len(segments),
         "speakers": speakers,
         "duration": segments[-1].end if segments else 0.0,
+        "backed_up_original": backed_up_original,
+        "original_backup": (
+            "transcript.original.json" if backed_up_original else None
+        ),
     }

@@ -133,6 +133,9 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   `python -m meeting_recorder import-zoom-captions <recording-dir> [caption_file]`;
   omitting `caption_file` scans `~/Documents/Zoom` for the caption whose Zoom
   folder time best matches the recording, then falls back to newest overall.
+  `import-zoom-captions` and `import-transcript` preserve the first existing
+  transcript as `transcript.original.{json,txt,srt}` before overwriting
+  `transcript.json/.txt/.srt`.
 - **Echo gate** (`audio/echo_gate.py`, `recording.echo_gate`, default OFF): when
   the user is on speakers the mic picks up the meeting audio echoing back. The
   mic writer drops chunks whose energy is mostly explained by a lagged copy of
@@ -369,6 +372,7 @@ python -m meeting_recorder diagnose       # system health checks
 python -m meeting_recorder probe-echo <dir>  # replay a recording's app+mic through the echo gate; report % mic that is speaker echo (read-only)
 python -m meeting_recorder probe-mute [secs]  # DURING a meeting: live-print how UIA/registry read your Zoom/Teams mute state; toggle to validate mute sync (read-only)
 python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shift+V)
+python -m meeting_recorder import-transcript <dir> <transcript.vtt>  # import Teams/Zoom VTT; preserves prior transcript as transcript.original.*
 python -m meeting_recorder import-zoom-captions <dir> [caption_file]  # import Zoom local captions; auto-picks best time match from ~/Documents/Zoom when omitted
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)
