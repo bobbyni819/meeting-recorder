@@ -101,7 +101,7 @@ class StatsWindow:
                             tdata = json.load(f)
                         # Use speaker_map to resolve names
                         smap = meta.get("speaker_map", {})
-                        for seg in tdata.get("segments", []):
+                        for seg in (tdata.get("segments") or []):
                             spk = seg.get("speaker", "Unknown")
                             # Resolve to real name if mapped
                             spk = smap.get(spk, spk)
@@ -118,7 +118,7 @@ class StatsWindow:
         attendee_time: dict[str, float] = defaultdict(float)
         for m in all_meta:
             dur = m.get("duration_seconds", 0)
-            for att in m.get("meeting_attendees", []):
+            for att in (m.get("meeting_attendees") or []):
                 name = att.strip()
                 if name:
                     attendee_counts[name] += 1
@@ -153,7 +153,7 @@ class StatsWindow:
         # Tag frequency
         tag_counts: dict[str, int] = defaultdict(int)
         for m in all_meta:
-            for tag in m.get("tags", []):
+            for tag in (m.get("tags") or []):
                 tag_counts[tag] += 1
 
         # Compute summaries

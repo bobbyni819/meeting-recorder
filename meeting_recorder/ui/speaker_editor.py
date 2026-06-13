@@ -75,7 +75,7 @@ class SpeakerEditorDialog:
                 with open(transcript_path, "r", encoding="utf-8") as f:
                     tdata = json.load(f)
                 seen = set()
-                for seg in tdata.get("segments", []):
+                for seg in (tdata.get("segments") or []):
                     spk = seg.get("speaker", "")
                     if spk and spk not in seen:
                         seen.add(spk)
