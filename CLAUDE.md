@@ -129,6 +129,9 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - `proctap.ProcessAudioCapture` is the correct class (not `ProcTap`)
 - Mute sync hooks **Alt+A** (Zoom) and **Ctrl+Shift+M** (Teams) keyboard shortcuts
 - Mute sync starts **MUTED** by default when initial state can't be detected — safer because mouse-clicks on the mute button don't trigger the hotkey that mute sync hooks into
+- Zoom local captions can be ingested after capture with
+  `python -m meeting_recorder import-zoom-captions <recording-dir> [caption_file]`;
+  omitting `caption_file` scans `~/Documents/Zoom` newest-first.
 - **Echo gate** (`audio/echo_gate.py`, `recording.echo_gate`, default OFF): when
   the user is on speakers the mic picks up the meeting audio echoing back. The
   mic writer drops chunks whose energy is mostly explained by a lagged copy of
@@ -365,6 +368,7 @@ python -m meeting_recorder diagnose       # system health checks
 python -m meeting_recorder probe-echo <dir>  # replay a recording's app+mic through the echo gate; report % mic that is speaker echo (read-only)
 python -m meeting_recorder probe-mute [secs]  # DURING a meeting: live-print how UIA/registry read your Zoom/Teams mute state; toggle to validate mute sync (read-only)
 python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shift+V)
+python -m meeting_recorder import-zoom-captions <dir> [caption_file]  # import Zoom local captions; auto-picks newest from ~/Documents/Zoom when omitted
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)
 python -m meeting_recorder stats --weekly # weekly meeting report (--week-offset N)

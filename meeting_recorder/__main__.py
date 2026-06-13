@@ -189,6 +189,52 @@ def main() -> None:
                 sys.exit(0)
             except Exception as e:
                 print(f"Import failed: {e}"); sys.exit(1)
+        elif cmd == "import-zoom-captions":
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
+            args = sys.argv[2:]
+            if not args or args[0] in ("-h", "--help"):
+                print(
+                    "Usage: python -m meeting_recorder import-zoom-captions "
+                    "<recording-dir> [caption_file]\n\n"
+                    "Import Zoom local captions as the recording's authoritative\n"
+                    "transcript. If caption_file is omitted, scans ~/Documents/Zoom\n"
+                    "and imports the newest closed_caption.txt,\n"
+                    "meeting_saved_closed_captions.txt, or .vtt file.\n"
+                    "Rewrites transcript.json/.txt/.srt in the canonical schema and\n"
+                    "keeps the original as zoom_caption.txt."
+                )
+                sys.exit(0 if args else 1)
+            from pathlib import Path as _Path
+
+            from meeting_recorder.transcription.vtt_import import (
+                find_zoom_caption_files,
+                import_zoom_caption_to_recording,
+            )
+
+            rec_dir = _Path(args[0]).expanduser()
+            if not rec_dir.is_dir():
+                print(f"Not a recording directory: {rec_dir}"); sys.exit(1)
+            if len(args) >= 2:
+                caption = _Path(args[1]).expanduser()
+            else:
+                found = find_zoom_caption_files()
+                if not found:
+                    print("No Zoom caption files found under ~/Documents/Zoom")
+                    sys.exit(1)
+                caption = found[0]
+                print(f"Using newest Zoom caption file: {caption}")
+            if not caption.is_file():
+                print(f"Caption file not found: {caption}"); sys.exit(1)
+            try:
+                result = import_zoom_caption_to_recording(rec_dir, caption)
+                print(
+                    f"Imported {result['segments']} segments "
+                    f"({result['duration']:.0f}s). "
+                    f"Speakers: {', '.join(result['speakers']) or '(none named)'}"
+                )
+                sys.exit(0)
+            except Exception as e:
+                print(f"Import failed: {e}"); sys.exit(1)
         elif cmd == "search":
             from meeting_recorder.search.cli import main as search_main
             sys.exit(search_main(sys.argv[2:]))
