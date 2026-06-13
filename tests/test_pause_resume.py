@@ -38,29 +38,36 @@ class _PauseStateMixin:
 
     def pause(self):
         with self._pause_lock:
-            if self._paused or not self._is_recording:
-                return
-            self._paused = True
-            self._pause_start_time = time.time()
-            if self._screen_capture is not None:
-                self._screen_capture.paused = True
+            self._pause_locked()
+
+    def _pause_locked(self):
+        if self._paused or not self._is_recording:
+            return
+        self._paused = True
+        self._pause_start_time = time.time()
+        if self._screen_capture is not None:
+            self._screen_capture.paused = True
 
     def resume(self):
         with self._pause_lock:
-            if not self._paused or not self._is_recording:
-                return
-            if self._pause_start_time is not None:
-                self._total_paused_seconds += time.time() - self._pause_start_time
-                self._pause_start_time = None
-            self._paused = False
-            if self._screen_capture is not None:
-                self._screen_capture.paused = False
+            self._resume_locked()
+
+    def _resume_locked(self):
+        if not self._paused or not self._is_recording:
+            return
+        if self._pause_start_time is not None:
+            self._total_paused_seconds += time.time() - self._pause_start_time
+            self._pause_start_time = None
+        self._paused = False
+        if self._screen_capture is not None:
+            self._screen_capture.paused = False
 
     def toggle_pause(self):
-        if self._paused:
-            self.resume()
-        else:
-            self.pause()
+        with self._pause_lock:
+            if self._paused:
+                self._resume_locked()
+            else:
+                self._pause_locked()
 
     @property
     def is_paused(self):
@@ -125,6 +132,24 @@ class TestPauseState:
         cm.toggle_pause()
         assert cm.is_paused is False
 
+    def test_pause_resume_idempotent(self):
+        cm = self._make()
+        cm._is_recording = True
+        cm._start_time = time.time()
+
+        cm.pause()
+        pause_start = cm._pause_start_time
+        cm.pause()
+        assert cm.is_paused is True
+        assert cm._pause_start_time == pause_start
+
+        cm._pause_start_time = time.time() - 1.0
+        cm.resume()
+        total_paused = cm._total_paused_seconds
+        cm.resume()
+        assert cm.is_paused is False
+        assert cm._total_paused_seconds == total_paused
+
     def test_elapsed_excludes_paused_time(self):
         cm = self._make()
         cm._is_recording = True
@@ -175,6 +200,20 @@ class TestPauseState:
         cm._pause_start_time = time.time() - 2.0
         cm.resume()
         assert 4.5 <= cm._total_paused_seconds <= 5.5
+
+    def test_locked_helpers_preserve_total_paused_accounting(self):
+        cm = self._make()
+        cm._is_recording = True
+        cm._start_time = time.time() - 20.0
+
+        with cm._pause_lock:
+            cm._pause_locked()
+            cm._pause_start_time = time.time() - 1.5
+            cm._resume_locked()
+
+        assert cm.is_paused is False
+        assert cm._pause_start_time is None
+        assert 1.0 <= cm._total_paused_seconds <= 2.0
 
     def test_elapsed_never_negative(self):
         """elapsed_seconds should never go negative even with bad state."""

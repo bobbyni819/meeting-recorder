@@ -194,11 +194,8 @@ class TestVoiceActivityDetector:
 class TestCaptureManagerHealthMonitoring:
     """Test health warning for stalled threads."""
 
-    def test_health_warning_fires_for_stale_heartbeat(self):
-        """If a writer thread heartbeat is stale, on_health_warning should fire."""
+    def _make_manager(self, **kwargs):
         from meeting_recorder.audio.capture_manager import CaptureManager
-
-        warnings = []
 
         with (
             mock.patch("meeting_recorder.audio.capture_manager.AppAudioCapture"),
@@ -210,25 +207,74 @@ class TestCaptureManagerHealthMonitoring:
                 pid=100,
                 output_dir=Path("/tmp/test"),
                 screen_recording_enabled=False,
-                on_health_warning=lambda name: warnings.append(name),
+                **kwargs,
             )
+        mgr._level_monitor.notify = mock.Mock()
+        mgr._level_monitor.app_level = (0.0, 0.0)
+        return mgr
+
+    def test_health_warning_fires_for_stale_heartbeat(self):
+        """If a writer thread heartbeat is stale, on_health_warning should fire."""
+        warnings = []
+        mgr = self._make_manager(on_health_warning=lambda name: warnings.append(name))
+
+        class StopAfterOneWait:
+            def __init__(self):
+                self._set = False
+
+            def is_set(self):
+                return self._set
+
+            def wait(self, _timeout):
+                self._set = True
+                return True
 
         # Simulate a stale heartbeat (last update > 10s ago)
-        mgr._thread_heartbeats["app_writer"] = time.time() - 15.0
-        mgr._last_health_check = 0.0  # Force health check
+        with mgr._heartbeat_lock:
+            mgr._thread_heartbeats["app_writer"] = time.time() - 15.0
+        mgr._last_health_check = time.time() - 6.0
+        mgr._stop_event = StopAfterOneWait()
 
-        # Run the level monitor loop once
-        mgr._stop_event = threading.Event()
-        mgr._stop_event.set()  # Will exit after one iteration
-
-        # Manually call the health-check part of _level_monitor_loop
-        now = time.time()
-        mgr._last_health_check = now - 6.0  # Trigger check
-        for name, last in mgr._thread_heartbeats.items():
-            if now - last > 10.0 and mgr._on_health_warning:
-                mgr._on_health_warning(name)
+        mgr._level_monitor_loop()
 
         assert "app_writer" in warnings
+
+    def test_heartbeat_lock_allows_concurrent_writes_and_snapshots(self):
+        """Heartbeat writes and health-check snapshots use the same lock."""
+        mgr = self._make_manager()
+        assert hasattr(mgr, "_heartbeat_lock")
+        with mgr._heartbeat_lock:
+            pass
+
+        errors = []
+
+        def writer(label):
+            try:
+                for i in range(1000):
+                    with mgr._heartbeat_lock:
+                        mgr._thread_heartbeats[f"{label}_{i}"] = time.time()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=writer, args=("app",)),
+            threading.Thread(target=writer, args=("mic",)),
+        ]
+        for thread in threads:
+            thread.start()
+
+        while any(thread.is_alive() for thread in threads):
+            with mgr._heartbeat_lock:
+                list(mgr._thread_heartbeats.items())
+
+        for thread in threads:
+            thread.join()
+
+        with mgr._heartbeat_lock:
+            heartbeats = list(mgr._thread_heartbeats.items())
+
+        assert not errors
+        assert heartbeats
 
 
 # ---------------------------------------------------------------------------

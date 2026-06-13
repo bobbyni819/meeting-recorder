@@ -192,6 +192,7 @@ class CaptureManager:
 
         # Thread heartbeats for health monitoring
         self._thread_heartbeats: dict[str, float] = {}
+        self._heartbeat_lock = threading.Lock()
         self._last_health_check: float = 0.0
         # Ongoing silence detection (Task 7)
         self._app_silence_start: Optional[float] = None
@@ -614,7 +615,8 @@ class CaptureManager:
                                 self._far_end_ref.push(
                                     np.frombuffer(chunk, dtype=np.int16)
                                 )
-                    self._thread_heartbeats[f"{label}_writer"] = time.time()
+                    with self._heartbeat_lock:
+                        self._thread_heartbeats[f"{label}_writer"] = time.time()
 
                     # Best-effort live preview: only feed when the writer is
                     # NOT backed up. Under load (GPU/CPU contention) the live
@@ -737,12 +739,17 @@ class CaptureManager:
             now = time.time()
             if now - self._last_health_check >= 5.0:
                 self._last_health_check = now
-                for name, last in self._thread_heartbeats.items():
-                    if now - last > 10.0 and self._on_health_warning:
-                        try:
-                            self._on_health_warning(name)
-                        except Exception:
-                            logger.exception("on_health_warning callback error")
+                try:
+                    with self._heartbeat_lock:
+                        heartbeats = list(self._thread_heartbeats.items())
+                    for name, last in heartbeats:
+                        if now - last > 10.0 and self._on_health_warning:
+                            try:
+                                self._on_health_warning(name)
+                            except Exception:
+                                logger.exception("on_health_warning callback error")
+                except Exception:
+                    logger.exception("Thread heartbeat health check failed")
 
             # Check for prolonged app audio silence
             try:
@@ -1059,33 +1066,42 @@ class CaptureManager:
     def pause(self) -> None:
         """Pause recording — audio capture continues but data is discarded."""
         with self._pause_lock:
-            if self._paused or not self._is_recording:
-                return
-            self._paused = True
-            self._pause_start_time = time.time()
-            if self._screen_capture is not None:
-                self._screen_capture.paused = True
-            logger.info("Recording paused.")
+            self._pause_locked()
+
+    def _pause_locked(self) -> None:
+        """Pause recording with _pause_lock already held."""
+        if self._paused or not self._is_recording:
+            return
+        self._paused = True
+        self._pause_start_time = time.time()
+        if self._screen_capture is not None:
+            self._screen_capture.paused = True
+        logger.info("Recording paused.")
 
     def resume(self) -> None:
         """Resume a paused recording."""
         with self._pause_lock:
-            if not self._paused or not self._is_recording:
-                return
-            if self._pause_start_time is not None:
-                self._total_paused_seconds += time.time() - self._pause_start_time
-                self._pause_start_time = None
-            self._paused = False
-            if self._screen_capture is not None:
-                self._screen_capture.paused = False
-            logger.info("Recording resumed.")
+            self._resume_locked()
+
+    def _resume_locked(self) -> None:
+        """Resume recording with _pause_lock already held."""
+        if not self._paused or not self._is_recording:
+            return
+        if self._pause_start_time is not None:
+            self._total_paused_seconds += time.time() - self._pause_start_time
+            self._pause_start_time = None
+        self._paused = False
+        if self._screen_capture is not None:
+            self._screen_capture.paused = False
+        logger.info("Recording resumed.")
 
     def toggle_pause(self) -> None:
         """Toggle between paused and recording states."""
-        if self._paused:
-            self.resume()
-        else:
-            self.pause()
+        with self._pause_lock:
+            if self._paused:
+                self._resume_locked()
+            else:
+                self._pause_locked()
 
     @property
     def is_paused(self) -> bool:
