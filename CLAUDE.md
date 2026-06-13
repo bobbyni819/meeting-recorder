@@ -363,6 +363,7 @@ pythonw launch.pyw                # background (tray only)
 ```bash
 python -m meeting_recorder diagnose       # system health checks
 python -m meeting_recorder probe-echo <dir>  # replay a recording's app+mic through the echo gate; report % mic that is speaker echo (read-only)
+python -m meeting_recorder probe-mute [secs]  # DURING a meeting: live-print how UIA/registry read your Zoom/Teams mute state; toggle to validate mute sync (read-only)
 python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shift+V)
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)

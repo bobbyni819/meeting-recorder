@@ -100,6 +100,60 @@ def main() -> None:
                 f"{sorted(set(seen)) or 'none — UI names not exposed this way'}"
             )
             sys.exit(0)
+        elif cmd == "probe-mute":
+            # Live-probe how the recorder reads your Zoom/Teams mute state via
+            # UI Automation. Run this DURING a meeting and toggle your mute a
+            # few times (button AND Alt+A / Ctrl+Shift+M) to confirm the
+            # recorder follows it. Read-only — changes nothing.
+            logging.basicConfig(level=logging.WARNING, format="%(message)s")
+            import time as _t
+
+            try:
+                import psutil
+                from meeting_recorder.audio.uia_mute_detector import detect_mute_state
+                from meeting_recorder.audio.mute_sync import (
+                    detect_initial_mute_state, get_all_pids_for_process,
+                )
+            except ImportError as e:
+                print(f"Missing dependency: {e}")
+                sys.exit(2)
+
+            pids: set[int] = set()
+            for name in ("zoom.exe", "ms-teams.exe", "teams.exe", "webex.exe"):
+                pids |= get_all_pids_for_process(name)
+            # include children (renderer/WebView2 often own the toolbar)
+            for pid in list(pids):
+                try:
+                    for ch in psutil.Process(pid).children(recursive=True):
+                        pids.add(ch.pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if not pids:
+                print("No Zoom/Teams/Webex process found.")
+                sys.exit(1)
+
+            secs = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 30
+            print(f"Probing {len(pids)} PIDs for {secs}s. Toggle your mute "
+                  f"(button AND hotkey) now…\n")
+            last = object()
+            t_end = _t.monotonic() + secs
+            while _t.monotonic() < t_end:
+                uia = detect_mute_state(pids)
+                reg = None
+                for pid in pids:
+                    reg = detect_initial_mute_state(pid, include_packaged=True)
+                    if reg is not None:
+                        break
+                state = (uia, reg)
+                if state != last:
+                    u = {True: "MUTED", False: "UNMUTED", None: "??(blind)"}[uia]
+                    r = {True: "muted", False: "in-use", None: "??"}[reg]
+                    print(f"  UIA button = {u:11s}   registry mic = {r}")
+                    last = state
+                _t.sleep(1.0)
+            print("\nUIA is the source of truth for soft-mute; registry only "
+                  "knows if the mic device is open (stays 'in-use' while soft-muted).")
+            sys.exit(0)
         elif cmd == "import-transcript":
             logging.basicConfig(level=logging.INFO, format="%(message)s")
             args = sys.argv[2:]
