@@ -10,7 +10,10 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from meeting_recorder.transcription.gemini_transcriber import GeminiTranscriber
+from meeting_recorder.transcription.gemini_transcriber import (
+    GeminiTranscriber,
+    _parse_timestamp_line,
+)
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
 
 
@@ -123,6 +126,39 @@ class TestGeminiParse:
         assert segments[0].start == 3600.0
         assert segments[0].end == 3930.0  # 1:05:30
         assert segments[1].start == 3930.0
+
+    def test_long_meeting_timestamps_still_parse(self):
+        raw = (
+            "[1:30:00] Speaker 1: Ninety minutes in.\n"
+            "[70m0s] Speaker 2: Seventy minutes in.\n"
+        )
+        segments = self.transcriber._parse(raw)
+        assert len(segments) == 2
+        assert segments[0].start == 5400.0
+        assert segments[1].start == 4200.0
+
+    def test_colon_timestamp_with_invalid_seconds_returns_none(self):
+        assert _parse_timestamp_line("[00:60] Speaker 1: Bad seconds.") is None
+        assert _parse_timestamp_line("[1:02:60] Speaker 1: Bad seconds.") is None
+
+    def test_absurd_timestamps_do_not_propagate_huge_starts(self):
+        raw = (
+            "[99:00:00] Speaker 1: Hallucinated colon timestamp.\n"
+            "[9999m0s] Speaker 2: Hallucinated unit timestamp.\n"
+        )
+        segments = self.transcriber._parse(raw, audio_duration=90.0)
+        assert len(segments) == 1
+        assert segments[0].start <= 90.0
+        assert segments[0].end <= 90.0
+        assert "[99:00:00]" in segments[0].text
+        assert "[9999m0s]" in segments[0].text
+
+    def test_known_duration_clamps_garbage_start_and_preserves_end_order(self):
+        raw = "[23:59:59] Speaker 1: Timestamp past the recording.\n"
+        segments = self.transcriber._parse(raw, audio_duration=120.0)
+        assert len(segments) == 1
+        assert segments[0].start == 120.0
+        assert segments[0].end == 120.0
 
     def test_blank_lines_ignored(self):
         raw = (
@@ -811,11 +847,11 @@ class TestEndClamping:
         assert segments[0].end == 70.0  # legacy behavior preserved
 
     def test_duration_before_last_start_yields_zero_length(self):
-        """Hallucinated timestamp beyond the audio: end == start, never < start."""
+        """Hallucinated timestamp beyond the audio clamps to a zero-length tail."""
         raw = "[05:00] Alice: Phantom speech.\n"
         segments = self.transcriber._parse(raw, audio_duration=120.0)
-        assert segments[0].start == 300.0
-        assert segments[0].end == 300.0
+        assert segments[0].start == 120.0
+        assert segments[0].end == 120.0
 
     def test_out_of_order_timestamps_never_produce_end_before_start(self):
         raw = (

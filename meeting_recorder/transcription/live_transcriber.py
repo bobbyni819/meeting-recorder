@@ -134,6 +134,8 @@ class LiveTranscriber:
         self._transcript_lock = threading.Lock()
 
         self._file_write_failed = False
+        self._file_retry_interval = 30.0
+        self._file_retry_after = 0.0
         self._last_insight_time = 0.0
         self._current_topic: Optional[str] = None
         self._alerted_keywords: set[str] = set()
@@ -469,21 +471,71 @@ class LiveTranscriber:
         self, entries: list[tuple[float, str, str]],
     ) -> None:
         """Append newly stable lines to the live transcript file."""
-        if self._output_path is None or self._file_write_failed:
+        if self._output_path is None:
+            return
+        if self._file_write_failed:
+            if time.monotonic() < self._file_retry_after:
+                return
+            if self._recover_file_write():
+                return
             return
         try:
             with open(self._output_path, "a", encoding="utf-8") as f:
                 for abs_sec, source, text in sorted(entries):
-                    minutes, seconds = divmod(int(abs_sec), 60)
-                    label = SOURCE_LABELS.get(source, source)
-                    f.write(f"[{minutes:02d}:{seconds:02d}] {label}: {text}\n")
+                    f.write(self._format_file_entry(abs_sec, source, text))
         except OSError:
-            # Log once; the preview keeps working without the file.
-            self._file_write_failed = True
-            logger.warning(
-                "Cannot write live transcript file %s", self._output_path,
-                exc_info=True,
-            )
+            self._mark_file_write_failed()
+
+    @staticmethod
+    def _format_file_entry(abs_sec: float, source: str, text: str) -> str:
+        minutes, seconds = divmod(int(abs_sec), 60)
+        label = SOURCE_LABELS.get(source, source)
+        return f"[{minutes:02d}:{seconds:02d}] {label}: {text}\n"
+
+    def _recover_file_write(self) -> bool:
+        """Rewrite the live transcript file from the retained committed window."""
+        with self._committed_lock:
+            entries = sorted(self._committed)
+        try:
+            with open(self._output_path, "w", encoding="utf-8") as f:
+                for abs_sec, source, text in entries:
+                    f.write(self._format_file_entry(abs_sec, source, text))
+        except OSError:
+            self._file_retry_after = time.monotonic() + self._file_retry_interval
+            return False
+
+        # Entries aged out of the bounded committed window during the outage
+        # are unrecoverable; this backfill is best-effort.
+        self._file_write_failed = False
+        self._file_retry_after = 0.0
+        return True
+
+    def _mark_file_write_failed(self) -> None:
+        first_failure = not self._file_write_failed
+        self._file_write_failed = True
+        self._file_retry_after = time.monotonic() + self._file_retry_interval
+        if first_failure:
+            self._surface_file_write_failure()
+
+    def _surface_file_write_failure(self) -> None:
+        warning_key = "live_transcript_write_failed"
+        message = f"Cannot write live transcript file {self._output_path}"
+        on_health_warning = getattr(self, "_on_health_warning", None)
+        if callable(on_health_warning):
+            try:
+                on_health_warning(warning_key)
+            except Exception:
+                logger.exception("on_health_warning callback error")
+            return
+        if self._on_insight is not None:
+            self._emit_insight({
+                "type": "warning",
+                "key": warning_key,
+                "message": message,
+                "path": str(self._output_path),
+            })
+            return
+        logger.warning("%s", message, exc_info=True)
 
     # -- Cheap local concept extraction (no model, no network) -------------
 

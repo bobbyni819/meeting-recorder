@@ -72,14 +72,22 @@ def _parse_timestamp_line(line: str):
     if m:
         h_or_m, mm, ss, speaker, text = m.groups()
         if ss is not None:  # [H:MM:SS]
+            if int(ss) >= 60:
+                return None
             start = int(h_or_m) * 3600 + int(mm) * 60 + int(ss)
         else:               # [MM:SS]
+            if int(mm) >= 60:
+                return None
             start = int(h_or_m) * 60 + int(mm)
+        if start > 86400:
+            return None
         return float(start), speaker, text
     m = _TS_UNIT_RE.match(line)
     if m:
         mins, secs, ms, speaker, text = m.groups()
         start = int(mins) * 60 + int(secs) + (int(ms) / 1000.0 if ms else 0.0)
+        if start > 86400:
+            return None
         return float(start), speaker, text
     return None
 
@@ -548,8 +556,8 @@ class GeminiTranscriber:
         nothing is dropped.  The verbatim raw output is also always saved
         to ``transcript_raw.txt`` alongside this structured output.
 
-        When *audio_duration* is known, segment ends are clamped to it —
-        in particular the final segment, whose end would otherwise be a
+        When *audio_duration* is known, segment timestamps are clamped to it
+        — in particular the final segment, whose end would otherwise be a
         fabricated ``start + 60`` placeholder.
         """
         segments: list[TranscriptSegment] = []
@@ -599,10 +607,13 @@ class GeminiTranscriber:
                 speaker="",
             ))
 
-        # Clamp ends to the real audio length (fixes the last segment's
-        # start+60 placeholder) and guarantee end >= start everywhere.
+        # Clamp timestamps to the real audio length (fixes hallucinated
+        # starts and the last segment's start+60 placeholder) and guarantee
+        # end >= start everywhere.
         if audio_duration is not None and audio_duration > 0:
             for seg in segments:
+                if seg.start > audio_duration:
+                    seg.start = audio_duration
                 if seg.end > audio_duration:
                     seg.end = audio_duration
         for seg in segments:

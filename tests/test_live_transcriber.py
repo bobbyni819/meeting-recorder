@@ -6,7 +6,6 @@ import io
 import threading
 import time
 import wave
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -492,15 +491,53 @@ class TestMultiSourceAccumulation:
         # Entries are written in chronological order
         assert content == "[00:02] Them: hi there\n[01:05] You: hello\n"
 
-    def test_file_write_failure_is_non_fatal(self):
-        """An unwritable path disables the file but keeps the preview alive."""
-        lt = self._transcriber(
-            output_path=Path("Z:/nonexistent-drive/live.txt"),
-        )
-        lt._append_to_file([(1.0, "app", "text")])
+    def test_file_write_failure_retries_and_backfills(
+        self, tmp_path, monkeypatch,
+    ):
+        """A transient write failure skips until retry, then rewrites history."""
+        out = tmp_path / "live_transcript.txt"
+        events = []
+        lt = self._transcriber(output_path=out, on_insight=events.append)
+        with lt._committed_lock:
+            lt._committed = [
+                (1.0, "app", "first"),
+                (65.0, "mic", "second"),
+            ]
+
+        real_open = open
+        open_calls = []
+
+        def flaky_open(*args, **kwargs):
+            open_calls.append(args)
+            if len(open_calls) == 1:
+                raise OSError("temporarily locked")
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", flaky_open)
+
+        with patch("time.monotonic", return_value=100.0):
+            lt._append_to_file([(1.0, "app", "first")])
         assert lt._file_write_failed is True
-        # Second call is a silent no-op
-        lt._append_to_file([(2.0, "app", "more")])
+        assert len(events) == 1
+        assert events[0]["type"] == "warning"
+        assert events[0]["key"] == "live_transcript_write_failed"
+        assert len(open_calls) == 1
+
+        with patch("time.monotonic", return_value=110.0):
+            lt._append_to_file([(65.0, "mic", "second")])
+        assert lt._file_write_failed is True
+        assert len(events) == 1
+        assert len(open_calls) == 1
+
+        with patch("time.monotonic", return_value=131.0):
+            lt._append_to_file([(65.0, "mic", "second")])
+        assert lt._file_write_failed is False
+        assert len(events) == 1
+        assert len(open_calls) == 2
+        assert out.read_text(encoding="utf-8") == (
+            "[00:01] Them: first\n"
+            "[01:05] You: second\n"
+        )
 
     def test_clear_buffer_resets_all_sources(self):
         lt = self._transcriber()
