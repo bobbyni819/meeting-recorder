@@ -23,6 +23,7 @@ from meeting_recorder.audio.capture_manager import CaptureManager
 from meeting_recorder.audio.vad import VoiceActivityDetector
 from meeting_recorder.audio.mixer import mix_tracks_streaming
 from meeting_recorder.transcription.pipeline import TranscriptionPipeline
+from meeting_recorder.transcription import vtt_import
 from meeting_recorder.storage.recording_store import RecordingStore
 from meeting_recorder.storage.metadata import RecordingMetadata
 from meeting_recorder.storage.transcript_formatter import save_all_formats
@@ -908,6 +909,26 @@ class MeetingRecorderApp:
             summary_line = " \u2022 ".join(notify_parts) if notify_parts else ""
             notifications.notify_transcription_complete(str(recording_dir), summary_line)
             self._main_window.add_notification("success", f"Transcription complete: {recording_dir.name}", source="pipeline")
+            try:
+                caption_sources = {"teams_vtt", "teams_docx", "zoom_caption"}
+                if metadata.transcription_source not in caption_sources:
+                    caption_path = vtt_import.detect_available_captions(recording_dir)
+                    if caption_path is not None:
+                        metadata.caption_available = str(caption_path)
+                        self._save_metadata(metadata, recording_dir)
+                        self._main_window.add_notification(
+                            "info",
+                            (
+                                "Captions with real speaker names found for "
+                                f"{recording_dir.name} -- open it and click Import to use them"
+                            ),
+                            source="pipeline",
+                        )
+                        notifications.notify_info(
+                            "Captions with speaker names found; open recording and click Import"
+                        )
+            except Exception:
+                logger.debug("Caption auto-detection after transcription failed", exc_info=True)
             logger.info("Post-processing complete: %s", recording_dir)
 
             # Run retention cleanup after each recording

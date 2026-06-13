@@ -65,6 +65,8 @@ class RecordingMetadata:
     # Where the current transcript came from: "" (our pipeline),
     # "teams_vtt", "teams_docx", or "zoom_caption".
     transcription_source: str = ""
+    # Detected vendor caption/transcript path available for optional import.
+    caption_available: str = ""
 
     def save(self, recording_dir: Path) -> None:
         """Save metadata to a JSON file in the recording directory.

@@ -327,6 +327,47 @@ def find_zoom_caption_for_recording(
         return None
 
 
+def detect_available_captions(recording_dir: Path) -> Path | None:
+    """Detect a vendor caption/transcript file available for this recording.
+
+    This is intentionally read-only and never imports or overwrites transcripts.
+    """
+    try:
+        recording_dir = Path(recording_dir)
+        platform = ""
+        try:
+            from meeting_recorder.storage.metadata import RecordingMetadata
+
+            metadata = RecordingMetadata.load(recording_dir)
+            app_name = metadata.app_name.strip().lower() if metadata.app_name else ""
+            if "zoom" in app_name:
+                platform = "zoom"
+            elif "teams" in app_name:
+                platform = "teams"
+        except Exception:
+            logger.debug(
+                "Could not load recording metadata for caption detection: %s",
+                recording_dir,
+                exc_info=True,
+            )
+
+        if not platform:
+            dir_name = recording_dir.name.lower()
+            if "zoom" in dir_name:
+                platform = "zoom"
+            elif "teams" in dir_name or "microsoft_teams" in dir_name:
+                platform = "teams"
+
+        if platform == "zoom":
+            return find_zoom_caption_for_recording(recording_dir)
+        if platform == "teams":
+            return find_teams_transcript_for_recording(recording_dir)
+        return None
+    except Exception:
+        logger.debug("Could not detect available captions", exc_info=True)
+        return None
+
+
 def find_teams_transcript_files(downloads_dir: Path | None = None) -> list[Path]:
     """Find Teams transcript downloads in ``~/Downloads`` newest-first."""
     root = Path.home() / "Downloads" if downloads_dir is None else Path(downloads_dir)

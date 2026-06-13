@@ -144,6 +144,10 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   preserve the first existing
   transcript as `transcript.original.{json,txt,srt}` before overwriting
   `transcript.json/.txt/.srt`.
+  On fresh post-processing completion, Zoom/Teams recordings auto-detect an
+  available vendor caption/transcript and notify the user; this is
+  non-destructive, and the user imports via the detail-view Import button.
+  `metadata.caption_available` holds the detected path.
 - **Echo gate** (`audio/echo_gate.py`, `recording.echo_gate`, default OFF): when
   the user is on speakers the mic picks up the meeting audio echoing back. The
   mic writer drops chunks whose energy is mostly explained by a lagged copy of
