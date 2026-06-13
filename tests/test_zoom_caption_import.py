@@ -130,6 +130,85 @@ class TestZoomCaptionDiscovery:
         assert vtt_import.find_zoom_caption_files(tmp_path / "missing") == []
 
 
+class TestZoomCaptionMatching:
+    def _caption(
+        self, zoom_dir: Path, folder_name: str, file_name: str = "captions.vtt"
+    ) -> Path:
+        meeting_dir = zoom_dir / folder_name
+        meeting_dir.mkdir(parents=True)
+        return _write(meeting_dir, file_name, "WEBVTT\n")
+
+    def test_picks_caption_matching_metadata_start_time(self, tmp_path):
+        zoom_dir = tmp_path / "Zoom"
+        old = self._caption(zoom_dir, "2026-06-13 08.00.00 Morning")
+        target = self._caption(zoom_dir, "2026-06-13 10.02.00 Target")
+        late = self._caption(zoom_dir, "2026-06-13 12.30.00 Late")
+        rec = tmp_path / "2026-06-13_09-00-00_Recording"
+        rec.mkdir()
+        (rec / "metadata.json").write_text(
+            json.dumps({"start_time": "2026-06-13T10:00:00"}),
+            encoding="utf-8",
+        )
+
+        found = vtt_import.find_zoom_caption_for_recording(rec, zoom_dir)
+
+        assert found == target
+        assert found not in (old, late)
+
+    def test_falls_back_to_recording_dir_timestamp_when_metadata_empty_or_missing(
+        self, tmp_path
+    ):
+        zoom_dir = tmp_path / "Zoom"
+        target = self._caption(zoom_dir, "2026-06-13 14.05.00 Target")
+        self._caption(zoom_dir, "2026-06-13 11.00.00 Other")
+        empty_meta_rec = tmp_path / "2026-06-13_14-00-00_Empty_Metadata"
+        missing_meta_rec = tmp_path / "2026-06-13_14-00-00_Missing_Metadata"
+        empty_meta_rec.mkdir()
+        missing_meta_rec.mkdir()
+        (empty_meta_rec / "metadata.json").write_text(
+            json.dumps({"start_time": ""}),
+            encoding="utf-8",
+        )
+
+        assert (
+            vtt_import.find_zoom_caption_for_recording(empty_meta_rec, zoom_dir)
+            == target
+        )
+        assert (
+            vtt_import.find_zoom_caption_for_recording(missing_meta_rec, zoom_dir)
+            == target
+        )
+
+    def test_returns_none_when_closest_caption_outside_max_skew(self, tmp_path):
+        zoom_dir = tmp_path / "Zoom"
+        self._caption(zoom_dir, "2026-06-13 13.00.00 Too_Late")
+        rec = tmp_path / "2026-06-13_10-00-00_Recording"
+        rec.mkdir()
+
+        found = vtt_import.find_zoom_caption_for_recording(
+            rec, zoom_dir, max_skew_minutes=30
+        )
+
+        assert found is None
+
+    def test_returns_none_when_recording_time_unavailable(self, tmp_path):
+        zoom_dir = tmp_path / "Zoom"
+        self._caption(zoom_dir, "2026-06-13 10.00.00 Meeting")
+        rec = tmp_path / "recording_without_timestamp"
+        rec.mkdir()
+
+        assert vtt_import.find_zoom_caption_for_recording(rec, zoom_dir) is None
+
+    def test_parse_leading_timestamp_accepts_recording_and_zoom_formats(self):
+        assert vtt_import._parse_leading_timestamp(
+            "2026-06-13_10-00-00_Foo"
+        ).isoformat() == "2026-06-13T10:00:00"
+        assert vtt_import._parse_leading_timestamp(
+            "2026-06-13 10.00.00 Foo"
+        ).isoformat() == "2026-06-13T10:00:00"
+        assert vtt_import._parse_leading_timestamp("garbage") is None
+
+
 class TestImportZoomCaptionToRecording:
     def test_import_writes_canonical_outputs_metadata_and_raw_copy(
         self, tmp_path, monkeypatch

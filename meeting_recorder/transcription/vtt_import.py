@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
@@ -41,6 +42,10 @@ _ZOOM_CAPTION_FILENAMES = {
     "closed_caption.txt",
     "meeting_saved_closed_captions.txt",
 }
+_LEADING_TIMESTAMP_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})(?:_(\d{2})-(\d{2})-(\d{2})| "
+    r"(\d{2})\.(\d{2})\.(\d{2}))"
+)
 
 
 def _ts_to_seconds(hh: str, mm: str, ss: str, mmm: str) -> float:
@@ -172,6 +177,83 @@ def find_zoom_caption_files(zoom_dir: Path | None = None) -> list[Path]:
         return []
 
     return sorted(matches, key=lambda p: _mtime(p), reverse=True)
+
+
+def _parse_leading_timestamp(name: str) -> datetime | None:
+    """Parse recording/Zoom folder timestamps anchored at the start of a name."""
+    match = _LEADING_TIMESTAMP_RE.match(name)
+    if not match:
+        return None
+    year, month, day = (int(match.group(i)) for i in (1, 2, 3))
+    if match.group(4) is not None:
+        hour, minute, second = (int(match.group(i)) for i in (4, 5, 6))
+    else:
+        hour, minute, second = (int(match.group(i)) for i in (7, 8, 9))
+    try:
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+
+
+def find_zoom_caption_for_recording(
+    recording_dir: Path,
+    zoom_dir: Path | None = None,
+    max_skew_minutes: float = 90.0,
+) -> Path | None:
+    """Find the Zoom caption whose meeting time best matches a recording."""
+    try:
+        recording_dir = Path(recording_dir)
+        recording_start = _recording_start_time(recording_dir)
+        if recording_start is None:
+            return None
+
+        max_skew_seconds = float(max_skew_minutes) * 60.0
+        best_path: Path | None = None
+        best_skew: float | None = None
+        for caption in find_zoom_caption_files(zoom_dir):
+            caption_time = _parse_leading_timestamp(caption.parent.name)
+            if caption_time is None:
+                caption_time = datetime.fromtimestamp(_mtime(caption))
+            skew = abs((caption_time - recording_start).total_seconds())
+            if skew <= max_skew_seconds and (best_skew is None or skew < best_skew):
+                best_path = caption
+                best_skew = skew
+        return best_path
+    except Exception:
+        logger.debug("Could not match Zoom caption by recording time", exc_info=True)
+        return None
+
+
+def _recording_start_time(recording_dir: Path) -> datetime | None:
+    try:
+        from meeting_recorder.storage.metadata import RecordingMetadata
+
+        metadata = RecordingMetadata.load(recording_dir)
+        start_time = metadata.start_time.strip() if metadata.start_time else ""
+        if start_time:
+            parsed = _parse_iso_datetime(start_time)
+            if parsed is not None:
+                return parsed
+    except Exception:
+        logger.debug(
+            "Could not load recording metadata for Zoom caption matching: %s",
+            recording_dir,
+            exc_info=True,
+        )
+    return _parse_leading_timestamp(recording_dir.name)
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        parsed = datetime.fromisoformat(normalized)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def _mtime(path: Path) -> float:

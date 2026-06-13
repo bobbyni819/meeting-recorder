@@ -207,6 +207,7 @@ def main() -> None:
             from pathlib import Path as _Path
 
             from meeting_recorder.transcription.vtt_import import (
+                find_zoom_caption_for_recording,
                 find_zoom_caption_files,
                 import_zoom_caption_to_recording,
             )
@@ -217,12 +218,19 @@ def main() -> None:
             if len(args) >= 2:
                 caption = _Path(args[1]).expanduser()
             else:
-                found = find_zoom_caption_files()
-                if not found:
-                    print("No Zoom caption files found under ~/Documents/Zoom")
-                    sys.exit(1)
-                caption = found[0]
-                print(f"Using newest Zoom caption file: {caption}")
+                caption = find_zoom_caption_for_recording(rec_dir)
+                if caption is not None:
+                    print(f"Matched Zoom caption by meeting time: {caption}")
+                else:
+                    found = find_zoom_caption_files()
+                    if not found:
+                        print("No Zoom caption files found under ~/Documents/Zoom")
+                        sys.exit(1)
+                    caption = found[0]
+                    print(
+                        "No time-matched Zoom caption found; using newest overall: "
+                        f"{caption} (verify it's the right meeting)"
+                    )
             if not caption.is_file():
                 print(f"Caption file not found: {caption}"); sys.exit(1)
             try:
