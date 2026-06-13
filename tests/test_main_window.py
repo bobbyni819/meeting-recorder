@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tkinter as tk
 from pathlib import Path
 from unittest import mock
 
@@ -218,6 +219,90 @@ class TestMainWindowUpdatesNoWindow:
 
     def test_refresh_history_no_crash(self):
         self.mw.refresh_history()
+
+
+# ---------------------------------------------------------------------------
+# Safe deferred widget reset helper
+# ---------------------------------------------------------------------------
+
+class TestScheduleReset:
+    class FakeWindow:
+        def __init__(self):
+            self.calls = []
+
+        def after(self, delay, callback):
+            self.calls.append(delay)
+            callback()
+
+    class FakeWidget:
+        def __init__(self, exists=True, raises=False):
+            self.exists = exists
+            self.raises = raises
+            self.configured = []
+
+        def winfo_exists(self):
+            if self.raises:
+                raise tk.TclError("destroyed")
+            return self.exists
+
+        def configure(self, **config):
+            self.configured.append(config)
+
+    def test_noop_when_window_is_none(self):
+        mw = MainWindow()
+        widget = self.FakeWidget()
+        mw._schedule_reset(widget, 100, text="Reset", fg="blue")
+        assert widget.configured == []
+
+    def test_skips_destroyed_widget(self):
+        mw = MainWindow()
+        mw._window = self.FakeWindow()
+        widget = self.FakeWidget(exists=False)
+        mw._schedule_reset(widget, 100, text="Reset", fg="blue")
+        assert mw._window.calls == [100]
+        assert widget.configured == []
+
+    def test_swallows_winfo_tcl_error(self):
+        mw = MainWindow()
+        mw._window = self.FakeWindow()
+        widget = self.FakeWidget(raises=True)
+        mw._schedule_reset(widget, 100, text="Reset", fg="blue")
+        assert widget.configured == []
+
+
+# ---------------------------------------------------------------------------
+# Corrupted raw metadata handling
+# ---------------------------------------------------------------------------
+
+class TestCorruptedMetadata:
+    class FakeFrame:
+        def winfo_children(self):
+            return []
+
+    def test_refresh_history_handles_null_and_wrong_type_metadata(self, tmp_path):
+        rec_path = tmp_path / "recording_bad"
+        rec_path.mkdir()
+        (rec_path / "metadata.json").write_text(
+            json.dumps({
+                "tags": None,
+                "meeting_attendees": None,
+                "quality_scores": "bad",
+            }),
+            encoding="utf-8",
+        )
+
+        mw = MainWindow(on_list_recent=lambda: [rec_path])
+        mw._history_frame = self.FakeFrame()
+        mw._filter_var = mock.Mock()
+        mw._filter_var.get.return_value = "recording"
+        mw._sort_mode = "quality"
+        mw._build_history_card = mock.Mock()
+        mw._update_stats_label = mock.Mock()
+
+        mw._refresh_history()
+
+        mw._build_history_card.assert_called_once()
+        mw._update_stats_label.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

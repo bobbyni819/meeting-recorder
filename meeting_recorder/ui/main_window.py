@@ -237,6 +237,23 @@ class MainWindow:
     def is_visible(self) -> bool:
         return self._is_visible
 
+    def _schedule_reset(self, widget, delay, **config) -> None:
+        """after(delay) -> widget.configure(**config), skipping if destroyed."""
+        if self._window is None:
+            return
+
+        def _apply():
+            try:
+                if widget.winfo_exists():
+                    widget.configure(**config)
+            except tk.TclError:
+                pass
+
+        try:
+            self._window.after(delay, _apply)
+        except tk.TclError:
+            pass
+
     # ------------------------------------------------------------------
     # Thread-safe update methods (called from app.py callbacks)
     # ------------------------------------------------------------------
@@ -348,21 +365,34 @@ class MainWindow:
             return
         label = "\U0001f50a Desktop Audio" if is_desktop else "\U0001f3a4 App Audio"
         color = AMBER if is_desktop else TEXT_DIM
+
+        def _apply():
+            try:
+                lbl = self._audio_mode_label
+                if lbl is not None and lbl.winfo_exists():
+                    lbl.configure(text=label, fg=color)
+            except tk.TclError:
+                pass
+
         try:
-            self._window.after(0, lambda: (
-                self._audio_mode_label.configure(text=label, fg=color)
-                if self._audio_mode_label else None
-            ))
+            self._window.after(0, _apply)
         except tk.TclError:
             pass
 
     def update_status_bar(self, text: str) -> None:
         if self._window is None:
             return
+
+        def _apply():
+            try:
+                lbl = self._statusbar_label
+                if lbl is not None and lbl.winfo_exists():
+                    lbl.configure(text=text)
+            except tk.TclError:
+                pass
+
         try:
-            self._window.after(0, lambda: (
-                self._statusbar_label.configure(text=text) if self._statusbar_label else None
-            ))
+            self._window.after(0, _apply)
         except tk.TclError:
             pass
 
@@ -1390,8 +1420,8 @@ class MainWindow:
             unpinned.sort(key=lambda p: meta_cache.get(p, {}).get("duration_seconds", 0), reverse=True)
         elif sort_mode == "quality":
             def _quality_key(p: Path) -> int:
-                qs = meta_cache.get(p, {}).get("quality_scores", {})
-                return qs.get("overall_score", -1) if qs else -1
+                qs = meta_cache.get(p, {}).get("quality_scores")
+                return qs.get("overall_score", -1) if isinstance(qs, dict) else -1
             unpinned.sort(key=_quality_key, reverse=True)
         elif sort_mode == "app":
             unpinned.sort(key=lambda p: meta_cache.get(p, {}).get("app_name", "").lower())
@@ -1405,19 +1435,25 @@ class MainWindow:
             if meta.get("status") == "error":
                 failed_count += 1
 
-            qs = meta.get("quality_scores", {})
-            if qs and qs.get("overall_score") is not None:
+            qs = meta.get("quality_scores")
+            if isinstance(qs, dict) and qs.get("overall_score") is not None:
                 quality_scores.append(qs["overall_score"])
 
             # Filter: match against folder name, subject, app name, attendees
             if filter_text:
                 searchable = " ".join([
                     rec_path.name.lower(),
-                    meta.get("meeting_subject", "").lower(),
-                    meta.get("app_name", "").lower(),
-                    meta.get("meeting_organizer", "").lower(),
-                    " ".join(meta.get("meeting_attendees", [])).lower(),
-                    " ".join(meta.get("tags", [])).lower(),
+                    str(meta.get("meeting_subject") or "").lower(),
+                    str(meta.get("app_name") or "").lower(),
+                    str(meta.get("meeting_organizer") or "").lower(),
+                    " ".join(
+                        x for x in (meta.get("meeting_attendees") or [])
+                        if isinstance(x, str)
+                    ).lower(),
+                    " ".join(
+                        x for x in (meta.get("tags") or [])
+                        if isinstance(x, str)
+                    ).lower(),
                 ])
                 if filter_text not in searchable:
                     continue
@@ -1548,7 +1584,7 @@ class MainWindow:
         from collections import Counter
         tag_counter: Counter[str] = Counter()
         for meta in meta_cache.values():
-            for tag in meta.get("tags", []):
+            for tag in (meta.get("tags") or []):
                 tag_counter[tag] += 1
 
         top_tags = tag_counter.most_common(8)
@@ -1714,7 +1750,7 @@ class MainWindow:
         if app_label:
             detail_parts.append(app_label)
         # Attendee count badge
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         if attendees:
             detail_parts.append(f"\U0001f465 {len(attendees)}")
         # Action item count badge
@@ -1758,7 +1794,7 @@ class MainWindow:
             ).pack(fill=tk.X)
 
         # Tag pills on cards
-        card_tags = meta.get("tags", [])
+        card_tags = meta.get("tags") or []
         if card_tags:
             tag_row = tk.Frame(left, bg=card_bg)
             tag_row.pack(fill=tk.X, pady=(1, 0))
@@ -1769,8 +1805,8 @@ class MainWindow:
                 ).pack(side=tk.LEFT, padx=(0, 3))
 
         # Quality indicator + duration badge on right side
-        quality = meta.get("quality_scores", {})
-        q_score = quality.get("overall_score") if quality else None
+        quality = meta.get("quality_scores")
+        q_score = quality.get("overall_score") if isinstance(quality, dict) else None
         if q_score is not None:
             q_color = GREEN if q_score >= 75 else AMBER if q_score >= 50 else RED_DOT
             tk.Label(
@@ -2152,12 +2188,14 @@ class MainWindow:
         def _do_delete():
             confirm.destroy()
             deleted = 0
+            failed: list[str] = []
             for path in list(self._bulk_selected):
                 try:
                     shutil.rmtree(path)
                     deleted += 1
                 except Exception:
                     logger.exception("Failed to delete %s", path)
+                    failed.append(path.name)
             self._bulk_selected.clear()
             self._bulk_mode = False
             self._hide_bulk_bar()
@@ -2165,7 +2203,17 @@ class MainWindow:
                 self._bulk_toggle_btn.configure(
                     text="  Select  ", fg=TEXT_DIM, bg=BUTTON_BG)
             self._refresh_history()
-            self.add_notification("info", f"Deleted {deleted} recording(s)", source="bulk")
+            if failed:
+                names = ", ".join(failed[:3])
+                if len(failed) > 3:
+                    names += "..."
+                self.add_notification(
+                    "warning",
+                    f"Deleted {deleted}/{count}; {len(failed)} failed (check logs): {names}",
+                    source="bulk",
+                )
+            else:
+                self.add_notification("info", f"Deleted {deleted} recording(s)", source="bulk")
 
         cancel_btn = tk.Label(
             btn_row, text="  Cancel  ", font=("Segoe UI", 9),
@@ -2222,12 +2270,28 @@ class MainWindow:
             "info", f"Re-processing {count} recording(s)...", source="bulk")
 
         def _reprocess_batch():
+            succeeded = 0
+            failed = 0
             for i, path in enumerate(paths, 1):
                 self.update_status_bar(f"Re-processing {i}/{count}: {path.name}")
-                self._on_reprocess(path)
+                try:
+                    self._on_reprocess(path)
+                    succeeded += 1
+                except Exception:
+                    failed += 1
+                    logger.exception("Failed to re-process %s", path)
                 # Wait briefly for the post thread to start and finish
                 import time
                 time.sleep(0.5)
+            if self._window is not None:
+                level = "warning" if failed else "success"
+                msg = f"Re-processing complete: {succeeded} succeeded, {failed} failed"
+
+                try:
+                    self._window.after(
+                        0, lambda: self.add_notification(level, msg, source="bulk"))
+                except tk.TclError:
+                    pass
 
         threading.Thread(target=_reprocess_batch, daemon=True).start()
 
@@ -2310,7 +2374,7 @@ class MainWindow:
                     if meta_path.exists():
                         with open(meta_path, "r", encoding="utf-8") as f:
                             meta = json.load(f)
-                    tags = meta.get("tags", [])
+                    tags = meta.get("tags") or []
                     if tag not in tags:
                         tags.append(tag)
                         meta["tags"] = tags
@@ -2553,12 +2617,10 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713  Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb  Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb  Copy", fg=TEXT_DIM)
             elif self._window:
                 copy_btn.configure(text="No transcript yet", fg=AMBER)
-                self._window.after(2000, lambda: copy_btn.configure(
-                    text="\U0001f4cb  Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 2000, text="\U0001f4cb  Copy", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_transcript())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_COLOR))
@@ -2620,8 +2682,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(notes)
                 notes_btn.configure(text="\u2713  Copied!", fg=GREEN)
-                self._window.after(2000, lambda: notes_btn.configure(
-                    text="\U0001f4dd  Notes", fg=TEXT_DIM))
+                self._schedule_reset(notes_btn, 2000, text="\U0001f4dd  Notes", fg=TEXT_DIM)
 
         def _show_template_menu(event):
             menu = tk.Menu(self._window, tearoff=0, bg=BG_PANEL, fg=TEXT_COLOR,
@@ -2647,8 +2708,7 @@ class MainWindow:
                     self._window.clipboard_clear()
                     self._window.clipboard_append(text)
                     notes_btn.configure(text=f"\u2713  {template_name}!", fg=GREEN)
-                    self._window.after(2000, lambda: notes_btn.configure(
-                        text="\U0001f4dd  Notes", fg=TEXT_DIM))
+                    self._schedule_reset(notes_btn, 2000, text="\U0001f4dd  Notes", fg=TEXT_DIM)
             except Exception:
                 logger.exception("Failed to render template %s", template_name)
 
@@ -2673,8 +2733,7 @@ class MainWindow:
                     self._window.clipboard_clear()
                     self._window.clipboard_append(text)
                     recap_btn.configure(text="\u2713  Copied!", fg=GREEN)
-                    self._window.after(2000, lambda: recap_btn.configure(
-                        text="\U0001f4e8  Recap", fg=TEXT_DIM))
+                    self._schedule_reset(recap_btn, 2000, text="\U0001f4e8  Recap", fg=TEXT_DIM)
             except Exception:
                 logger.exception("Failed to generate recap")
 
@@ -2706,13 +2765,11 @@ class MainWindow:
                 html_content = generate_html_report(rec_path, meta)
                 Path(dest).write_text(html_content, encoding="utf-8")
                 html_btn.configure(text="\u2713  Saved!", fg=GREEN)
-                self._window.after(2000, lambda: html_btn.configure(
-                    text="\U0001f310  HTML", fg=TEXT_DIM))
+                self._schedule_reset(html_btn, 2000, text="\U0001f310  HTML", fg=TEXT_DIM)
             except Exception:
                 logger.exception("Failed to export HTML for %s", rec_path.name)
                 html_btn.configure(text="\u2717  Error", fg=RED_DOT)
-                self._window.after(2000, lambda: html_btn.configure(
-                    text="\U0001f310  HTML", fg=TEXT_DIM))
+                self._schedule_reset(html_btn, 2000, text="\U0001f310  HTML", fg=TEXT_DIM)
 
         html_btn.bind("<Button-1>", lambda e: _export_html())
         html_btn.bind("<Enter>", lambda e: html_btn.configure(fg=TEXT_COLOR))
@@ -3009,7 +3066,7 @@ class MainWindow:
                 retry_btn.bind("<Leave>", lambda e: retry_btn.configure(bg="#5a2020"))
 
         # --- Attendees ---
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         if attendees:
             att_text = ", ".join(attendees[:8])
             if len(attendees) > 8:
@@ -3441,13 +3498,11 @@ class MainWindow:
                         dest.write_text(content, encoding="utf-8")
                         export_btn.configure(text=f"\u2713 Saved {ext}", fg=GREEN)
                         if self._window:
-                            self._window.after(2000, lambda: export_btn.configure(
-                                text="\u2913 Export", fg=TEXT_DIM))
+                            self._schedule_reset(export_btn, 2000, text="\u2913 Export", fg=TEXT_DIM)
                 except Exception:
                     export_btn.configure(text="Export failed", fg=AMBER)
                     if self._window:
-                        self._window.after(2000, lambda: export_btn.configure(
-                            text="\u2913 Export", fg=TEXT_DIM))
+                        self._schedule_reset(export_btn, 2000, text="\u2913 Export", fg=TEXT_DIM)
 
             export_btn.bind("<Button-1>", _show_export_menu)
             export_btn.bind("<Enter>", lambda e: export_btn.configure(fg=TEXT_COLOR))
@@ -3996,7 +4051,7 @@ class MainWindow:
             lines.append("")
 
         # --- Attendance verification ---
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         speaker_map = meta.get("speaker_map", {})
         if attendees and speaker_map:
             lines.append("ATTENDANCE")
@@ -4035,8 +4090,8 @@ class MainWindow:
             lines.append("")
 
         # --- Quality ---
-        quality = meta.get("quality_scores", {})
-        if quality and quality.get("overall_score") is not None:
+        quality = meta.get("quality_scores")
+        if isinstance(quality, dict) and quality.get("overall_score") is not None:
             from meeting_recorder.storage.quality import quality_label, quality_bar
             lines.append("QUALITY")
             lines.append("-" * 40)
@@ -4315,7 +4370,7 @@ class MainWindow:
 
     def _build_tag_bar(self, parent: tk.Frame, rec_path: Path, meta: dict) -> None:
         """Build an inline tag display with add/remove."""
-        tags = list(meta.get("tags", []))
+        tags = list(meta.get("tags") or [])
 
         def _redraw():
             for w in parent.winfo_children():
@@ -4772,7 +4827,7 @@ class MainWindow:
             lines.append("")
 
         # Attendees
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         organizer = meta.get("meeting_organizer", "")
         if organizer or attendees:
             lines.append("## Attendees")
@@ -5016,8 +5071,7 @@ class MainWindow:
             self._window.clipboard_clear()
             self._window.clipboard_append(text)
             btn.configure(text="\u2713 Copied!", fg=GREEN)
-            self._window.after(1500, lambda: btn.configure(
-                text=original_text, fg=TEXT_DIM))
+            self._schedule_reset(btn, 1500, text=original_text, fg=TEXT_DIM)
 
     def _show_insights_panel(self) -> None:
         """Show a popup panel with meeting insights."""
@@ -5084,8 +5138,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_insights())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5158,8 +5211,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_trends())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5232,8 +5284,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_focus())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5349,8 +5400,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_weekly())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5423,8 +5473,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_streaks())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5500,8 +5549,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_costs())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5574,8 +5622,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_heatmap())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5648,8 +5695,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_effectiveness())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5722,8 +5768,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_optimizer())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5796,8 +5841,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_network())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -5903,8 +5947,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(content)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="  \U0001f4cb Copy  ", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="  \U0001f4cb Copy  ", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_prep())
         copy_btn.bind("<Enter>", lambda e: copy_btn.configure(fg=TEXT_BRIGHT, bg=BUTTON_HOVER))
@@ -6052,8 +6095,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn.bind("<Button-1>", lambda e: _copy_all())
 
@@ -6182,8 +6224,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
@@ -6247,8 +6288,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
@@ -6312,8 +6352,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
@@ -6377,8 +6416,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
@@ -6442,8 +6480,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
@@ -7008,8 +7045,7 @@ class MainWindow:
                 self._window.clipboard_clear()
                 self._window.clipboard_append(text)
                 copy_btn.configure(text="\u2713 Copied!", fg=GREEN)
-                self._window.after(1500, lambda: copy_btn.configure(
-                    text="\U0001f4cb Copy", fg=TEXT_DIM))
+                self._schedule_reset(copy_btn, 1500, text="\U0001f4cb Copy", fg=TEXT_DIM)
 
         copy_btn = tk.Label(
             title_row, text="\U0001f4cb Copy", font=("Segoe UI", 9),
