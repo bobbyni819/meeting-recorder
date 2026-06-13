@@ -445,11 +445,11 @@ def _check_api() -> int:
             try:
                 from google import genai
 
-                client = genai.Client(api_key=gemini_key)
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents="Say 'ok' and nothing else.",
-                )
+                with genai.Client(api_key=gemini_key) as client:
+                    response = client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents="Say 'ok' and nothing else.",
+                    )
                 if response.text:
                     print(_ok("Gemini API: connected"))
                 else:
@@ -471,8 +471,8 @@ def _check_api() -> int:
             try:
                 import openai
 
-                client = openai.OpenAI(api_key=openai_key)
-                client.models.list()
+                with openai.OpenAI(api_key=openai_key) as client:
+                    client.models.list()
                 print(_ok("OpenAI API: connected"))
             except Exception as e:
                 print(_fail(f"OpenAI API: {e}"))
@@ -768,11 +768,11 @@ def _check_api_structured() -> CheckCategory:
         if gemini_key:
             try:
                 from google import genai
-                client = genai.Client(api_key=gemini_key)
-                response = client.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents="Say 'ok' and nothing else.",
-                )
+                with genai.Client(api_key=gemini_key) as client:
+                    response = client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents="Say 'ok' and nothing else.",
+                    )
                 if response.text:
                     cat.results.append(CheckResult("ok", "Gemini API: connected"))
                 else:
@@ -793,8 +793,8 @@ def _check_api_structured() -> CheckCategory:
         if openai_key:
             try:
                 import openai
-                client = openai.OpenAI(api_key=openai_key)
-                client.models.list()
+                with openai.OpenAI(api_key=openai_key) as client:
+                    client.models.list()
                 cat.results.append(CheckResult("ok", "OpenAI API: connected"))
             except Exception as e:
                 cat.results.append(CheckResult("fail", f"OpenAI API: {e}"))

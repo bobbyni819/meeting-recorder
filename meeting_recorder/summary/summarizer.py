@@ -63,17 +63,17 @@ class OpenAISummaryProvider:
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         import openai
 
-        client = openai.OpenAI(api_key=self.api_key)
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
+        with openai.OpenAI(api_key=self.api_key) as client:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+            )
+            return response.choices[0].message.content
 
 
 class AnthropicSummaryProvider:
@@ -86,17 +86,17 @@ class AnthropicSummaryProvider:
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=self.api_key)
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-        )
-        return response.content[0].text
+        with anthropic.Anthropic(api_key=self.api_key) as client:
+            response = client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+            )
+            return response.content[0].text
 
 
 class GeminiSummaryProvider:
@@ -115,15 +115,15 @@ class GeminiSummaryProvider:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=self.api_key)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=f"{system_prompt}\n\n{user_prompt}",
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        return response.text
+        with genai.Client(api_key=self.api_key) as client:
+            response = client.models.generate_content(
+                model=self.model,
+                contents=f"{system_prompt}\n\n{user_prompt}",
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+            return response.text
 
 
 def create_provider(config) -> SummaryProvider:

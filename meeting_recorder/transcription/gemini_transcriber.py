@@ -232,57 +232,56 @@ class GeminiTranscriber:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=self.api_key)
+        with genai.Client(api_key=self.api_key) as client:
+            # Try to compress to FLAC for faster upload (WAV -> FLAC is ~3-5x smaller)
+            upload_path, mime_type, flac_temp = self._compress_to_flac(audio_path)
 
-        # Try to compress to FLAC for faster upload (WAV -> FLAC is ~3-5x smaller)
-        upload_path, mime_type, flac_temp = self._compress_to_flac(audio_path)
-
-        size_mb = upload_path.stat().st_size / 1_000_000
-        logger.info(
-            "Uploading %s (%.1f MB) to Gemini Files API…", upload_path.name, size_mb
-        )
-
-        try:
-            uploaded = client.files.upload(
-                file=str(upload_path),
-                config=types.UploadFileConfig(mime_type=mime_type),
-            )
-        finally:
-            # Clean up temporary FLAC file
-            if flac_temp is not None and flac_temp.exists():
-                flac_temp.unlink()
-
-        # Poll until the file has been processed server-side (usually < 30 s,
-        # but long recordings can take several minutes)
-        uploaded = self._wait_for_file_active(client, uploaded)
-
-        if uploaded.state.name != "ACTIVE":
-            raise RuntimeError(
-                f"Gemini file processing did not complete (state={uploaded.state.name}). "
-                "Try again or check the Gemini API status."
+            size_mb = upload_path.stat().st_size / 1_000_000
+            logger.info(
+                "Uploading %s (%.1f MB) to Gemini Files API…", upload_path.name, size_mb
             )
 
-        # Transcribe with retries for transient API errors. Always delete the
-        # uploaded Files-API object afterwards — including when all retries
-        # fail (sustained free-tier 429) — so it doesn't linger server-side.
-        try:
-            raw_text = self._transcribe_with_retry(
-                client, uploaded, prompt=self._build_prompt(attendees),
-            )
-        finally:
             try:
-                client.files.delete(name=uploaded.name)
-            except Exception:
-                logger.debug("Could not delete uploaded Gemini file (non-fatal)")
+                uploaded = client.files.upload(
+                    file=str(upload_path),
+                    config=types.UploadFileConfig(mime_type=mime_type),
+                )
+            finally:
+                # Clean up temporary FLAC file
+                if flac_temp is not None and flac_temp.exists():
+                    flac_temp.unlink()
 
-        logger.info("Transcript received: %d chars", len(raw_text))
+            # Poll until the file has been processed server-side (usually < 30 s,
+            # but long recordings can take several minutes)
+            uploaded = self._wait_for_file_active(client, uploaded)
 
-        # Persist the raw text for reference / manual editing
-        raw_path = audio_path.parent / "transcript_raw.txt"
-        raw_path.write_text(raw_text, encoding="utf-8")
-        logger.info("Raw Gemini transcript saved: %s", raw_path.name)
+            if uploaded.state.name != "ACTIVE":
+                raise RuntimeError(
+                    f"Gemini file processing did not complete (state={uploaded.state.name}). "
+                    "Try again or check the Gemini API status."
+                )
 
-        return self._parse(raw_text, audio_duration=self._wav_duration(audio_path))
+            # Transcribe with retries for transient API errors. Always delete the
+            # uploaded Files-API object afterwards — including when all retries
+            # fail (sustained free-tier 429) — so it doesn't linger server-side.
+            try:
+                raw_text = self._transcribe_with_retry(
+                    client, uploaded, prompt=self._build_prompt(attendees),
+                )
+            finally:
+                try:
+                    client.files.delete(name=uploaded.name)
+                except Exception:
+                    logger.debug("Could not delete uploaded Gemini file (non-fatal)")
+
+            logger.info("Transcript received: %d chars", len(raw_text))
+
+            # Persist the raw text for reference / manual editing
+            raw_path = audio_path.parent / "transcript_raw.txt"
+            raw_path.write_text(raw_text, encoding="utf-8")
+            logger.info("Raw Gemini transcript saved: %s", raw_path.name)
+
+            return self._parse(raw_text, audio_duration=self._wav_duration(audio_path))
 
     def transcribe_dictation(
         self,
@@ -306,43 +305,42 @@ class GeminiTranscriber:
         if default_project not in choices:
             choices.append(default_project)
 
-        client = genai.Client(api_key=self.api_key)
+        with genai.Client(api_key=self.api_key) as client:
+            upload_path, mime_type, flac_temp = self._compress_to_flac(audio_path)
 
-        upload_path, mime_type, flac_temp = self._compress_to_flac(audio_path)
-
-        size_mb = upload_path.stat().st_size / 1_000_000
-        logger.info(
-            "Uploading dictation %s (%.1f MB) to Gemini Files API…",
-            upload_path.name, size_mb,
-        )
-
-        try:
-            uploaded = client.files.upload(
-                file=str(upload_path),
-                config=types.UploadFileConfig(mime_type=mime_type),
-            )
-        finally:
-            if flac_temp is not None and flac_temp.exists():
-                flac_temp.unlink()
-
-        uploaded = self._wait_for_file_active(client, uploaded)
-
-        if uploaded.state.name != "ACTIVE":
-            raise RuntimeError(
-                f"Gemini file processing did not complete (state={uploaded.state.name})."
+            size_mb = upload_path.stat().st_size / 1_000_000
+            logger.info(
+                "Uploading dictation %s (%.1f MB) to Gemini Files API…",
+                upload_path.name, size_mb,
             )
 
-        prompt = _DICTATION_PROMPT_TEMPLATE.format(
-            project_choices=", ".join(f'"{p}"' for p in choices)
-        )
-        raw_text = self._transcribe_with_retry(client, uploaded, prompt=prompt)
+            try:
+                uploaded = client.files.upload(
+                    file=str(upload_path),
+                    config=types.UploadFileConfig(mime_type=mime_type),
+                )
+            finally:
+                if flac_temp is not None and flac_temp.exists():
+                    flac_temp.unlink()
 
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            logger.debug("Could not delete uploaded Gemini file (non-fatal)")
+            uploaded = self._wait_for_file_active(client, uploaded)
 
-        return parse_dictation_response(raw_text, choices, default_project, self.model)
+            if uploaded.state.name != "ACTIVE":
+                raise RuntimeError(
+                    f"Gemini file processing did not complete (state={uploaded.state.name})."
+                )
+
+            prompt = _DICTATION_PROMPT_TEMPLATE.format(
+                project_choices=", ".join(f'"{p}"' for p in choices)
+            )
+            raw_text = self._transcribe_with_retry(client, uploaded, prompt=prompt)
+
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                logger.debug("Could not delete uploaded Gemini file (non-fatal)")
+
+            return parse_dictation_response(raw_text, choices, default_project, self.model)
 
     def _wait_for_file_active(self, client, uploaded):
         """Poll the Files API until *uploaded* leaves the PROCESSING state.

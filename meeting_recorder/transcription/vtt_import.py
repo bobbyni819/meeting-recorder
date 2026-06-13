@@ -603,9 +603,8 @@ def import_vtt_to_recording(
     try:
         from meeting_recorder.search.index import RecordingIndex
 
-        index = RecordingIndex()
-        index.index_recording(recording_dir)
-        index.close()
+        with RecordingIndex() as index:
+            index.index_recording(recording_dir)
     except Exception:
         logger.debug("Re-index after VTT import failed (non-fatal)", exc_info=True)
 
@@ -672,9 +671,8 @@ def import_zoom_caption_to_recording(
     try:
         from meeting_recorder.search.index import RecordingIndex
 
-        index = RecordingIndex()
-        index.index_recording(recording_dir)
-        index.close()
+        with RecordingIndex() as index:
+            index.index_recording(recording_dir)
     except Exception:
         logger.debug(
             "Re-index after Zoom caption import failed (non-fatal)", exc_info=True

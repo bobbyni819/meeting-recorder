@@ -242,7 +242,7 @@ class TestGeminiTranscribe:
 
         # Mock the google.genai imports that happen inside transcribe()
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
         mock_types = MagicMock()
 
         with patch.object(
@@ -263,6 +263,7 @@ class TestGeminiTranscribe:
         assert (tmp_path / "transcript_raw.txt").exists()
         # File cleanup attempted
         mock_client.files.delete.assert_called_once()
+        mock_genai.Client.return_value.__exit__.assert_called_once()
 
     def test_transcribe_processing_then_active(self, tmp_path: Path):
         """File starts in PROCESSING state, then becomes ACTIVE after polling."""
@@ -289,7 +290,7 @@ class TestGeminiTranscribe:
         mock_client.models.generate_content.return_value = mock_response
 
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -306,6 +307,7 @@ class TestGeminiTranscribe:
         assert len(segments) == 1
         # files.get should have been called (polling)
         mock_client.files.get.assert_called()
+        mock_genai.Client.return_value.__exit__.assert_called_once()
 
     def test_transcribe_raises_when_stuck_processing(self, tmp_path: Path):
         """File stuck in PROCESSING state should raise RuntimeError."""
@@ -323,7 +325,7 @@ class TestGeminiTranscribe:
         mock_client.files.get.return_value = mock_file  # Always PROCESSING
 
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -357,7 +359,7 @@ class TestGeminiTranscribe:
         mock_client.models.generate_content.return_value = mock_response
 
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -371,6 +373,91 @@ class TestGeminiTranscribe:
                 segments = transcriber.transcribe(wav)
 
         assert segments == []
+        mock_genai.Client.return_value.__exit__.assert_called_once()
+
+    def test_transcribe_closes_client_when_upload_raises(self, tmp_path: Path):
+        """Client context exits even when Files API upload raises."""
+        transcriber = GeminiTranscriber(api_key="test-key")
+
+        wav = tmp_path / "upload-fails.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        mock_client = MagicMock()
+        mock_client.files.upload.side_effect = RuntimeError("upload failed")
+
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
+
+        with patch.object(
+            GeminiTranscriber, "_compress_to_flac",
+            return_value=(wav, "audio/wav", None),
+        ), patch.dict("sys.modules", {
+            "google": MagicMock(genai=mock_genai),
+            "google.genai": mock_genai,
+            "google.genai.types": MagicMock(),
+        }):
+            with pytest.raises(RuntimeError, match="upload failed"):
+                transcriber.transcribe(wav)
+
+        mock_genai.Client.return_value.__exit__.assert_called_once()
+
+    def test_transcribe_closes_client_when_generate_raises(self, tmp_path: Path):
+        """Client context exits even when Gemini generation raises."""
+        transcriber = GeminiTranscriber(api_key="test-key")
+
+        wav = tmp_path / "generate-fails.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        mock_file = MagicMock()
+        mock_file.name = "files/fail"
+        mock_file.state.name = "ACTIVE"
+
+        mock_client = MagicMock()
+        mock_client.files.upload.return_value = mock_file
+        mock_client.models.generate_content.side_effect = ValueError("bad key")
+
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
+
+        with patch.object(
+            GeminiTranscriber, "_compress_to_flac",
+            return_value=(wav, "audio/wav", None),
+        ), patch.dict("sys.modules", {
+            "google": MagicMock(genai=mock_genai),
+            "google.genai": mock_genai,
+            "google.genai.types": MagicMock(),
+        }):
+            with pytest.raises(ValueError, match="bad key"):
+                transcriber.transcribe(wav)
+
+        mock_client.files.delete.assert_called_once_with(name="files/fail")
+        mock_genai.Client.return_value.__exit__.assert_called_once()
+
+    def test_transcribe_dictation_closes_client_when_upload_raises(self, tmp_path: Path):
+        """Dictation client context exits even when Files API upload raises."""
+        transcriber = GeminiTranscriber(api_key="test-key")
+
+        wav = tmp_path / "dictation-upload-fails.wav"
+        wav.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        mock_client = MagicMock()
+        mock_client.files.upload.side_effect = RuntimeError("upload failed")
+
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
+
+        with patch.object(
+            GeminiTranscriber, "_compress_to_flac",
+            return_value=(wav, "audio/wav", None),
+        ), patch.dict("sys.modules", {
+            "google": MagicMock(genai=mock_genai),
+            "google.genai": mock_genai,
+            "google.genai.types": MagicMock(),
+        }):
+            with pytest.raises(RuntimeError, match="upload failed"):
+                transcriber.transcribe_dictation(wav, ["general"])
+
+        mock_genai.Client.return_value.__exit__.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -760,7 +847,7 @@ class TestWaitForFileActive:
             text="[00:00] A: Hi.\n"
         )
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -775,6 +862,7 @@ class TestWaitForFileActive:
             transcriber.transcribe(wav)
 
         mock_wait.assert_called_once()
+        mock_genai.Client.return_value.__exit__.assert_called_once()
 
     def test_transcribe_dictation_uses_shared_helper(self, tmp_path: Path):
         """transcribe_dictation() polls via the same helper (no duplicate loop)."""
@@ -788,7 +876,7 @@ class TestWaitForFileActive:
             text='{"transcript": "hello", "slug": "test-memo-one", "project": "general"}'
         )
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -803,6 +891,7 @@ class TestWaitForFileActive:
             result = transcriber.transcribe_dictation(wav, ["general"])
 
         mock_wait.assert_called_once()
+        mock_genai.Client.return_value.__exit__.assert_called_once()
         assert result.transcript == "hello"
 
 
@@ -894,7 +983,7 @@ class TestEndClamping:
             text="[00:00] Speaker 1: Short clip.\n"
         )
         mock_genai = MagicMock()
-        mock_genai.Client.return_value = mock_client
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
 
         with patch.object(
             GeminiTranscriber, "_compress_to_flac",
@@ -908,3 +997,4 @@ class TestEndClamping:
 
         assert len(segments) == 1
         assert segments[0].end == pytest.approx(12.0, abs=0.01)
+        mock_genai.Client.return_value.__exit__.assert_called_once()

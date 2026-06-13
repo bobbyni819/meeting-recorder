@@ -9,8 +9,11 @@ from unittest.mock import patch
 import pytest
 
 from meeting_recorder.config import Config, DictationConfig, TranscriptionConfig
+from meeting_recorder.dictation import cli as dictation_cli
 from meeting_recorder.dictation.pipeline import (
+    FinalizeOutcome,
     _move_file,
+    _write_error,
     fallback_output_dir,
     finalize_recording,
     render_markdown,
@@ -192,6 +195,64 @@ def _make_config(tmp_path: Path, gemini_key: str = "test-key") -> Config:
     return config
 
 
+class TestDictationCliFinalize:
+    class _ImmediateThread:
+        def __init__(self, target, *args, **kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    class _FakeRecorder:
+        def stop(self):
+            return 1.0
+
+    def test_finalize_crash_removes_temp_audio(self, tmp_path, monkeypatch):
+        temp_wav = tmp_path / "dictation-temp.wav"
+        temp_wav.write_bytes(b"fake wav bytes")
+
+        def crash_finalize(**kwargs):
+            raise RuntimeError("boom")
+
+        session = dictation_cli._DictationSession(_make_config(tmp_path))
+        session._recorder = self._FakeRecorder()
+        session._started_at = datetime(2026, 4, 21, 14, 37, 22)
+        session._temp_audio = temp_wav
+
+        monkeypatch.setattr(dictation_cli, "finalize_recording", crash_finalize)
+        monkeypatch.setattr(dictation_cli.threading, "Thread", self._ImmediateThread)
+
+        session._stop_locked()
+
+        assert not temp_wav.exists()
+
+    def test_finalize_normal_return_keeps_pipeline_preserved_audio(
+        self, tmp_path, monkeypatch,
+    ):
+        temp_wav = tmp_path / "dictation-temp.wav"
+        temp_wav.write_bytes(b"fake wav bytes")
+
+        def preserve_audio(temp_audio, **kwargs):
+            return FinalizeOutcome(
+                audio_path=temp_audio,
+                transcript_path=None,
+                error_path=temp_audio.with_suffix(".error"),
+                result=None,
+            )
+
+        session = dictation_cli._DictationSession(_make_config(tmp_path))
+        session._recorder = self._FakeRecorder()
+        session._started_at = datetime(2026, 4, 21, 14, 37, 22)
+        session._temp_audio = temp_wav
+
+        monkeypatch.setattr(dictation_cli, "finalize_recording", preserve_audio)
+        monkeypatch.setattr(dictation_cli.threading, "Thread", self._ImmediateThread)
+
+        session._stop_locked()
+
+        assert temp_wav.exists()
+
+
 class TestFinalizeRecording:
     def test_success_routes_to_project_folder(self, tmp_path):
         # Simulate existing project folder
@@ -343,6 +404,33 @@ class TestFinalizeRecording:
         assert "gemini_api_key" in outcome.error_path.read_text(encoding="utf-8")
         assert outcome.audio_path.exists()
         assert outcome.audio_path.parent == tmp_path / "voice-memos" / "2026-04-21"
+
+    def test_write_error_keeps_temp_audio_when_fallback_mkdir_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        temp_wav = tmp_path / "temp.wav"
+        temp_wav.write_bytes(b"fake wav bytes")
+
+        def fail_mkdir(path, *args, **kwargs):
+            raise PermissionError("drive offline")
+
+        monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+
+        outcome = _write_error(
+            temp_audio=temp_wav,
+            drive_root=tmp_path / "offline-drive",
+            recorded_at=datetime(2026, 4, 21, 14, 37, 22),
+            hhmm="1437",
+            message="drive offline",
+        )
+
+        assert outcome.result is None
+        assert outcome.transcript_path is None
+        assert outcome.audio_path == temp_wav
+        assert outcome.audio_path.exists()
+        assert outcome.error_path == temp_wav.with_suffix(".error")
+        assert outcome.error_path.exists()
+        assert "drive offline" in outcome.error_path.read_text(encoding="utf-8")
 
     def test_markdown_write_failure_keeps_audio_and_writes_error(
         self, tmp_path, monkeypatch,

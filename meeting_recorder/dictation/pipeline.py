@@ -126,9 +126,9 @@ def finalize_recording(
         )
 
     model = config.dictation.gemini_model or config.transcription.gemini_model or ""
-    transcriber = GeminiTranscriber(api_key=api_key, model=model)
 
     try:
+        transcriber = GeminiTranscriber(api_key=api_key, model=model)
         result = transcriber.transcribe_dictation(
             temp_audio,
             project_choices=list(config.dictation.project_list),
@@ -204,9 +204,20 @@ def _write_error(
 ) -> FinalizeOutcome:
     """Move *temp_audio* to the fallback dir and write a ``.error`` sidecar."""
     fallback_dir = fallback_output_dir(drive_root, recorded_at)
-    fallback_dir.mkdir(parents=True, exist_ok=True)
-    audio_path = fallback_dir / f"{hhmm}-recording.wav"
-    _move_file(temp_audio, audio_path)
+    try:
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.exception("Could not create dictation fallback dir: %s", fallback_dir)
+        audio_path = temp_audio
+    else:
+        audio_path = fallback_dir / f"{hhmm}-recording.wav"
+        try:
+            _move_file(temp_audio, audio_path)
+        except Exception:
+            logger.exception(
+                "Could not move dictation audio to fallback dir: %s", audio_path
+            )
+            audio_path = temp_audio
 
     return _write_error_at_audio(audio_path, message)
 

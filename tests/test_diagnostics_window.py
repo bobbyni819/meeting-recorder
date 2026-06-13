@@ -128,6 +128,9 @@ class TestRateLimitClassification:
         config.summary.api_key = ""
 
         mock_client = MagicMock()
+        # diagnose now uses `with genai.Client(...) as client:` — make the mock
+        # yield itself so the configured side_effect is the one that fires.
+        mock_client.__enter__.return_value = mock_client
         mock_client.models.generate_content.side_effect = Exception(
             "429 RESOURCE_EXHAUSTED. Quota exceeded for free tier."
         )

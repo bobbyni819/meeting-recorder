@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -611,6 +612,66 @@ class TestSearchResult:
 
 class TestClose:
     """Test close()."""
+
+    def test_context_manager_closes_connection(self, tmp_path: Path):
+        idx = RecordingIndex(db_path=tmp_path / "test.db")
+
+        with idx as opened:
+            assert opened is idx
+            opened._connect()
+            assert opened._conn is not None
+
+        assert idx._conn is None
+
+    def test_context_manager_closes_after_index_recording_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        idx = RecordingIndex(db_path=tmp_path / "test.db")
+
+        def raise_after_connect(recording_dir: Path) -> bool:
+            idx._connect()
+            raise RuntimeError("index failed")
+
+        monkeypatch.setattr(idx, "index_recording", raise_after_connect)
+
+        with pytest.raises(RuntimeError, match="index failed"):
+            with idx:
+                idx.index_recording(tmp_path)
+
+        assert idx._conn is None
+
+    def test_connect_failure_after_open_closes_connection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        idx = RecordingIndex(db_path=tmp_path / "test.db")
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            opened.append(conn)
+            return conn
+
+        def raise_schema() -> None:
+            raise RuntimeError("schema failed")
+
+        monkeypatch.setattr(
+            "meeting_recorder.search.index.sqlite3.connect",
+            tracking_connect,
+        )
+        monkeypatch.setattr(idx, "ensure_schema", raise_schema)
+
+        with pytest.raises(RuntimeError, match="schema failed"):
+            idx._connect()
+
+        assert idx._conn is None
+        assert opened
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")
 
     def test_close_active_connection(self, index: RecordingIndex):
         index._connect()

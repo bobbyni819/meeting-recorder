@@ -911,11 +911,11 @@ class SettingsWindow:
 
             try:
                 from google import genai
-                client = genai.Client(api_key=key)
                 model = self._gemini_model_var.get().strip() or "gemini-2.0-flash"
-                response = client.models.generate_content(
-                    model=model, contents="Reply with just the word OK",
-                )
+                with genai.Client(api_key=key) as client:
+                    response = client.models.generate_content(
+                        model=model, contents="Reply with just the word OK",
+                    )
                 if response and response.text:
                     _safe_after(0, lambda: self._gemini_test_btn.configure(text="OK!", state="normal"))
                 else:

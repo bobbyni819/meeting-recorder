@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,6 +17,7 @@ from meeting_recorder.summary.summarizer import (
     ParticipantStats,
     OpenAISummaryProvider,
     AnthropicSummaryProvider,
+    GeminiSummaryProvider,
     compute_participant_stats,
     create_provider,
     format_participant_stats,
@@ -326,6 +328,102 @@ class TestCreateProvider:
         config = MockSummaryConfig(provider="openai", api_key="")
         with pytest.raises(ValueError, match="API key is required"):
             create_provider(config)
+
+
+# ---------------------------------------------------------------------------
+# provider client lifetime
+# ---------------------------------------------------------------------------
+
+class TestSummaryProviderClientLifetime:
+    def test_openai_provider_closes_client_on_success(self):
+        provider = OpenAISummaryProvider(api_key="sk-test", model="gpt-test")
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content='{"summary":"ok"}'))]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            result = provider.generate("system", "user")
+
+        assert result == '{"summary":"ok"}'
+        mock_openai.OpenAI.return_value.__exit__.assert_called_once()
+
+    def test_openai_provider_closes_client_on_exception(self):
+        provider = OpenAISummaryProvider(api_key="sk-test", model="gpt-test")
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("openai failed")
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            with pytest.raises(RuntimeError, match="openai failed"):
+                provider.generate("system", "user")
+
+        mock_openai.OpenAI.return_value.__exit__.assert_called_once()
+
+    def test_anthropic_provider_closes_client_on_success(self):
+        provider = AnthropicSummaryProvider(api_key="sk-ant-test", model="claude-test")
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"summary":"ok"}')]
+        mock_client.messages.create.return_value = mock_response
+        mock_anthropic = MagicMock()
+        mock_anthropic.Anthropic.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+            result = provider.generate("system", "user")
+
+        assert result == '{"summary":"ok"}'
+        mock_anthropic.Anthropic.return_value.__exit__.assert_called_once()
+
+    def test_anthropic_provider_closes_client_on_exception(self):
+        provider = AnthropicSummaryProvider(api_key="sk-ant-test", model="claude-test")
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = RuntimeError("anthropic failed")
+        mock_anthropic = MagicMock()
+        mock_anthropic.Anthropic.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+            with pytest.raises(RuntimeError, match="anthropic failed"):
+                provider.generate("system", "user")
+
+        mock_anthropic.Anthropic.return_value.__exit__.assert_called_once()
+
+    def test_gemini_provider_closes_client_on_success(self):
+        provider = GeminiSummaryProvider(api_key="test-key", model="gemini-test")
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = MagicMock(text='{"summary":"ok"}')
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {
+            "google": MagicMock(genai=mock_genai),
+            "google.genai": mock_genai,
+            "google.genai.types": MagicMock(),
+        }):
+            result = provider.generate("system", "user")
+
+        assert result == '{"summary":"ok"}'
+        mock_genai.Client.return_value.__exit__.assert_called_once()
+
+    def test_gemini_provider_closes_client_on_exception(self):
+        provider = GeminiSummaryProvider(api_key="test-key", model="gemini-test")
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = RuntimeError("gemini failed")
+        mock_genai = MagicMock()
+        mock_genai.Client.return_value.__enter__.return_value = mock_client
+
+        with patch.dict("sys.modules", {
+            "google": MagicMock(genai=mock_genai),
+            "google.genai": mock_genai,
+            "google.genai.types": MagicMock(),
+        }):
+            with pytest.raises(RuntimeError, match="gemini failed"):
+                provider.generate("system", "user")
+
+        mock_genai.Client.return_value.__exit__.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

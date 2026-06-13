@@ -1118,9 +1118,8 @@ class MeetingRecorderApp:
         try:
             from meeting_recorder.search.index import RecordingIndex
 
-            index = RecordingIndex()
-            added, removed = index.sync(self.config.output_dir)
-            index.close()
+            with RecordingIndex() as index:
+                added, removed = index.sync(self.config.output_dir)
             if added or removed:
                 logger.info("Search index synced: %d added, %d removed", added, removed)
         except Exception:
@@ -1131,9 +1130,8 @@ class MeetingRecorderApp:
         try:
             from meeting_recorder.search.index import RecordingIndex
 
-            index = RecordingIndex()
-            index.index_recording(recording_dir)
-            index.close()
+            with RecordingIndex() as index:
+                index.index_recording(recording_dir)
         except Exception:
             logger.exception("Search indexing failed (non-fatal)")
 

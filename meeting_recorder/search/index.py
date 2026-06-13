@@ -44,14 +44,24 @@ class RecordingIndex:
         self._db_path = db_path or DB_PATH
         self._conn: Optional[sqlite3.Connection] = None
 
+    def __enter__(self) -> "RecordingIndex":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self._db_path))
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._conn.row_factory = sqlite3.Row
-            self.ensure_schema()
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._conn.row_factory = sqlite3.Row
+                self.ensure_schema()
+            except Exception:
+                self.close()
+                raise
         return self._conn
 
     def ensure_schema(self) -> None:

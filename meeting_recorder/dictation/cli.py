@@ -57,6 +57,7 @@ class _DictationSession:
         print(f"■ Stopped after {duration:.1f}s — transcribing…")
 
         def _finalize():
+            crashed = False
             try:
                 outcome = finalize_recording(
                     temp_audio=temp,
@@ -70,8 +71,17 @@ class _DictationSession:
                     print(f"✗ Transcription failed; audio kept at {outcome.audio_path}")
                     print(f"  Error: {outcome.error_path}")
             except Exception:
+                crashed = True
                 logger.exception("Dictation finalize failed unexpectedly")
                 print("✗ Finalize crashed — see log")
+            finally:
+                if crashed and temp.exists():
+                    try:
+                        temp.unlink()
+                    except OSError:
+                        logger.debug(
+                            "Could not remove crashed dictation temp audio: %s", temp
+                        )
 
         threading.Thread(target=_finalize, name="dictation-finalize", daemon=True).start()
 
