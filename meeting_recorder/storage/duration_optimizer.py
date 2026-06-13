@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -114,7 +115,7 @@ def analyze_duration_optimization(
         total_meetings += len(durations)
         avg = sum(durations) / len(durations)
         sorted_d = sorted(durations)
-        median = sorted_d[len(sorted_d) // 2]
+        median = statistics.median(sorted_d)
         min_d = sorted_d[0]
         max_d = sorted_d[-1]
 

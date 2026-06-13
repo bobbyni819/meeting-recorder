@@ -109,6 +109,13 @@ class TestGenerateDailySummary:
         assert summary is not None
         assert summary.busiest_hour.startswith("09:")
 
+    def test_busiest_hour_wraps_after_23(self, tmp_path):
+        today = date(2026, 3, 13)
+        _make_rec(tmp_path, today, "23-00", "Late Meeting", 3600)
+        summary = generate_daily_summary(tmp_path, target_date=today)
+        assert summary is not None
+        assert summary.busiest_hour == "23:00-00:00"
+
     def test_time_extracted(self, tmp_path):
         today = date(2026, 3, 13)
         _make_rec(tmp_path, today, "14-30", "Afternoon Meeting", 1800)

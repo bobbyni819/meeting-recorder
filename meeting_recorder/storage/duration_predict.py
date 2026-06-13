@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,7 +89,7 @@ def predict_durations(
         durations = [d for _, d in entries]
         avg = sum(durations) / len(durations)
         sorted_durs = sorted(durations)
-        median = sorted_durs[len(sorted_durs) // 2]
+        median = statistics.median(durations)
         std = (sum((d - avg) ** 2 for d in durations) / len(durations)) ** 0.5
 
         # Trend: compare first half to second half

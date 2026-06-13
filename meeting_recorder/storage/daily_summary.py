@@ -174,7 +174,8 @@ def generate_daily_summary(
     busiest = ""
     if hour_minutes:
         peak_hour = max(hour_minutes, key=lambda h: hour_minutes[h])
-        busiest = f"{peak_hour:02d}:00-{peak_hour + 1:02d}:00"
+        next_hour = (peak_hour + 1) % 24
+        busiest = f"{peak_hour:02d}:00-{next_hour:02d}:00"
 
     return DailySummary(
         date=date_str,

@@ -98,6 +98,20 @@ class TestAnalyzeDurationOptimization:
         assert report.suggestions[0].subject == "Standup"
         assert report.suggestions[0].avg_duration_min == 30.0
 
+    def test_even_length_median_averages_middle_values(self, tmp_path):
+        for i, minutes in enumerate([100, 200, 300, 400]):
+            _make_rec(tmp_path, _this_week(-i), "Planning", minutes * 60)
+        report = analyze_duration_optimization(tmp_path)
+        assert report is not None
+        assert report.suggestions[0].median_duration_min == 250.0
+
+    def test_odd_length_median_unchanged(self, tmp_path):
+        for i, minutes in enumerate([100, 200, 300]):
+            _make_rec(tmp_path, _this_week(-i), "Planning", minutes * 60)
+        report = analyze_duration_optimization(tmp_path)
+        assert report is not None
+        assert report.suggestions[0].median_duration_min == 200.0
+
     def test_multiple_meeting_types(self, tmp_path):
         for i in range(3):
             d = _this_week(-i)

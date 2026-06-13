@@ -64,8 +64,10 @@ def calculate_roi(
     # Count action items
     action_count = 0
     try:
-        from meeting_recorder.storage.action_items import extract_action_items
-        items = extract_action_items(rec_path)
+        from meeting_recorder.storage.action_items import (
+            extract_action_items_for_recording,
+        )
+        items = extract_action_items_for_recording(rec_path, meta)
         action_count = len(items)
     except Exception:
         pass

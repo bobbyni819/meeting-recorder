@@ -78,6 +78,20 @@ class TestPredictDurations:
         assert pred.avg_minutes > 0
         assert pred.min_minutes <= pred.avg_minutes <= pred.max_minutes
 
+    def test_even_length_median_averages_middle_values(self, tmp_path):
+        for i, minutes in enumerate([100, 200, 300, 400]):
+            _make_rec(tmp_path, f"2026-03-{10+i:02d}_09-00-00_Sprint{i}",
+                      duration=minutes * 60, subject="Sprint Review")
+        preds = predict_durations(tmp_path, min_occurrences=4)
+        assert preds[0].median_minutes == 250.0
+
+    def test_odd_length_median_unchanged(self, tmp_path):
+        for i, minutes in enumerate([100, 200, 300]):
+            _make_rec(tmp_path, f"2026-03-{10+i:02d}_09-00-00_Sprint{i}",
+                      duration=minutes * 60, subject="Sprint Review")
+        preds = predict_durations(tmp_path)
+        assert preds[0].median_minutes == 200.0
+
     def test_multiple_series(self, tmp_path):
         for i in range(3):
             _make_rec(tmp_path, f"2026-03-{10+i:02d}_09-00-00_Sprint{i}",

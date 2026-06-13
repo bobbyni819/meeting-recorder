@@ -77,6 +77,21 @@ class TestCalculateROI:
         assert roi.decision_count >= 2
         assert roi.output_count >= 2
 
+    def test_counts_action_items_from_recording_transcript(self, tmp_path):
+        rec = _make_rec(
+            tmp_path, "2026-03-10_09-00-00_Test",
+            duration=1800,
+            attendees=["Alice", "Bob"],
+            action_items=[
+                "prepare the launch checklist before Friday",
+                "review the analytics dashboard with the team",
+                "schedule the customer feedback review next week",
+            ],
+        )
+        roi = calculate_roi(rec)
+        assert roi is not None
+        assert roi.action_item_count > 0
+
     def test_no_outputs(self, tmp_path):
         rec = _make_rec(
             tmp_path, "2026-03-10_09-00-00_Test",

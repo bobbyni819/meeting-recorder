@@ -125,7 +125,11 @@ def _build_context(rec_path: Path, meta: dict) -> dict:
     if ai_path.exists():
         try:
             with open(ai_path, "r", encoding="utf-8") as f:
-                ctx["action_items"] = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                ctx["action_items"] = [
+                    item for item in loaded if isinstance(item, dict)
+                ]
         except Exception:
             pass
 

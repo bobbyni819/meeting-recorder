@@ -91,6 +91,22 @@ class TestBuildContext:
         ctx = _build_context(rec, meta)
         assert len(ctx["action_items"]) == 1
 
+    def test_action_items_dict_shape_ignored(self, tmp_path):
+        rec = _make_rec(tmp_path)
+        (rec / "action_items.json").write_text(
+            json.dumps({"task": "x"}), encoding="utf-8"
+        )
+        text = render_template("standard", rec)
+        assert "# Team StandUp" in text
+
+    def test_action_items_non_dict_list_entries_ignored(self, tmp_path):
+        rec = _make_rec(tmp_path)
+        (rec / "action_items.json").write_text(
+            json.dumps(["text"]), encoding="utf-8"
+        )
+        text = render_template("standard", rec)
+        assert "# Team StandUp" in text
+
     def test_hour_duration(self, tmp_path):
         rec = _make_rec(tmp_path, meta={"duration_seconds": 7200})
         meta = json.loads((rec / "metadata.json").read_text(encoding="utf-8"))
