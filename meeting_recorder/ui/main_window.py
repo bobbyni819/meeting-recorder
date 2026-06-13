@@ -3453,6 +3453,124 @@ class MainWindow:
             export_btn.bind("<Enter>", lambda e: export_btn.configure(fg=TEXT_COLOR))
             export_btn.bind("<Leave>", lambda e: export_btn.configure(fg=TEXT_DIM))
 
+        # Import transcript button (Zoom captions / VTT)
+        import_btn = tk.Label(
+            tab_frame, text="\u21ea Import", font=("Segoe UI", 9),
+            fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
+        )
+        import_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+
+        def _format_import_speakers(speakers) -> str:
+            if isinstance(speakers, (list, tuple, set)):
+                names = ", ".join(str(s) for s in speakers if s)
+            elif speakers:
+                names = str(speakers)
+            else:
+                names = ""
+            return names or "(none)"
+
+        def _confirm_caption_import(caption_path: Path) -> bool:
+            from tkinter import messagebox
+
+            return messagebox.askyesno(
+                "Import Captions",
+                "Import captions from:\n\n"
+                f"{caption_path.name}\n\n"
+                "This will replace the current transcript. "
+                "The original will be preserved as transcript.original.*.",
+                parent=self._window,
+            )
+
+        def _show_caption_import_error(exc: Exception) -> None:
+            logger.exception("Caption import failed")
+            self.add_notification(
+                "error", f"Caption import failed: {exc}", source="import")
+
+        def _run_caption_import(import_func, caption_path: Path) -> None:
+            try:
+                result = import_func(rec_path, caption_path)
+                speakers = _format_import_speakers(result.get("speakers"))
+                message = (
+                    f"Imported {result.get('segments', 0)} segments, "
+                    f"speakers: {speakers}."
+                )
+                if result.get("backed_up_original"):
+                    message += (
+                        " Original transcript preserved as transcript.original.*"
+                    )
+                self.add_notification("success", message, source="import")
+                self._show_recording_detail(rec_path)
+            except Exception as exc:
+                _show_caption_import_error(exc)
+
+        def _auto_detect_zoom_captions() -> None:
+            try:
+                from meeting_recorder.transcription.vtt_import import (
+                    find_zoom_caption_for_recording,
+                    import_zoom_caption_to_recording,
+                )
+
+                found = find_zoom_caption_for_recording(rec_path)
+                if found is None:
+                    self.add_notification(
+                        "info",
+                        "No matching Zoom caption found under ~/Documents/Zoom",
+                        source="import",
+                    )
+                    return
+                caption_path = Path(found)
+                if _confirm_caption_import(caption_path):
+                    _run_caption_import(
+                        import_zoom_caption_to_recording, caption_path)
+            except Exception as exc:
+                _show_caption_import_error(exc)
+
+        def _choose_caption_file() -> None:
+            try:
+                from tkinter import filedialog
+                from meeting_recorder.transcription.vtt_import import (
+                    import_vtt_to_recording,
+                    import_zoom_caption_to_recording,
+                )
+
+                file_path = filedialog.askopenfilename(
+                    parent=self._window,
+                    title="Import Caption File",
+                    filetypes=[
+                        ("Caption/transcript", "*.vtt *.txt *.srt"),
+                        ("All files", "*.*"),
+                    ],
+                )
+                if not file_path:
+                    return
+                caption_path = Path(file_path)
+                if not _confirm_caption_import(caption_path):
+                    return
+                if caption_path.name.lower().endswith(".vtt"):
+                    _run_caption_import(import_vtt_to_recording, caption_path)
+                else:
+                    _run_caption_import(
+                        import_zoom_caption_to_recording, caption_path)
+            except Exception as exc:
+                _show_caption_import_error(exc)
+
+        def _show_import_menu(event):
+            menu = tk.Menu(self._window, tearoff=0, bg=BG_PANEL, fg=TEXT_COLOR,
+                           activebackground=BLUE_ACCENT, activeforeground=TEXT_BRIGHT)
+            menu.add_command(
+                label="Auto-detect Zoom captions",
+                command=_auto_detect_zoom_captions,
+            )
+            menu.add_command(
+                label="Choose caption file...",
+                command=_choose_caption_file,
+            )
+            menu.post(event.x_root, event.y_root)
+
+        import_btn.bind("<Button-1>", _show_import_menu)
+        import_btn.bind("<Enter>", lambda e: import_btn.configure(fg=TEXT_COLOR))
+        import_btn.bind("<Leave>", lambda e: import_btn.configure(fg=TEXT_DIM))
+
         transcript_btn.bind("<Button-1>", lambda e: _switch_tab("transcript", transcript_text, transcript_btn))
         summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
         details_btn.bind("<Button-1>", lambda e: _switch_tab("details", details_text, details_btn))

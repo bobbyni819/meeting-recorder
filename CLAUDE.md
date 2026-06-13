@@ -291,6 +291,7 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 - **Config export/import**: buttons in Settings > Storage tab for multi-machine portability
 - **Hotkeys tab**: all 4 global hotkeys editable in Settings, window shortcuts reference
 - **HTML export**: self-contained HTML reports with dark theme, speaker stats, action items
+- **Detail transcript import**: Import button auto-detects Zoom captions or picks a VTT/caption file; replaces transcript and preserves original
 - **Auto-tag suggestions**: topic-pattern matching + keyword extraction, wired into post-processing
 - **Action items**: auto-extracts commitments, assignments, directives from transcripts (Actions tab)
 - **Tag filter pills**: clickable tag pills above filter bar for quick filtering
