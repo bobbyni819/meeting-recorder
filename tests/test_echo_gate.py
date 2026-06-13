@@ -13,6 +13,7 @@ from meeting_recorder.audio.echo_gate import (
     EchoGate,
     FarEndReference,
     echo_explained_variance,
+    streaming_echo_report,
 )
 
 SR = 16000
@@ -268,3 +269,36 @@ class TestCaptureManagerWiring:
         mgr = self._make_manager(echo_gate_enabled=True)
         # Odd-length / garbage bytes must not crash the writer thread.
         assert mgr._is_echo_chunk(b"\x01\x02\x03") in (True, False)
+
+
+# --------------------------------------------------------------------------
+# streaming_echo_report (the probe-echo CLI core)
+# --------------------------------------------------------------------------
+class TestStreamingReport:
+    def test_all_echo_high_drop_rate(self):
+        # mic is a delayed copy of app for its whole length -> high drop rate.
+        app = _chirp(16000 * 3, seed=40)
+        delay = 1280
+        mic = np.concatenate([
+            np.zeros(delay, dtype=np.int16),
+            (app[:len(app) - delay] * 0.4).astype(np.int16),
+        ])
+        rep = streaming_echo_report(app, mic, sample_rate=SR)
+        assert rep["frames"] > 0
+        assert rep["drop_pct_of_nonsilent"] > 70
+        assert len(rep["example_drop_times_sec"]) > 0
+
+    def test_independent_low_drop_rate(self):
+        app = _chirp(16000 * 3, seed=41)
+        mic = _noise(16000 * 3, seed=123)  # unrelated near-end
+        rep = streaming_echo_report(app, mic, sample_rate=SR)
+        assert rep["drop_pct_of_nonsilent"] < 10
+
+    def test_report_shape(self):
+        app = _noise(16000, seed=1)
+        mic = _noise(16000, seed=2)
+        rep = streaming_echo_report(app, mic, sample_rate=SR)
+        assert set(rep) == {
+            "frames", "nonsilent", "dropped",
+            "drop_pct_of_nonsilent", "example_drop_times_sec",
+        }

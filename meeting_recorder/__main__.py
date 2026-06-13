@@ -212,6 +212,69 @@ def main() -> None:
             print(f"Total: {stats['total']}, archived: {stats['archived']}, "
                   f"unarchived: {stats['unarchived']}")
             sys.exit(0)
+        elif cmd == "probe-echo":
+            # Read-only: replay a recording's app_audio.wav (far-end) + mic
+            # through the echo gate and report how much it would drop. Use this
+            # to validate / tune echo gating on your own recordings before
+            # enabling recording.echo_gate.
+            import wave
+            from pathlib import Path as _Path
+
+            import numpy as _np
+
+            from meeting_recorder.audio.echo_gate import (
+                EchoGate,
+                streaming_echo_report,
+            )
+
+            args = sys.argv[2:]
+            if not args or args[0] in ("-h", "--help"):
+                print(
+                    "Usage: python -m meeting_recorder probe-echo <recording-dir>"
+                    " [--threshold 0.5]\n\n"
+                    "Replays app_audio.wav (the meeting audio = echo reference)\n"
+                    "against mic_audio.wav and reports what fraction of your mic\n"
+                    "frames are just the meeting echoing through your speakers.\n"
+                    "Read-only — it never modifies the recording."
+                )
+                sys.exit(0 if args else 1)
+            rec_dir = _Path(args[0]).expanduser()
+            app_p, mic_p = rec_dir / "app_audio.wav", rec_dir / "mic_audio.wav"
+            if not app_p.exists() or not mic_p.exists():
+                print(f"Need both app_audio.wav and mic_audio.wav in {rec_dir}")
+                sys.exit(1)
+            thr = 0.5
+            if "--threshold" in args:
+                thr = float(args[args.index("--threshold") + 1])
+
+            def _load(p):
+                with wave.open(str(p), "rb") as w:
+                    sr, ch = w.getframerate(), w.getnchannels()
+                    d = _np.frombuffer(w.readframes(w.getnframes()), dtype=_np.int16)
+                if ch == 2:
+                    d = d.reshape(-1, 2).mean(axis=1).astype(_np.int16)
+                return d, sr
+
+            app, sr = _load(app_p)
+            mic, _ = _load(mic_p)
+            rep = streaming_echo_report(
+                app, mic, sample_rate=sr, gate=EchoGate(sample_rate=sr, echo_r2=thr)
+            )
+            print(f"Recording: {rec_dir.name}")
+            print(f"  app(far-end)={len(app)/sr:.0f}s  mic={len(mic)/sr:.0f}s  threshold={thr}")
+            print(f"  mic frames: {rep['frames']}  non-silent: {rep['nonsilent']}")
+            print(f"  would drop as echo: {rep['dropped']} "
+                  f"({rep['drop_pct_of_nonsilent']:.1f}% of non-silent)")
+            if rep["example_drop_times_sec"]:
+                print(f"  first drops at (s): {rep['example_drop_times_sec']}")
+            hi = rep["drop_pct_of_nonsilent"]
+            print("  => " + (
+                "little/no speaker echo (likely headphones, or a clean setup)"
+                if hi < 2 else
+                f"meaningful echo detected — enabling recording.echo_gate would "
+                f"clean ~{hi:.0f}% of your mic track"
+            ))
+            sys.exit(0)
 
     # Configure logging
     logging.basicConfig(

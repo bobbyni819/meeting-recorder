@@ -215,3 +215,42 @@ class EchoGate:
             self.frames_dropped += 1
             return True
         return False
+
+
+def streaming_echo_report(
+    app: np.ndarray,
+    mic: np.ndarray,
+    sample_rate: int = _DEFAULT_SAMPLE_RATE,
+    chunk: int = 512,
+    gate: "EchoGate | None" = None,
+) -> dict:
+    """Replay far-end (app) + mic through the gate in lockstep; return stats.
+
+    Read-only analysis used by the ``probe-echo`` CLI to validate echo gating
+    on an existing recording without touching it. Both inputs are int16 mono at
+    ``sample_rate``. Returns frame counts, the drop rate over *non-silent* mic
+    frames (the meaningful denominator), and the start time of the first few
+    dropped frames so the user can spot-check them.
+    """
+    gate = gate or EchoGate(sample_rate=sample_rate)
+    ref = FarEndReference(sample_rate=sample_rate)
+    n = min(len(app), len(mic)) // chunk
+    nonsilent = dropped = 0
+    examples: list[float] = []
+    for i in range(n):
+        a = app[i * chunk:(i + 1) * chunk]
+        m = mic[i * chunk:(i + 1) * chunk]
+        ref.push(a)
+        if _rms(m) >= gate.silence_rms:
+            nonsilent += 1
+        if gate.is_echo(m, ref.snapshot()):
+            dropped += 1
+            if len(examples) < 10:
+                examples.append(round(i * chunk / sample_rate, 1))
+    return {
+        "frames": n,
+        "nonsilent": nonsilent,
+        "dropped": dropped,
+        "drop_pct_of_nonsilent": (100.0 * dropped / nonsilent) if nonsilent else 0.0,
+        "example_drop_times_sec": examples,
+    }
