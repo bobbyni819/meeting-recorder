@@ -99,7 +99,7 @@ def compute_engagement(
         try:
             with open(dec_path, "r", encoding="utf-8") as f:
                 dec_data = json.load(f)
-            decision_count = len(dec_data.get("decisions", []))
+            decision_count = len(dec_data.get("decisions") or [])
         except Exception:
             pass
 

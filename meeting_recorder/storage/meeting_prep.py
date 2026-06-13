@@ -104,7 +104,7 @@ def generate_prep(
     attendees: list[str] = []
     seen: set[str] = set()
     for _, _, meta in reversed(matches[-5:]):
-        for att in meta.get("meeting_attendees", []):
+        for att in (meta.get("meeting_attendees") or []):
             att_lower = att.strip().lower()
             if att_lower and att_lower not in seen:
                 seen.add(att_lower)

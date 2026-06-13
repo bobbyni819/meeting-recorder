@@ -221,7 +221,7 @@ def _score_transcript(recording_dir: Path) -> dict:
         with open(transcript_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        segments = data.get("segments", [])
+        segments = data.get("segments") or []
         if not segments:
             return {"score": 0, "details": {"error": "no segments"}}
 

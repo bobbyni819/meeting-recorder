@@ -117,7 +117,7 @@ def generate_recap(
         try:
             with open(dec_path, "r", encoding="utf-8") as f:
                 dec_data = json.load(f)
-            dec_list = dec_data.get("decisions", []) if isinstance(dec_data, dict) else dec_data
+            dec_list = (dec_data.get("decisions") or []) if isinstance(dec_data, dict) else dec_data
             for d in dec_list:
                 desc = d.get("description", "") if isinstance(d, dict) else str(d)
                 if desc and len(desc) > 10:

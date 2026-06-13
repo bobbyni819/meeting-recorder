@@ -80,7 +80,7 @@ def analyze_talk_balance(
     speaker_map = meta.get("speaker_map", {})
     speaker_times: dict[str, float] = {}
 
-    for seg in tdata.get("segments", []):
+    for seg in (tdata.get("segments") or []):
         spk = seg.get("speaker", "Unknown")
         spk = speaker_map.get(spk, spk)
         dur = max(0, seg.get("end", 0) - seg.get("start", 0))

@@ -67,7 +67,7 @@ def analyze_velocity(
         try:
             with open(dec_path, "r", encoding="utf-8") as f:
                 dec_data = json.load(f)
-            dec_list = dec_data.get("decisions", []) if isinstance(dec_data, dict) else dec_data
+            dec_list = (dec_data.get("decisions") or []) if isinstance(dec_data, dict) else dec_data
             decision_count = len(dec_list)
         except Exception:
             pass
@@ -92,7 +92,7 @@ def analyze_velocity(
         try:
             with open(transcript_path, "r", encoding="utf-8") as f:
                 tdata = json.load(f)
-            segments = tdata.get("segments", [])
+            segments = tdata.get("segments") or []
             prev_speaker = ""
             prev_keywords: set[str] = set()
             for seg in segments:

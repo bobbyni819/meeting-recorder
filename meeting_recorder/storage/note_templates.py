@@ -79,12 +79,12 @@ def _build_context(rec_path: Path, meta: dict) -> dict:
         "duration": "",
         "app": meta.get("app_name", ""),
         "organizer": meta.get("meeting_organizer", ""),
-        "attendees": meta.get("meeting_attendees", []),
+        "attendees": meta.get("meeting_attendees") or [],
         "speakers": meta.get("speaker_count", 0),
         "summary": "",
         "transcript": "",
         "action_items": [],
-        "tags": meta.get("tags", []),
+        "tags": meta.get("tags") or [],
     }
 
     # Parse date/time from folder name

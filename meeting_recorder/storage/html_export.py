@@ -55,7 +55,7 @@ def generate_html_report(rec_path: Path, meta: dict | None = None) -> str:
     speakers = meta.get("speaker_count", 0)
 
     # Attendees
-    attendees = meta.get("meeting_attendees", [])
+    attendees = meta.get("meeting_attendees") or []
     organizer = meta.get("meeting_organizer", "")
 
     # Read transcript and summary
@@ -584,7 +584,7 @@ def _build_speaker_stats(rec_path: Path) -> str:
         return ""
 
     speaker_times: dict[str, float] = {}
-    for seg in data.get("segments", []):
+    for seg in (data.get("segments") or []):
         spk = seg.get("speaker", "Unknown")
         start = seg.get("start", 0.0)
         end = seg.get("end", 0.0)

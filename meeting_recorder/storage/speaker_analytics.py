@@ -66,7 +66,7 @@ def analyze_speakers(
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if not segments:
         return None
 

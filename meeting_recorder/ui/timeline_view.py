@@ -53,7 +53,7 @@ def load_timeline_data(rec_path: Path) -> Optional[dict]:
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if not segments:
         return None
 

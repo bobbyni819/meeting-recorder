@@ -158,7 +158,7 @@ def suggest_tags_for_recording(rec_path: Path, meta: dict | None = None) -> list
         except Exception:
             pass
 
-    existing_tags = meta.get("tags", [])
+    existing_tags = meta.get("tags") or []
 
     # Read transcript
     transcript = ""

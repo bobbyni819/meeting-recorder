@@ -109,6 +109,20 @@ class TestCompareRecordings:
         assert result.attendees_both == []
         assert result.duration_change == 0
 
+    def test_null_attendees_do_not_raise(self, tmp_path: Path):
+        a = _make_rec(tmp_path, "a", meta={
+            "meeting_attendees": None,
+            "tags": None,
+        })
+        b = _make_rec(tmp_path, "b", meta={
+            "meeting_attendees": ["Alice"],
+            "tags": ["planning"],
+        })
+        result = compare_recordings(a, b)
+        assert result.attendees_both == []
+        assert result.attendees_only_a == []
+        assert result.attendees_only_b == ["Alice"]
+
     def test_format_text(self, tmp_path: Path):
         a = _make_rec(tmp_path, "2026-03-01_09-00-00_A", meta={
             "duration_seconds": 1800,

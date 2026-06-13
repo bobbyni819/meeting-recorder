@@ -213,7 +213,7 @@ def classify_recording(
     subject = meta.get("meeting_subject", "")
     duration = meta.get("duration_seconds", 0) / 60.0
     speaker_count = meta.get("speaker_count", 0)
-    attendees = meta.get("meeting_attendees", [])
+    attendees = meta.get("meeting_attendees") or []
 
     # Load transcript if available
     transcript = ""

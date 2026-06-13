@@ -73,6 +73,13 @@ class TestAnalyzeParticipation:
                         segments=segments)
         assert analyze_participation(rec) is None
 
+    def test_null_segments_do_not_raise(self, tmp_path):
+        rec = _make_rec(tmp_path, "2026-03-10_09-00-00_Test")
+        (rec / "transcript.json").write_text(
+            json.dumps({"segments": None}), encoding="utf-8"
+        )
+        assert analyze_participation(rec) is None
+
     def test_balanced(self, tmp_path):
         segments = [
             {"speaker": "A", "text": "Hello", "start": 0, "end": 30},

@@ -110,7 +110,7 @@ def generate_weekly_report(
             if subject:
                 subjects[subject] += 1
 
-            attendees = meta.get("meeting_attendees", [])
+            attendees = meta.get("meeting_attendees") or []
             total_attendees += len(attendees)
 
             qs = meta.get("quality_scores", {})
@@ -124,7 +124,7 @@ def generate_weekly_report(
                     with open(tj, "r", encoding="utf-8") as f:
                         tdata = json.load(f)
                     smap = meta.get("speaker_map", {})
-                    for seg in tdata.get("segments", []):
+                    for seg in (tdata.get("segments") or []):
                         spk = seg.get("speaker", "Unknown")
                         spk = smap.get(spk, spk)
                         d = max(0, seg.get("end", 0) - seg.get("start", 0))
@@ -156,7 +156,7 @@ def generate_weekly_report(
 
     # Total cost
     total_person_hours = sum(
-        m.get("duration_seconds", 0) / 3600 * max(len(m.get("meeting_attendees", [])), 1)
+        m.get("duration_seconds", 0) / 3600 * max(len(m.get("meeting_attendees") or []), 1)
         for m in current_recs
     )
     estimated_cost = total_person_hours * hourly_rate

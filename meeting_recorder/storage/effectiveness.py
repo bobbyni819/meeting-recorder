@@ -102,7 +102,7 @@ def analyze_effectiveness(
             continue
 
         subject = meta.get("meeting_subject", "")
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         action_count = _count_actions(rec_dir)
         attendee_count = max(len(attendees), 1)
 

@@ -3972,7 +3972,7 @@ class MainWindow:
                 import json as _json
                 with open(transcript_json_path, "r", encoding="utf-8") as _f:
                     _tdata = _json.load(_f)
-                for seg in _tdata.get("segments", []):
+                for seg in (_tdata.get("segments") or []):
                     spk = seg.get("speaker", "Unknown")
                     start_t = seg.get("start", 0.0)
                     end_t = seg.get("end", 0.0)

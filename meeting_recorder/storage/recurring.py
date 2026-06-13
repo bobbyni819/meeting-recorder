@@ -218,11 +218,11 @@ def find_recurring_meetings(
             path=rec_dir,
             date=date,
             duration=meta.get("duration_seconds", 0),
-            attendees=meta.get("meeting_attendees", []),
+            attendees=meta.get("meeting_attendees") or [],
             subject=subject,
             speaker_count=meta.get("speaker_count", 0),
             quality=quality,
-            tags=meta.get("tags", []),
+            tags=meta.get("tags") or [],
         ))
 
     if not instances:

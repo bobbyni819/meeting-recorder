@@ -100,6 +100,17 @@ class TestGenerateDailySummary:
         assert summary.total_decisions == 2
         assert summary.meetings[0].decision_count == 2
 
+    def test_null_decisions_do_not_raise(self, tmp_path):
+        today = date(2026, 3, 13)
+        rec = _make_rec(tmp_path, today, "09-00", "Review", 3600)
+        (rec / "decisions.json").write_text(
+            json.dumps({"decisions": None}), encoding="utf-8"
+        )
+        summary = generate_daily_summary(tmp_path, target_date=today)
+        assert summary is not None
+        assert summary.total_decisions == 0
+        assert summary.meetings[0].decision_count == 0
+
     def test_busiest_hour(self, tmp_path):
         today = date(2026, 3, 13)
         _make_rec(tmp_path, today, "09-00", "Meeting A", 3600)

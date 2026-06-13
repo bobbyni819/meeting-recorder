@@ -162,7 +162,7 @@ def _merge_transcript_json(dirs: list[Path]) -> dict | None:
         except Exception:
             return None
 
-        segments = data.get("segments", [])
+        segments = data.get("segments") or []
         max_end = 0.0
         for seg in segments:
             adjusted = dict(seg)
@@ -190,7 +190,7 @@ def _build_merged_metadata(dirs: list[Path], merged_dir: Path) -> dict:
     all_attendees: list[str] = []
     seen_attendees: set[str] = set()
     for m in all_meta:
-        for att in m.get("meeting_attendees", []):
+        for att in (m.get("meeting_attendees") or []):
             if att.lower() not in seen_attendees:
                 all_attendees.append(att)
                 seen_attendees.add(att.lower())
@@ -202,7 +202,7 @@ def _build_merged_metadata(dirs: list[Path], merged_dir: Path) -> dict:
     all_tags: list[str] = []
     seen_tags: set[str] = set()
     for m in all_meta:
-        for tag in m.get("tags", []):
+        for tag in (m.get("tags") or []):
             if tag.lower() not in seen_tags:
                 all_tags.append(tag)
                 seen_tags.add(tag.lower())

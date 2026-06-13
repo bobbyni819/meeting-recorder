@@ -158,7 +158,7 @@ class RecordingIndex:
                 try:
                     with open(transcript_json, "r", encoding="utf-8") as f:
                         tdata = json.load(f)
-                    segments = tdata.get("segments", [])
+                    segments = tdata.get("segments") or []
                     lines = []
                     for seg in segments:
                         speaker = seg.get("speaker", "")
@@ -179,13 +179,13 @@ class RecordingIndex:
                 try:
                     with open(transcript_json, "r", encoding="utf-8") as f:
                         tdata = json.load(f)
-                    for seg in tdata.get("segments", []):
+                    for seg in (tdata.get("segments") or []):
                         if seg.get("speaker"):
                             speakers.add(seg["speaker"])
                 except (json.JSONDecodeError, KeyError):
                     pass
 
-            attendees = meta.get("meeting_attendees", [])
+            attendees = meta.get("meeting_attendees") or []
             if isinstance(attendees, list):
                 attendees_str = ", ".join(attendees)
             else:
@@ -208,7 +208,7 @@ class RecordingIndex:
                 pass
 
             # Tags
-            tags = meta.get("tags", [])
+            tags = meta.get("tags") or []
             tags_str = ", ".join(tags) if isinstance(tags, list) else str(tags)
 
             # Status

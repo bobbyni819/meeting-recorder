@@ -101,7 +101,7 @@ def analyze_word_frequency(
             smap = meta.get("speaker_map", {})
 
             speaker_texts: dict[str, list[str]] = {}
-            for seg in tdata.get("segments", []):
+            for seg in (tdata.get("segments") or []):
                 spk = seg.get("speaker", "Unknown")
                 spk = smap.get(spk, spk)
                 seg_text = seg.get("text", "")

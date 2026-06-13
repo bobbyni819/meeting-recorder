@@ -37,7 +37,7 @@ def export_transcript(rec_path: Path, fmt: str = "txt") -> str:
     except Exception:
         return ""
 
-    segments = data.get("segments", [])
+    segments = data.get("segments") or []
     if not segments:
         return ""
 

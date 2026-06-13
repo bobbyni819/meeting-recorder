@@ -68,7 +68,7 @@ def analyze_collaboration(
             continue
 
         meta = _load_meta(rec_dir)
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         organizer = meta.get("meeting_organizer", "")
 
         # Build full participant list

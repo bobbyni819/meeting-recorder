@@ -86,7 +86,7 @@ def estimate_recording_cost(
     if duration <= 0:
         return None
 
-    attendees = meta.get("meeting_attendees", [])
+    attendees = meta.get("meeting_attendees") or []
     # Count attendees, minimum 1 (the recorder themselves)
     count = max(len(attendees), 1)
 

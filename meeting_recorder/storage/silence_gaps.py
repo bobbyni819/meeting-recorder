@@ -63,7 +63,7 @@ def analyze_silence_gaps(
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if len(segments) < 3:
         return None
 

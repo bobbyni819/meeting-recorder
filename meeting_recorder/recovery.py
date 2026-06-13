@@ -34,7 +34,7 @@ def load_transcript_segments(recording_dir: Path) -> list[TranscriptSegment]:
     path = Path(recording_dir) / "transcript.json"
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    raw = data.get("segments", []) if isinstance(data, dict) else data
+    raw = (data.get("segments") or []) if isinstance(data, dict) else data
     segments = []
     for s in raw:
         segments.append(TranscriptSegment(

@@ -264,7 +264,7 @@ def _parse_summary_response(raw: str) -> MeetingSummary:
     try:
         data = json.loads(raw)
         action_items = []
-        for item in data.get("action_items", []):
+        for item in (data.get("action_items") or []):
             if isinstance(item, dict):
                 action_items.append(ActionItem(
                     description=item.get("description", ""),

@@ -61,7 +61,7 @@ def analyze_energy(
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if len(segments) < 5:
         return None
 

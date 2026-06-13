@@ -139,18 +139,18 @@ def compare_recordings(
     dur_change = ((dur_b - dur_a) / dur_a * 100) if dur_a > 0 else 0
 
     # Attendees (case-insensitive comparison)
-    att_a = set(a.strip().lower() for a in meta_a.get("meeting_attendees", []))
-    att_b = set(a.strip().lower() for a in meta_b.get("meeting_attendees", []))
-    att_a_orig = {a.strip().lower(): a.strip() for a in meta_a.get("meeting_attendees", [])}
-    att_b_orig = {a.strip().lower(): a.strip() for a in meta_b.get("meeting_attendees", [])}
+    att_a = set(a.strip().lower() for a in (meta_a.get("meeting_attendees") or []))
+    att_b = set(a.strip().lower() for a in (meta_b.get("meeting_attendees") or []))
+    att_a_orig = {a.strip().lower(): a.strip() for a in (meta_a.get("meeting_attendees") or [])}
+    att_b_orig = {a.strip().lower(): a.strip() for a in (meta_b.get("meeting_attendees") or [])}
 
     both_att = att_a & att_b
     only_a_att = att_a - att_b
     only_b_att = att_b - att_a
 
     # Tags
-    tags_a = set(meta_a.get("tags", []))
-    tags_b = set(meta_b.get("tags", []))
+    tags_a = set(meta_a.get("tags") or [])
+    tags_b = set(meta_b.get("tags") or [])
 
     # Topics from transcripts
     topics_a = _extract_topics(_read_transcript(path_a))
@@ -216,9 +216,9 @@ def find_similar_recordings(
     target_meta = _load_meta(target)
     target_subject = target_meta.get("meeting_subject", "").lower()
     target_attendees = set(
-        a.strip().lower() for a in target_meta.get("meeting_attendees", [])
+        a.strip().lower() for a in (target_meta.get("meeting_attendees") or [])
     )
-    target_tags = set(target_meta.get("tags", []))
+    target_tags = set(target_meta.get("tags") or [])
     target_app = target_meta.get("app_name", "").lower()
     target_organizer = target_meta.get("meeting_organizer", "").lower()
 
@@ -259,7 +259,7 @@ def find_similar_recordings(
 
         # Attendee overlap
         other_attendees = set(
-            a.strip().lower() for a in meta.get("meeting_attendees", [])
+            a.strip().lower() for a in (meta.get("meeting_attendees") or [])
         )
         if target_attendees and other_attendees:
             overlap = len(target_attendees & other_attendees)
@@ -272,7 +272,7 @@ def find_similar_recordings(
             score += 10
 
         # Tag overlap
-        other_tags = set(meta.get("tags", []))
+        other_tags = set(meta.get("tags") or [])
         if target_tags and other_tags:
             overlap = len(target_tags & other_tags)
             total = len(target_tags | other_tags)

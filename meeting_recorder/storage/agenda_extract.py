@@ -89,7 +89,7 @@ def extract_agenda(
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if len(segments) < 2:
         return None
 

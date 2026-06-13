@@ -231,7 +231,7 @@ def _collaboration_insights(
         if dt < cutoff:
             continue
         dur = meta.get("duration_seconds", 0)
-        for att in meta.get("meeting_attendees", []):
+        for att in (meta.get("meeting_attendees") or []):
             name = att.strip()
             if name:
                 attendee_counts[name] += 1

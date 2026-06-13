@@ -56,7 +56,7 @@ def calculate_roi(
         return None
 
     duration_min = duration / 60
-    attendees = meta.get("meeting_attendees", [])
+    attendees = meta.get("meeting_attendees") or []
     attendee_count = max(len(attendees), meta.get("speaker_count", 1))
     person_hours = (duration_min / 60) * attendee_count
     estimated_cost = person_hours * hourly_rate

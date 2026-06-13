@@ -62,7 +62,7 @@ def compute_stats(recordings_dir: Path) -> dict:
                     with open(transcript_path, "r", encoding="utf-8") as f:
                         tdata = json.load(f)
                     smap = meta.get("speaker_map", {})
-                    for seg in tdata.get("segments", []):
+                    for seg in (tdata.get("segments") or []):
                         spk = seg.get("speaker", "Unknown")
                         spk = smap.get(spk, spk)
                         dur = max(0, seg.get("end", 0) - seg.get("start", 0))
@@ -75,7 +75,7 @@ def compute_stats(recordings_dir: Path) -> dict:
 
     tag_counts: dict[str, int] = defaultdict(int)
     for m in all_meta:
-        for tag in m.get("tags", []):
+        for tag in (m.get("tags") or []):
             tag_counts[tag] += 1
 
     total_recordings = len(all_meta)

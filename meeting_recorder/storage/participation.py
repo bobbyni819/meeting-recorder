@@ -60,7 +60,7 @@ def analyze_participation(
 
     # Calculate per-speaker speaking time
     speaker_times: dict[str, float] = {}
-    for seg in tdata.get("segments", []):
+    for seg in (tdata.get("segments") or []):
         spk = seg.get("speaker", "Unknown")
         spk = smap.get(spk, spk)
         duration = max(0.0, seg.get("end", 0) - seg.get("start", 0))

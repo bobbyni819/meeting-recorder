@@ -64,7 +64,7 @@ def generate_quick_card(
     subject = subject or "Meeting"
 
     date_str = rec_path.name[:10] if len(rec_path.name) >= 10 else ""
-    attendees = meta.get("meeting_attendees", [])
+    attendees = meta.get("meeting_attendees") or []
     app = meta.get("app_name", "")
 
     qs = meta.get("quality_scores", {})
@@ -196,7 +196,7 @@ def _extract_top_speakers(rec_path: Path, meta: dict, max_n: int) -> list[str]:
     speaker_map = meta.get("speaker_map", {})
     speaker_times: dict[str, float] = {}
 
-    for seg in tdata.get("segments", []):
+    for seg in (tdata.get("segments") or []):
         spk = seg.get("speaker", "Unknown")
         spk = speaker_map.get(spk, spk)
         dur = max(0, seg.get("end", 0) - seg.get("start", 0))

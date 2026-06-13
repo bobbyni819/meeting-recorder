@@ -81,7 +81,7 @@ def score_productivity(rec_path: Path, meta: dict | None = None) -> Optional[Pro
         try:
             with open(transcript_json, "r", encoding="utf-8") as f:
                 tdata = json.load(f)
-            for seg in tdata.get("segments", []):
+            for seg in (tdata.get("segments") or []):
                 spk = seg.get("speaker", "Unknown")
                 seg_dur = max(0, seg.get("end", 0) - seg.get("start", 0))
                 speaker_times[spk] = speaker_times.get(spk, 0) + seg_dur

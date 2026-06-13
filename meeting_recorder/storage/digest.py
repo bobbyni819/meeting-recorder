@@ -125,7 +125,7 @@ def _build_digest(title: str, recordings: list[tuple[Path, dict]]) -> str:
             subject = name[20:].replace("_", " ").strip() if len(name) > 20 else "Recording"
         duration = meta.get("duration_seconds", 0)
         total_duration += duration
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         all_attendees.update(a.strip() for a in attendees)
 
         # Meeting heading

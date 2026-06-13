@@ -36,7 +36,7 @@ def export_recordings_csv(recordings_dir: Path) -> str:
         time_str = name[11:19].replace("-", ":") if len(name) >= 19 else ""
 
         dur = meta.get("duration_seconds", 0)
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
 
         # Quality scores
         qs = meta.get("quality_scores", {})
@@ -73,7 +73,7 @@ def export_recordings_csv(recordings_dir: Path) -> str:
             try:
                 with open(dec_path, "r", encoding="utf-8") as f:
                     dec_data = json.load(f)
-                dec_list = dec_data.get("decisions", []) if isinstance(dec_data, dict) else dec_data
+                dec_list = (dec_data.get("decisions") or []) if isinstance(dec_data, dict) else dec_data
                 dec_count = len(dec_list)
             except Exception:
                 pass
@@ -125,7 +125,7 @@ def export_recordings_csv(recordings_dir: Path) -> str:
             "organizer": meta.get("meeting_organizer", ""),
             "has_transcript": "yes" if (rec_dir / "transcript.json").exists() else "no",
             "has_summary": "yes" if meta.get("has_summary") else "no",
-            "tags": "; ".join(meta.get("tags", [])),
+            "tags": "; ".join(meta.get("tags") or []),
             "quality": quality,
             "audio_quality": audio_q,
             "transcript_quality": transcript_q,

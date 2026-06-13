@@ -55,7 +55,7 @@ def load_watched_keywords() -> list[str]:
             if isinstance(data, list):
                 return [str(k).strip() for k in data if k]
             if isinstance(data, dict):
-                return [str(k).strip() for k in data.get("keywords", []) if k]
+                return [str(k).strip() for k in (data.get("keywords") or []) if k]
         except Exception:
             pass
     return list(_DEFAULT_KEYWORDS)

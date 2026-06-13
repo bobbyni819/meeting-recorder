@@ -69,7 +69,7 @@ def analyze_interruptions(
     except Exception:
         return None
 
-    segments = tdata.get("segments", [])
+    segments = tdata.get("segments") or []
     if len(segments) < 4:
         return None
 

@@ -97,7 +97,7 @@ def analyze_cost_budget(
         if dur <= 0:
             continue
 
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         count = max(len(attendees), 1)
         hours = dur / 3600
         person_hours = hours * count

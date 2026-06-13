@@ -63,7 +63,7 @@ def build_directory(recordings_dir: Path) -> list[AttendeeProfile]:
         except Exception:
             continue
 
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         if not attendees:
             continue
 
@@ -142,7 +142,7 @@ def find_meetings_with(
         except Exception:
             continue
 
-        attendees = meta.get("meeting_attendees", [])
+        attendees = meta.get("meeting_attendees") or []
         organizer = meta.get("meeting_organizer", "")
         speaker_map = meta.get("speaker_map", {})
 
