@@ -1375,3 +1375,17 @@ class TestWeekStrip:
         mw._idle_frame = None
         mw._close_detail()
         assert mw._current_detail_path is None
+
+
+class TestNoUndefinedThemeConstants:
+    """Guard against bare/undefined theme constants in main_window (e.g. the
+    `ACCENT` typo that crashed the Meeting Prep panel with NameError)."""
+
+    def test_no_bare_accent_reference(self):
+        import re
+        from pathlib import Path
+        import meeting_recorder.ui.main_window as mw
+        src = Path(mw.__file__).read_text(encoding="utf-8")
+        # BLUE_ACCENT is the real constant; a bare ACCENT is undefined.
+        assert not re.search(r"(?<![_A-Za-z])ACCENT\b", src), \
+            "bare undefined ACCENT reference found (use BLUE_ACCENT)"

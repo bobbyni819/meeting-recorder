@@ -5888,7 +5888,7 @@ class MainWindow:
             input_frame, font=("Segoe UI", 9),
             bg=BG_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
             relief=tk.FLAT, highlightthickness=1,
-            highlightcolor=ACCENT, highlightbackground=BG_HEADER,
+            highlightcolor=BLUE_ACCENT, highlightbackground=BG_HEADER,
         )
         subject_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
 
