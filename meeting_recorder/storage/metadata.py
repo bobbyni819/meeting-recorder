@@ -62,8 +62,8 @@ class RecordingMetadata:
     # Folder name at creation, before smart_rename moved it (additive; lets
     # external tools that cached the old path find the recording).
     original_dir_name: str = ""
-    # Where the current transcript came from: "" (our pipeline) or
-    # "teams_vtt" (imported Teams/Zoom VTT with real speaker names).
+    # Where the current transcript came from: "" (our pipeline),
+    # "teams_vtt", "teams_docx", or "zoom_caption".
     transcription_source: str = ""
 
     def save(self, recording_dir: Path) -> None:

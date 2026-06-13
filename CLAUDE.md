@@ -133,7 +133,15 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
   `python -m meeting_recorder import-zoom-captions <recording-dir> [caption_file]`;
   omitting `caption_file` scans `~/Documents/Zoom` for the caption whose Zoom
   folder time best matches the recording, then falls back to newest overall.
-  `import-zoom-captions` and `import-transcript` preserve the first existing
+  Teams transcripts can be ingested with
+  `python -m meeting_recorder import-transcript <recording-dir> [transcript.vtt|transcript.docx]`;
+  `.vtt` keeps the existing Teams WebVTT speaker parser, and `.docx` parses the
+  Word download format (speaker / timestamp / text paragraphs). Omitting the
+  transcript file scans `~/Downloads` and scores Teams `.vtt`/`.docx` downloads
+  by recording-subject token overlap plus recording-time recency. The detail
+  view Import menu has Auto-detect Zoom captions, Auto-detect Teams transcript,
+  and manual file selection. `import-zoom-captions` and `import-transcript`
+  preserve the first existing
   transcript as `transcript.original.{json,txt,srt}` before overwriting
   `transcript.json/.txt/.srt`.
 - **Echo gate** (`audio/echo_gate.py`, `recording.echo_gate`, default OFF): when
@@ -373,7 +381,7 @@ python -m meeting_recorder diagnose       # system health checks
 python -m meeting_recorder probe-echo <dir>  # replay a recording's app+mic through the echo gate; report % mic that is speaker echo (read-only)
 python -m meeting_recorder probe-mute [secs]  # DURING a meeting: live-print how UIA/registry read your Zoom/Teams mute state; toggle to validate mute sync (read-only)
 python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shift+V)
-python -m meeting_recorder import-transcript <dir> <transcript.vtt>  # import Teams/Zoom VTT; preserves prior transcript as transcript.original.*
+python -m meeting_recorder import-transcript <dir> [transcript.vtt|transcript.docx]  # import or auto-detect Teams transcript; preserves prior transcript as transcript.original.*
 python -m meeting_recorder import-zoom-captions <dir> [caption_file]  # import Zoom local captions; auto-picks best time match from ~/Documents/Zoom when omitted
 python -m meeting_recorder search <query> # search recordings (FTS5)
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)

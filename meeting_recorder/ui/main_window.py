@@ -3525,6 +3525,27 @@ class MainWindow:
             except Exception as exc:
                 _show_caption_import_error(exc)
 
+        def _auto_detect_teams_transcript() -> None:
+            try:
+                from meeting_recorder.transcription.vtt_import import (
+                    find_teams_transcript_for_recording,
+                    import_vtt_to_recording,
+                )
+
+                found = find_teams_transcript_for_recording(rec_path)
+                if found is None:
+                    self.add_notification(
+                        "info",
+                        "No matching Teams transcript found in ~/Downloads",
+                        source="import",
+                    )
+                    return
+                caption_path = Path(found)
+                if _confirm_caption_import(caption_path):
+                    _run_caption_import(import_vtt_to_recording, caption_path)
+            except Exception as exc:
+                _show_caption_import_error(exc)
+
         def _choose_caption_file() -> None:
             try:
                 from tkinter import filedialog
@@ -3537,7 +3558,7 @@ class MainWindow:
                     parent=self._window,
                     title="Import Caption File",
                     filetypes=[
-                        ("Caption/transcript", "*.vtt *.txt *.srt"),
+                        ("Caption/transcript", "*.vtt *.docx *.txt *.srt"),
                         ("All files", "*.*"),
                     ],
                 )
@@ -3546,7 +3567,7 @@ class MainWindow:
                 caption_path = Path(file_path)
                 if not _confirm_caption_import(caption_path):
                     return
-                if caption_path.name.lower().endswith(".vtt"):
+                if caption_path.suffix.lower() in {".vtt", ".docx"}:
                     _run_caption_import(import_vtt_to_recording, caption_path)
                 else:
                     _run_caption_import(
@@ -3560,6 +3581,10 @@ class MainWindow:
             menu.add_command(
                 label="Auto-detect Zoom captions",
                 command=_auto_detect_zoom_captions,
+            )
+            menu.add_command(
+                label="Auto-detect Teams transcript",
+                command=_auto_detect_teams_transcript,
             )
             menu.add_command(
                 label="Choose caption file...",

@@ -157,30 +157,41 @@ def main() -> None:
         elif cmd == "import-transcript":
             logging.basicConfig(level=logging.INFO, format="%(message)s")
             args = sys.argv[2:]
-            if len(args) < 2 or args[0] in ("-h", "--help"):
+            if not args or args[0] in ("-h", "--help"):
                 print(
                     "Usage: python -m meeting_recorder import-transcript "
-                    "<recording-dir> <transcript.vtt>\n\n"
-                    "Import a Teams/Zoom WebVTT transcript as the recording's\n"
+                    "<recording-dir> [transcript.vtt|transcript.docx]\n\n"
+                    "Import a Teams VTT/DOCX transcript as the recording's\n"
                     "authoritative transcript (real speaker names, high accuracy).\n"
+                    "If transcript_file is omitted, scans ~/Downloads for the\n"
+                    "best Teams transcript match.\n"
                     "Rewrites transcript.json/.txt/.srt in the canonical schema and\n"
-                    "keeps the original as teams_transcript.vtt."
+                    "keeps the original as teams_transcript.vtt/.docx."
                 )
-                sys.exit(0 if len(args) >= 2 else 1)
+                sys.exit(0 if args else 1)
             from pathlib import Path as _Path
 
             from meeting_recorder.transcription.vtt_import import (
+                find_teams_transcript_for_recording,
                 import_vtt_to_recording,
             )
 
             rec_dir = _Path(args[0]).expanduser()
-            vtt = _Path(args[1]).expanduser()
             if not rec_dir.is_dir():
                 print(f"Not a recording directory: {rec_dir}"); sys.exit(1)
-            if not vtt.is_file():
-                print(f"VTT file not found: {vtt}"); sys.exit(1)
+            if len(args) >= 2:
+                transcript = _Path(args[1]).expanduser()
+            else:
+                transcript = find_teams_transcript_for_recording(rec_dir)
+                if transcript is not None:
+                    print(f"Matched Teams transcript: {transcript}")
+                else:
+                    print("No matching Teams transcript found in ~/Downloads")
+                    sys.exit(1)
+            if not transcript.is_file():
+                print(f"Transcript file not found: {transcript}"); sys.exit(1)
             try:
-                result = import_vtt_to_recording(rec_dir, vtt)
+                result = import_vtt_to_recording(rec_dir, transcript)
                 print(
                     f"Imported {result['segments']} segments "
                     f"({result['duration']:.0f}s). "

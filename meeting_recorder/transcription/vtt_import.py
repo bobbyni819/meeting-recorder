@@ -1,11 +1,11 @@
 """Import a Teams/Zoom caption transcript as the authoritative record.
 
 Teams' own meeting transcript (the "Start transcription" button → downloaded
-``.vtt``) has two things our pipeline can't match on the Gemini path: real
-per-speaker names (from Teams' identity) and high accuracy. This parses that
-VTT into the canonical TranscriptSegment list so it can be saved through the
-normal ``save_all_formats`` path — identical transcript.json/.txt/.srt schema,
-just better content and named speakers.
+``.vtt`` or ``.docx``) has two things our pipeline can't match on the Gemini
+path: real per-speaker names (from Teams' identity) and high accuracy. This
+parses the transcript into the canonical TranscriptSegment list so it can be
+saved through the normal ``save_all_formats`` path — identical
+transcript.json/.txt/.srt schema, just better content and named speakers.
 
 VTT cue blocks look like::
 
@@ -22,8 +22,10 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from meeting_recorder.transcription.local_whisper import TranscriptSegment
 
@@ -43,10 +45,14 @@ _ZOOM_CAPTION_FILENAMES = {
     "closed_caption.txt",
     "meeting_saved_closed_captions.txt",
 }
+_DOCX_TIMESTAMP_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+_SUBJECT_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_?")
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _LEADING_TIMESTAMP_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})(?:_(\d{2})-(\d{2})-(\d{2})| "
     r"(\d{2})\.(\d{2})\.(\d{2}))"
 )
+_WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 def _ts_to_seconds(hh: str, mm: str, ss: str, mmm: str) -> float:
@@ -107,6 +113,102 @@ def parse_vtt(path: Path) -> list[TranscriptSegment]:
 
     raw.sort(key=lambda s: (s.start, s.end))
     return _merge_consecutive(raw)
+
+
+def _extract_docx_paragraphs(path: Path) -> list[str]:
+    """Extract non-empty Word paragraphs from a DOCX without external deps."""
+    try:
+        with zipfile.ZipFile(Path(path)) as docx:
+            document = docx.read("word/document.xml")
+        root = ET.fromstring(document)
+        paragraphs: list[str] = []
+        for paragraph in root.findall(".//w:p", _WORD_NS):
+            text = "".join(
+                node.text or "" for node in paragraph.findall(".//w:t", _WORD_NS)
+            ).strip()
+            if text:
+                paragraphs.append(text)
+        return paragraphs
+    except Exception:
+        logger.debug("Could not extract DOCX paragraphs from %s", path, exc_info=True)
+        return []
+
+
+def _timestamp_to_seconds(value: str) -> float:
+    """Convert Teams DOCX timestamps like M:SS or HH:MM:SS to seconds."""
+    parts = [int(part) for part in value.strip().split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return float(minutes * 60 + seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return float(hours * 3600 + minutes * 60 + seconds)
+    raise ValueError(f"Unsupported timestamp: {value}")
+
+
+def parse_teams_docx(path: Path) -> list[TranscriptSegment]:
+    """Parse a Teams downloaded DOCX transcript into canonical segments.
+
+    Teams DOCX exports repeat paragraphs as ``speaker``, ``timestamp``, then
+    one or more spoken-text paragraphs. Malformed groups are skipped.
+    """
+    paragraphs = _extract_docx_paragraphs(path)
+    if not paragraphs:
+        return []
+
+    timestamp_indexes = [
+        idx for idx, text in enumerate(paragraphs)
+        if _DOCX_TIMESTAMP_RE.fullmatch(text.strip())
+    ]
+    raw: list[TranscriptSegment] = []
+    for pos, idx in enumerate(timestamp_indexes):
+        timestamp = paragraphs[idx].strip()
+        try:
+            start = _timestamp_to_seconds(timestamp)
+        except ValueError:
+            continue
+
+        speaker = ""
+        if idx > 0 and not _DOCX_TIMESTAMP_RE.fullmatch(paragraphs[idx - 1].strip()):
+            candidate = paragraphs[idx - 1].strip()
+            if _looks_like_speaker_name(candidate):
+                speaker = candidate
+
+        next_idx = (
+            timestamp_indexes[pos + 1]
+            if pos + 1 < len(timestamp_indexes)
+            else len(paragraphs)
+        )
+        text_end = next_idx - 1 if next_idx < len(paragraphs) else next_idx
+        text_parts: list[str] = []
+        for part in paragraphs[idx + 1:text_end]:
+            stripped = part.strip()
+            if stripped:
+                text_parts.append(stripped)
+        body = re.sub(r"\s+", " ", " ".join(text_parts)).strip()
+        if not body:
+            continue
+        raw.append(
+            TranscriptSegment(start=start, end=start, text=body, speaker=speaker)
+        )
+
+    if not raw:
+        return []
+    raw.sort(key=lambda s: (s.start, s.end))
+    for i, seg in enumerate(raw):
+        if i + 1 < len(raw):
+            seg.end = max(raw[i + 1].start, seg.start)
+        else:
+            seg.end = seg.start + 2.0
+    return _merge_consecutive(raw)
+
+
+def parse_transcript_file(path: Path) -> list[TranscriptSegment]:
+    """Parse a Teams transcript file, dispatching DOCX separately from VTT."""
+    source = Path(path)
+    if source.suffix.lower() == ".docx":
+        return parse_teams_docx(source)
+    return parse_vtt(source)
 
 
 def _extract_zoom_speaker(body: str) -> tuple[str, str]:
@@ -225,6 +327,122 @@ def find_zoom_caption_for_recording(
         return None
 
 
+def find_teams_transcript_files(downloads_dir: Path | None = None) -> list[Path]:
+    """Find Teams transcript downloads in ``~/Downloads`` newest-first."""
+    root = Path.home() / "Downloads" if downloads_dir is None else Path(downloads_dir)
+    root = root.expanduser()
+    if not root.is_dir():
+        return []
+
+    try:
+        matches = [
+            path for path in root.iterdir()
+            if path.is_file() and path.suffix.lower() in {".vtt", ".docx"}
+        ]
+    except OSError:
+        logger.debug("Could not scan Teams transcript directory: %s", root, exc_info=True)
+        return []
+
+    return sorted(matches, key=lambda p: _mtime(p), reverse=True)
+
+
+def find_teams_transcript_for_recording(
+    recording_dir: Path,
+    downloads_dir: Path | None = None,
+    max_age_hours: float = 72.0,
+) -> Path | None:
+    """Find the best Teams transcript for a recording.
+
+    Candidates are ``.vtt`` and ``.docx`` files in ``~/Downloads``. The score is
+    the number of token overlaps between the candidate filename and recording
+    subject plus a recency bonus from 0..1 for files modified within
+    ``max_age_hours`` of the recording start. The recording subject comes from
+    ``metadata.meeting_subject`` when present; otherwise it is derived from the
+    recording directory name by removing the leading timestamp and Teams/Zoom
+    suffixes. A candidate must have at least one overlapping token or fall
+    within the recency window.
+    """
+    try:
+        recording_dir = Path(recording_dir)
+        subject = _recording_subject_for_matching(recording_dir)
+        subject_tokens = _match_tokens(subject)
+        recording_start = _recording_start_time(recording_dir)
+        window_seconds = max(float(max_age_hours), 0.0) * 3600.0
+
+        best_path: Path | None = None
+        best_score: tuple[float, float, float] | None = None
+        for candidate in find_teams_transcript_files(downloads_dir):
+            overlap = len(_match_tokens(candidate.stem) & subject_tokens)
+            modified = datetime.fromtimestamp(_mtime(candidate))
+            skew = (
+                abs((modified - recording_start).total_seconds())
+                if recording_start is not None else None
+            )
+            recency_bonus = 0.0
+            within_window = False
+            if skew is not None and window_seconds > 0 and skew <= window_seconds:
+                within_window = True
+                recency_bonus = 1.0 - (skew / window_seconds)
+            if overlap < 1 and not within_window:
+                continue
+            score = (overlap + recency_bonus, overlap, _mtime(candidate))
+            if best_score is None or score > best_score:
+                best_path = candidate
+                best_score = score
+        return best_path
+    except Exception:
+        logger.debug("Could not match Teams transcript", exc_info=True)
+        return None
+
+
+def _recording_subject_for_matching(recording_dir: Path) -> str:
+    try:
+        from meeting_recorder.storage.metadata import RecordingMetadata
+
+        metadata = RecordingMetadata.load(recording_dir)
+        subject = metadata.meeting_subject.strip() if metadata.meeting_subject else ""
+        if subject:
+            return subject
+    except Exception:
+        logger.debug(
+            "Could not load recording metadata for Teams transcript matching: %s",
+            recording_dir,
+            exc_info=True,
+        )
+    return _derive_subject_from_recording_dir(recording_dir.name)
+
+
+def _derive_subject_from_recording_dir(name: str) -> str:
+    subject = _SUBJECT_PREFIX_RE.sub("", name)
+    subject = re.sub(
+        r"(?:_+Microsoft_+Teams|_+Zoom_+Meeting)$",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    )
+    subject = subject.replace("_", " ")
+    return re.sub(r"\s+", " ", subject).strip()
+
+
+def _match_tokens(value: str) -> set[str]:
+    stopwords = {
+        "caption",
+        "captions",
+        "closed",
+        "docx",
+        "microsoft",
+        "meeting",
+        "teams",
+        "transcript",
+        "vtt",
+        "zoom",
+    }
+    return {
+        token for token in _TOKEN_RE.findall(value.lower())
+        if len(token) >= 3 and token not in stopwords
+    }
+
+
 def _recording_start_time(recording_dir: Path) -> datetime | None:
     try:
         from meeting_recorder.storage.metadata import RecordingMetadata
@@ -292,10 +510,10 @@ def import_vtt_to_recording(
     vtt_path: Path,
     formats: list[str] | None = None,
 ) -> dict:
-    """Replace a recording's transcript with a parsed Teams/Zoom VTT.
+    """Replace a recording's transcript with a parsed Teams transcript file.
 
-    Writes transcript.json/.txt/.srt (canonical schema), preserves the raw
-    VTT alongside as teams_transcript.vtt, and updates metadata (speaker
+    Writes transcript.json/.txt/.srt (canonical schema), preserves the source
+    alongside as teams_transcript.vtt/.docx, and updates metadata (speaker
     count, segment count, a transcription_source marker). Re-indexes for
     search. Returns a small summary dict.
     """
@@ -303,23 +521,28 @@ def import_vtt_to_recording(
     from meeting_recorder.storage.transcript_formatter import save_all_formats
 
     recording_dir = Path(recording_dir)
+    source_path = Path(vtt_path)
     backed_up_original = _backup_existing_transcript(recording_dir)
-    segments = parse_vtt(Path(vtt_path))
+    segments = parse_transcript_file(source_path)
     if not segments:
         raise ValueError(f"No usable cues parsed from {vtt_path}")
 
     save_all_formats(segments, recording_dir, formats=formats)
 
-    # Keep the original VTT next to the recording for provenance.
+    # Keep the original transcript next to the recording for provenance.
     try:
-        dest = recording_dir / "teams_transcript.vtt"
-        if Path(vtt_path).resolve() != dest.resolve():
-            dest.write_text(
-                Path(vtt_path).read_text(encoding="utf-8-sig", errors="replace"),
-                encoding="utf-8",
-            )
+        source_suffix = ".docx" if source_path.suffix.lower() == ".docx" else ".vtt"
+        dest = recording_dir / f"teams_transcript{source_suffix}"
+        if source_path.resolve() != dest.resolve():
+            if source_suffix == ".docx":
+                shutil.copy2(source_path, dest)
+            else:
+                dest.write_text(
+                    source_path.read_text(encoding="utf-8-sig", errors="replace"),
+                    encoding="utf-8",
+                )
     except OSError:
-        logger.debug("Could not copy VTT into recording dir", exc_info=True)
+        logger.debug("Could not copy transcript into recording dir", exc_info=True)
 
     speakers = sorted({s.speaker for s in segments if s.speaker})
     try:
@@ -329,7 +552,9 @@ def import_vtt_to_recording(
     metadata.has_transcript = True
     metadata.speaker_count = len(speakers)
     metadata.segment_count = len(segments)
-    metadata.transcription_source = "teams_vtt"
+    metadata.transcription_source = (
+        "teams_docx" if source_path.suffix.lower() == ".docx" else "teams_vtt"
+    )
     if metadata.status not in ("completed",):
         metadata.status = "completed"
     metadata.save(recording_dir)
@@ -344,7 +569,7 @@ def import_vtt_to_recording(
         logger.debug("Re-index after VTT import failed (non-fatal)", exc_info=True)
 
     logger.info(
-        "Imported VTT into %s: %d segments, speakers: %s",
+        "Imported transcript into %s: %d segments, speakers: %s",
         recording_dir.name, len(segments), ", ".join(speakers) or "(none)",
     )
     return {
