@@ -10,6 +10,7 @@ import pytest
 
 from meeting_recorder.config import Config, DictationConfig, TranscriptionConfig
 from meeting_recorder.dictation.pipeline import (
+    _move_file,
     fallback_output_dir,
     finalize_recording,
     render_markdown,
@@ -342,6 +343,56 @@ class TestFinalizeRecording:
         assert "gemini_api_key" in outcome.error_path.read_text(encoding="utf-8")
         assert outcome.audio_path.exists()
         assert outcome.audio_path.parent == tmp_path / "voice-memos" / "2026-04-21"
+
+    def test_markdown_write_failure_keeps_audio_and_writes_error(
+        self, tmp_path, monkeypatch,
+    ):
+        temp_wav = tmp_path / "temp.wav"
+        temp_wav.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfake")
+
+        config = _make_config(tmp_path)
+        when = datetime(2026, 4, 21, 14, 37, 22)
+        fake_result = DictationResult(
+            transcript="Hello world.",
+            slug="finalize-fails-here",
+            project="general",
+            model="gemini-2.5-flash",
+        )
+        original_write_text = Path.write_text
+
+        def fail_md_write(path, *args, **kwargs):
+            if path.suffix == ".md":
+                raise OSError("disk full")
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_md_write)
+        with patch(
+            "meeting_recorder.dictation.pipeline.GeminiTranscriber.transcribe_dictation",
+            return_value=fake_result,
+        ):
+            outcome = finalize_recording(
+                temp_audio=temp_wav,
+                config=config,
+                recorded_at=when,
+                duration_seconds=47.0,
+            )
+
+        assert outcome.result is None
+        assert outcome.transcript_path is None
+        assert outcome.audio_path.exists()
+        assert outcome.audio_path.name == "1437-finalize-fails-here.wav"
+        assert outcome.error_path == outcome.audio_path.with_suffix(".error")
+        assert outcome.error_path.exists()
+        assert "disk full" in outcome.error_path.read_text(encoding="utf-8")
+        assert not temp_wav.exists()
+
+    def test_move_file_noop_when_source_equals_destination(self, tmp_path):
+        wav = tmp_path / "same.wav"
+        wav.write_bytes(b"audio")
+
+        _move_file(wav, wav)
+
+        assert wav.read_bytes() == b"audio"
 
 
 # ---------------------------------------------------------------------------

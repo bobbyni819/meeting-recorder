@@ -96,6 +96,19 @@ class TestMetadataSaveLoad:
         assert data["app_name"] == "Test"
         assert isinstance(data["app_pid"], int)
 
+    def test_sequential_saves_produce_valid_json(self, recording_dir: Path):
+        first = RecordingMetadata(app_name="First", app_pid=1)
+        second = RecordingMetadata(app_name="Second", app_pid=2)
+
+        first.save(recording_dir)
+        second.save(recording_dir)
+
+        path = recording_dir / METADATA_FILENAME
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["app_name"] == "Second"
+        assert data["app_pid"] == 2
+        assert list(recording_dir.glob(".metadata.*.tmp")) == []
+
     def test_load_nonexistent_raises(self, recording_dir: Path):
         with pytest.raises(FileNotFoundError):
             RecordingMetadata.load(recording_dir)

@@ -65,31 +65,41 @@ def archive_recording(rec_path: Path, delete_originals: bool = True) -> int:
 
     # Calculate original size
     original_size = sum(f.stat().st_size for f in to_archive)
+    expected_names = {f.name for f in to_archive}
 
     try:
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for fpath in to_archive:
                 zf.write(fpath, fpath.name)
+            zf.fp.flush()
+            os.fsync(zf.fp.fileno())
+
+        with zipfile.ZipFile(archive_path, "r") as vz:
+            missing = expected_names - set(vz.namelist())
+            if missing:
+                raise ValueError(f"archive missing entries: {sorted(missing)}")
+            bad = vz.testzip()
+            if bad is not None:
+                raise ValueError(f"corrupt archive member: {bad}")
 
         archive_size = archive_path.stat().st_size
         saved = original_size - archive_size
-
-        if delete_originals:
-            for fpath in to_archive:
-                fpath.unlink()
-            logger.info(
-                "Archived %s: %d files, saved %.1f MB",
-                rec_path.name, len(to_archive), saved / (1024 * 1024),
-            )
-
-        return saved
-
     except Exception:
         logger.exception("Failed to archive: %s", rec_path.name)
-        # Clean up partial archive
+        # Clean up partial or corrupt archive
         if archive_path.exists():
             archive_path.unlink()
         return 0
+
+    if delete_originals:
+        for fpath in to_archive:
+            fpath.unlink()
+        logger.info(
+            "Archived %s: %d files, saved %.1f MB",
+            rec_path.name, len(to_archive), saved / (1024 * 1024),
+        )
+
+    return saved
 
 
 def unarchive_recording(rec_path: Path) -> bool:

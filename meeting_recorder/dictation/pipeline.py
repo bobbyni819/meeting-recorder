@@ -138,32 +138,38 @@ def finalize_recording(
         logger.exception("Dictation transcription failed")
         return _write_error(temp_audio, drive_root, recorded_at, hhmm, str(e))
 
-    final_dir = resolve_project_dir(
-        drive_root=drive_root,
-        project=result.project,
-        template=config.dictation.project_subpath_template,
-        recorded_at=recorded_at,
-        default_project=config.dictation.default_project,
-    )
-    final_dir.mkdir(parents=True, exist_ok=True)
+    final_audio = temp_audio
+    try:
+        final_dir = resolve_project_dir(
+            drive_root=drive_root,
+            project=result.project,
+            template=config.dictation.project_subpath_template,
+            recorded_at=recorded_at,
+            default_project=config.dictation.default_project,
+        )
+        final_dir.mkdir(parents=True, exist_ok=True)
 
-    final_audio = final_dir / f"{hhmm}-{result.slug}.wav"
-    final_md = final_dir / f"{hhmm}-{result.slug}.md"
+        final_audio = final_dir / f"{hhmm}-{result.slug}.wav"
+        final_md = final_dir / f"{hhmm}-{result.slug}.md"
 
-    # Avoid cross-device rename issues: try replace first, fall back to copy
-    _move_file(temp_audio, final_audio)
+        # Avoid cross-device rename issues: try replace first, fall back to copy
+        _move_file(temp_audio, final_audio)
 
-    md = render_markdown(
-        result=result,
-        audio_filename=final_audio.name,
-        recorded_at=recorded_at,
-        duration_seconds=duration_seconds,
-    )
-    final_md.write_text(md, encoding="utf-8")
-    logger.info(
-        "Dictation saved: %s (project=%s, dir=%s)",
-        final_audio.name, result.project, final_dir,
-    )
+        md = render_markdown(
+            result=result,
+            audio_filename=final_audio.name,
+            recorded_at=recorded_at,
+            duration_seconds=duration_seconds,
+        )
+        final_md.write_text(md, encoding="utf-8")
+        logger.info(
+            "Dictation saved: %s (project=%s, dir=%s)",
+            final_audio.name, result.project, final_dir,
+        )
+    except Exception as e:
+        logger.exception("Dictation finalization failed")
+        recovered_audio = final_audio if final_audio.exists() else temp_audio
+        return _write_error_at_audio(recovered_audio, str(e))
 
     return FinalizeOutcome(
         audio_path=final_audio,
@@ -175,6 +181,8 @@ def finalize_recording(
 
 def _move_file(src: Path, dst: Path) -> None:
     """Move *src* to *dst*, falling back to copy+unlink across drives."""
+    if src == dst:
+        return
     try:
         src.replace(dst)
     except OSError:
@@ -200,9 +208,20 @@ def _write_error(
     audio_path = fallback_dir / f"{hhmm}-recording.wav"
     _move_file(temp_audio, audio_path)
 
+    return _write_error_at_audio(audio_path, message)
+
+
+def _write_error_at_audio(audio_path: Path, message: str) -> FinalizeOutcome:
+    """Write an ``.error`` sidecar next to existing audio, best-effort."""
+
     err_path = audio_path.with_suffix(".error")
-    err_path.write_text(message, encoding="utf-8")
-    logger.error("Dictation kept audio at %s (see %s)", audio_path, err_path.name)
+    try:
+        err_path.write_text(message, encoding="utf-8")
+    except Exception:
+        logger.exception("Could not write dictation error sidecar: %s", err_path)
+        err_path = None
+    else:
+        logger.error("Dictation kept audio at %s (see %s)", audio_path, err_path.name)
     return FinalizeOutcome(
         audio_path=audio_path,
         transcript_path=None,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -75,10 +77,22 @@ class RecordingMetadata:
         corruption if the process crashes during the write.
         """
         path = recording_dir / METADATA_FILENAME
-        tmp_path = path.with_suffix(".json.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2, ensure_ascii=False)
-        tmp_path.replace(path)  # atomic on NTFS
+        fd, tmp_name = tempfile.mkstemp(
+            dir=recording_dir,
+            prefix=".metadata.",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(asdict(self), f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)  # atomic on NTFS
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
         logger.debug("Metadata saved: %s", path)
 
     @classmethod

@@ -12,7 +12,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from meeting_recorder.config import Config
 from meeting_recorder.storage.metadata import RecordingMetadata
@@ -101,6 +101,7 @@ def retry_tail(
     recording_dir: Path,
     config: Config,
     force_summary: bool = False,
+    save_metadata: Optional[Callable[[RecordingMetadata, Path], None]] = None,
 ) -> list[str]:
     """Re-run only the missing tail steps of a completed recording.
 
@@ -178,7 +179,7 @@ def retry_tail(
                 "Tail retry: Drive upload failed for %s", recording_dir.name,
             )
 
-    metadata.save(recording_dir)
+    (save_metadata or (lambda m, d: m.save(d)))(metadata, recording_dir)
 
     if performed:
         try:

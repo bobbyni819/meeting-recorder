@@ -72,6 +72,29 @@ class TestArchiveRecording:
         saved = archive_recording(tmp_path / "nope")
         assert saved == 0
 
+    def test_verification_failure_keeps_originals_and_removes_archive(
+        self, tmp_path, monkeypatch,
+    ):
+        rec = _make_rec(tmp_path, "2026-03-01_09-00-00_Test")
+        monkeypatch.setattr(zipfile.ZipFile, "testzip", lambda self: "app_audio.wav")
+
+        saved = archive_recording(rec)
+
+        assert saved == 0
+        assert (rec / "app_audio.wav").exists()
+        assert not (rec / ARCHIVE_FILENAME).exists()
+
+    def test_archive_delete_then_unarchive_round_trips(self, tmp_path):
+        rec = _make_rec(tmp_path, "2026-03-01_09-00-00_Test")
+        original = (rec / "app_audio.wav").read_bytes()
+
+        saved = archive_recording(rec)
+
+        assert saved > 0
+        assert not (rec / "app_audio.wav").exists()
+        assert unarchive_recording(rec) is True
+        assert (rec / "app_audio.wav").read_bytes() == original
+
 
 class TestUnarchiveRecording:
     def test_basic_unarchive(self, tmp_path):

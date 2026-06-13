@@ -155,6 +155,21 @@ class TestRetryTail:
         performed = recovery.retry_tail(tmp_path, cfg)
         assert performed == []
 
+    def test_uses_injected_save_metadata_callback(self, tmp_path):
+        _write_meta(tmp_path, has_summary=True)
+        _write_transcript(tmp_path)
+        cfg = self._config(tmp_path, summary=False)
+        calls = []
+
+        def save_metadata(metadata, recording_dir):
+            calls.append((metadata, recording_dir))
+
+        performed = recovery.retry_tail(tmp_path, cfg, save_metadata=save_metadata)
+
+        assert performed == []
+        assert len(calls) == 1
+        assert calls[0][1] == tmp_path
+
 
 class TestReprocessHeadless:
     def test_missing_audio_marks_error(self, tmp_path):

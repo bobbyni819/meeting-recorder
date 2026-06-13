@@ -1692,7 +1692,11 @@ class MeetingRecorderApp:
             if self._capture_manager and self._capture_manager.is_recording:
                 return
             try:
-                performed = recovery.retry_tail(rec_dir, self.config)
+                performed = recovery.retry_tail(
+                    rec_dir,
+                    self.config,
+                    save_metadata=self._save_metadata,
+                )
                 if performed:
                     self._main_window.add_notification(
                         "success",
