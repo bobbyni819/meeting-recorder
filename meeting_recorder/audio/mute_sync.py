@@ -396,6 +396,13 @@ class MuteSync:
         with self._lock:
             self._muted = not self._muted
             muted = self._muted
+            # A user-driven unmute is fresh evidence of the unmute state, so
+            # restart the privacy-first blind-grace window from now. Without
+            # this, a stale _last_uia_ts (from the last conclusive UIA read,
+            # possibly long ago) could let _privacy_blind_cycle re-mute the
+            # user within ~1s of unmuting when the toolbar is hidden.
+            if not muted:
+                self._last_uia_ts = self._clock()
             state = "MUTED" if muted else "UNMUTED"
         logger.info("Mute sync: detected %s shortcut -> %s", self._app_key, state)
         self._fire_mute_changed(muted)

@@ -703,6 +703,37 @@ class TestPrivacyFirstMute:
         ms._run_detection_cycle(apply_held=False)
         assert ms.is_muted is False  # manual wins, no re-mute
 
+    def test_hotkey_unmute_resets_remute_grace(self):
+        """Unmuting via the meeting hotkey (Alt+A) gives the full grace window.
+
+        Regression: _on_mute_shortcut_pressed toggled _muted but left
+        _last_uia_ts stale, so if the toolbar was hidden (UIA blind) the very
+        next poll re-muted the user within ~1s of them unmuting. The hotkey is
+        fresh user-driven evidence of the unmute and must reset the timer.
+        """
+        t = [0.0]
+        ms = self._ms(clock=lambda: t[0])
+        ms._detect_via_uia = mock.MagicMock(return_value=True)  # conclusive MUTED
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True  # _last_uia_ts pinned at t=0
+
+        # Much later, user presses Alt+A to unmute; toolbar then hidden.
+        t[0] = 30.0
+        ms._is_meeting_app_focused = mock.MagicMock(return_value=True)
+        ms._on_mute_shortcut_pressed()
+        assert ms.is_muted is False
+
+        # Immediate blind poll must NOT re-mute (we're within the fresh grace).
+        ms._detect_via_uia = mock.MagicMock(return_value=None)
+        t[0] = 30.5
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is False  # the bug re-muted here (30.5 - 0 >= grace)
+
+        # Still re-mutes if we stay blind past a FULL grace window from unmute.
+        t[0] = 41.0  # 11s after the hotkey unmute, grace = 10s
+        ms._run_detection_cycle(apply_held=False)
+        assert ms.is_muted is True
+
     def test_uia_disabled_uses_registry_only(self):
         ms = MuteSync(
             app_key="zoom", target_pids={100},
