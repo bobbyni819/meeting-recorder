@@ -3459,6 +3459,25 @@ class MainWindow:
             fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2", padx=6, pady=3,
         )
         import_btn.pack(side=tk.RIGHT, padx=(0, 4), pady=3)
+        caption_path_value = getattr(meta, "caption_available", "")
+        transcription_source = getattr(meta, "transcription_source", "")
+        if isinstance(meta, dict):
+            caption_path_value = caption_path_value or meta.get("caption_available", "")
+            transcription_source = (
+                transcription_source or meta.get("transcription_source", ""))
+        caption_available = (
+            bool(caption_path_value)
+            and transcription_source not in (
+                "teams_vtt", "teams_docx", "zoom_caption")
+        )
+        if caption_available:
+            try:
+                caption_available = Path(caption_path_value).exists()
+            except (OSError, TypeError, ValueError):
+                caption_available = False
+        import_btn_fg = AMBER if caption_available else TEXT_DIM
+        if caption_available:
+            import_btn.configure(text="\u21ea Import \u2022", fg=import_btn_fg)
 
         def _format_import_speakers(speakers) -> str:
             if isinstance(speakers, (list, tuple, set)):
@@ -3594,7 +3613,7 @@ class MainWindow:
 
         import_btn.bind("<Button-1>", _show_import_menu)
         import_btn.bind("<Enter>", lambda e: import_btn.configure(fg=TEXT_COLOR))
-        import_btn.bind("<Leave>", lambda e: import_btn.configure(fg=TEXT_DIM))
+        import_btn.bind("<Leave>", lambda e: import_btn.configure(fg=import_btn_fg))
 
         transcript_btn.bind("<Button-1>", lambda e: _switch_tab("transcript", transcript_text, transcript_btn))
         summary_btn.bind("<Button-1>", lambda e: _switch_tab("summary", summary_text, summary_btn))
