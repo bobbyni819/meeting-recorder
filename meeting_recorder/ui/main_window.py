@@ -710,6 +710,7 @@ class MainWindow:
             ("\u29bf Record Window...", self._on_record_window),
             ("\U0001f4e5 Import Audio...", self._import_audio_dialog),
             ("\U0001f50d Search", self._on_search),
+            ("\u2753 Ask", self._show_ask),
             ("\U0001f4c2 Open Folder", self._on_open_recordings),
             ("\U0001f4e6 Export All", self._export_transcripts),
             ("\U0001f4cb Export CSV", self._export_csv_data),
@@ -4896,6 +4897,15 @@ class MainWindow:
         if not hasattr(self, "_stats_window"):
             self._stats_window = StatsWindow(base)
         self._stats_window.show(self._window)
+
+    def _show_ask(self) -> None:
+        """Open the ask-your-meetings window."""
+        if not self._window:
+            return
+        from meeting_recorder.ui.ask_window import AskWindow
+        if not hasattr(self, "_ask_window"):
+            self._ask_window = AskWindow()
+        self._ask_window.show(self._window)
 
     def _show_voice_profiles(self) -> None:
         """Open the voice profiles management window."""
