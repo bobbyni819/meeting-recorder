@@ -59,6 +59,36 @@ If running from source without installing scripts:
 python3 -m meeting_recorder
 ```
 
+## Running the app
+
+From the repo root, run the macOS menu bar app directly:
+
+```bash
+python3 launch_mac.py
+```
+
+You can also use the package entry point:
+
+```bash
+python3 -m meeting_recorder mac
+```
+
+On first launch, grant macOS permissions to the app that starts Python
+(Terminal, iTerm, VS Code, PyCharm, or a packaged Meeting Recorder app):
+Microphone for mic audio, Screen Recording for screen capture, and
+Accessibility for global hotkeys and mute-state probing. Fully quit and
+reopen that launcher after changing permissions.
+
+For system audio, install and configure BlackHole:
+
+```bash
+brew install blackhole-2ch
+```
+
+Route your meeting/system output through a Multi-Output or Aggregate Device
+that includes BlackHole. If BlackHole is not available, the app continues with
+microphone-only capture and leaves the WAV files available for recovery.
+
 ## Known Limitations
 
 - System audio currently requires BlackHole or another loopback input device.
@@ -67,4 +97,3 @@ python3 -m meeting_recorder
   current Zoom, Teams, and Webex builds.
 - ScreenCaptureKit is the planned future upgrade for native window and system
   audio capture.
-

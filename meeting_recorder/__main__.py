@@ -41,10 +41,34 @@ def _set_app_user_model_id() -> None:
         pass
 
 
+def _run_macos_app() -> None:
+    """Run the macOS menu bar app with mac-only imports kept lazy."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(
+                "meeting_recorder_mac.log", encoding="utf-8", mode="a"
+            ),
+        ],
+    )
+    from meeting_recorder.macos.app import MacMenubarApp
+
+    MacMenubarApp().run()
+
+
 def main() -> None:
     """Main entry point for Meeting Recorder."""
     _fix_stdio()
     _set_app_user_model_id()
+
+    if (len(sys.argv) > 1 and sys.argv[1] == "mac") or (
+        len(sys.argv) == 1 and sys.platform == "darwin"
+    ):
+        _run_macos_app()
+        return
 
     # Handle subcommands before full app startup
     if len(sys.argv) > 1:
