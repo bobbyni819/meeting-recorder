@@ -413,8 +413,17 @@ def _check_mic() -> int:
         print(_fail("PyAudioWPatch not installed"))
         failures += 1
     except Exception as e:
-        print(_fail(f"Mic probe failed: {e}"))
-        failures += 1
+        # No mic plugged in is an environmental/degraded state, not a broken
+        # install — the app still records meeting/app audio without one. Treat
+        # it as a WARN (don't fail diagnostics); other mic errors are real.
+        if "No Default Input Device" in str(e) or "Invalid device" in str(e):
+            print(_warn(
+                "No microphone detected — meeting/app audio still records; "
+                "plug in a mic to capture your voice"
+            ))
+        else:
+            print(_fail(f"Mic probe failed: {e}"))
+            failures += 1
 
     return failures
 

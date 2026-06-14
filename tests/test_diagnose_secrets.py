@@ -183,3 +183,36 @@ class TestCheckSecretsStructured:
         with patch("meeting_recorder.config.SECRETS_FILE", bad):
             cat = _check_secrets_structured()
         assert cat.status == "fail"
+
+
+class TestMicCheckNoDevice:
+    """A missing microphone is environmental (WARN), not a hard failure."""
+
+    def test_no_input_device_is_warn_not_failure(self, capsys, monkeypatch):
+        from unittest import mock
+        from meeting_recorder import diagnose
+
+        fake_pa = mock.MagicMock()
+        fake_pa.PyAudio.return_value.get_default_input_device_info.side_effect = (
+            OSError("No Default Input Device Available")
+        )
+        monkeypatch.setitem(__import__("sys").modules, "pyaudiowpatch", fake_pa)
+
+        failures = diagnose._check_mic()
+
+        out = capsys.readouterr().out
+        assert failures == 0                       # does NOT count as a failure
+        assert "No microphone detected" in out     # surfaced as a warning
+
+    def test_real_mic_error_still_fails(self, capsys, monkeypatch):
+        from unittest import mock
+        from meeting_recorder import diagnose
+
+        fake_pa = mock.MagicMock()
+        fake_pa.PyAudio.return_value.get_default_input_device_info.side_effect = (
+            RuntimeError("portaudio exploded")
+        )
+        monkeypatch.setitem(__import__("sys").modules, "pyaudiowpatch", fake_pa)
+
+        failures = diagnose._check_mic()
+        assert failures == 1                       # genuine errors still fail
