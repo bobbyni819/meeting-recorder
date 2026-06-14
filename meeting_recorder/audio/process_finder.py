@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes
 import logging
+import sys
 from dataclasses import dataclass
 
 import psutil
@@ -65,10 +65,15 @@ def _get_descendant_pids(parent_pids: set[int]) -> set[int]:
     return descendants
 
 
-# Callback type for EnumWindows
-_WNDENUMPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
-)
+if sys.platform == "win32":
+    import ctypes.wintypes
+
+    # Callback type for EnumWindows
+    _WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+else:
+    _WNDENUMPROC = None
 
 # Process name patterns for meeting apps
 MEETING_APPS = {

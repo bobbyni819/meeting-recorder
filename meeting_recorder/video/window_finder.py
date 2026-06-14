@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes
 import logging
+import sys
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-user32 = ctypes.windll.user32
+if sys.platform == "win32":
+    import ctypes.wintypes
 
-# Enable DPI awareness so GetWindowRect returns real pixel coordinates
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
-    pass
+    user32 = ctypes.windll.user32
 
-# Callback type for EnumWindows
-WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    # Enable DPI awareness so GetWindowRect returns real pixel coordinates
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        pass
+
+    # Callback type for EnumWindows
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+else:
+    user32 = None
+    WNDENUMPROC = None
+
 
 
 def find_window_by_pid(pid: int) -> Optional[int]:

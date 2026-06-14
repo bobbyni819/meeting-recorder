@@ -13,33 +13,39 @@ simultaneously.
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes
 import logging
 import ntpath
 import re
+import sys
 import threading
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-user32 = ctypes.windll.user32
+if sys.platform == "win32":
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+else:
+    user32 = None
 
 # Declare 64-bit-safe handle types. Window handles are pointers; left
 # untyped (default c_int) they overflow with "int too long to convert" once
 # another library (uiautomation, for mute detection) sets .restype on a
 # shared user32 function. See the same fix in video/screen_capture.py.
-try:
-    import ctypes.wintypes as _wintypes
+if user32 is not None:
+    try:
+        import ctypes.wintypes as _wintypes
 
-    user32.GetForegroundWindow.restype = ctypes.c_void_p
-    user32.GetForegroundWindow.argtypes = []
-    user32.GetWindowThreadProcessId.argtypes = [
-        ctypes.c_void_p, ctypes.POINTER(_wintypes.DWORD),
-    ]
-    user32.GetWindowThreadProcessId.restype = _wintypes.DWORD
-except Exception:  # pragma: no cover - non-Windows / stubbed ctypes
-    pass
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetWindowThreadProcessId.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_wintypes.DWORD),
+        ]
+        user32.GetWindowThreadProcessId.restype = _wintypes.DWORD
+    except Exception:  # pragma: no cover - non-Windows / stubbed ctypes
+        pass
 
 # Mute shortcuts per meeting app
 APP_MUTE_SHORTCUTS = {

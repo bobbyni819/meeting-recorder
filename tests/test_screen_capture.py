@@ -10,6 +10,7 @@ from unittest import mock
 import numpy as np
 import pytest
 
+import meeting_recorder.video.ffmpeg_writer as ffmpeg_writer
 import meeting_recorder.video.screen_capture as screen_capture
 from meeting_recorder.video.screen_capture import (
     FFmpegVideoWriter,
@@ -403,7 +404,7 @@ class TestProbeBestEncoder:
 
     @pytest.fixture(autouse=True)
     def _clear_cache(self, monkeypatch):
-        monkeypatch.setattr(screen_capture, "_ffmpeg_encoder_cache", None)
+        monkeypatch.setattr(ffmpeg_writer, "_ffmpeg_encoder_cache", None)
 
     def _completed(self, returncode=0, stdout=""):
         result = mock.MagicMock()
@@ -413,22 +414,22 @@ class TestProbeBestEncoder:
 
     def test_prefers_nvenc_when_test_encode_passes(self):
         with mock.patch.object(
-            screen_capture.subprocess, "run",
+            ffmpeg_writer.subprocess, "run",
             return_value=self._completed(stdout=self._LISTING_BOTH),
-        ), mock.patch.object(screen_capture, "_test_encode", return_value=True):
+        ), mock.patch.object(ffmpeg_writer, "_test_encode", return_value=True):
             assert _probe_best_encoder("ffmpeg.exe") == "h264_nvenc"
 
     def test_falls_back_to_libx264_when_nvenc_unusable(self):
         """NVENC listed but fails to initialize (no GPU) -> libx264."""
         with mock.patch.object(
-            screen_capture.subprocess, "run",
+            ffmpeg_writer.subprocess, "run",
             return_value=self._completed(stdout=self._LISTING_BOTH),
-        ), mock.patch.object(screen_capture, "_test_encode", return_value=False):
+        ), mock.patch.object(ffmpeg_writer, "_test_encode", return_value=False):
             assert _probe_best_encoder("ffmpeg.exe") == "libx264"
 
     def test_raises_when_no_encoder_available(self):
         with mock.patch.object(
-            screen_capture.subprocess, "run",
+            ffmpeg_writer.subprocess, "run",
             return_value=self._completed(stdout=" A....D aac   AAC\n"),
         ):
             with pytest.raises(RuntimeError):
@@ -436,7 +437,7 @@ class TestProbeBestEncoder:
 
     def test_raises_when_probe_command_fails(self):
         with mock.patch.object(
-            screen_capture.subprocess, "run",
+            ffmpeg_writer.subprocess, "run",
             return_value=self._completed(returncode=1),
         ):
             with pytest.raises(RuntimeError):
@@ -444,9 +445,9 @@ class TestProbeBestEncoder:
 
     def test_successful_probe_is_cached(self):
         with mock.patch.object(
-            screen_capture.subprocess, "run",
+            ffmpeg_writer.subprocess, "run",
             return_value=self._completed(stdout=self._LISTING_BOTH),
-        ) as run, mock.patch.object(screen_capture, "_test_encode", return_value=True):
+        ) as run, mock.patch.object(ffmpeg_writer, "_test_encode", return_value=True):
             assert _probe_best_encoder("ffmpeg.exe") == "h264_nvenc"
             assert _probe_best_encoder("ffmpeg.exe") == "h264_nvenc"
         assert run.call_count == 1
@@ -462,9 +463,9 @@ class TestFFmpegVideoWriter:
 
     def _make_writer(self, proc):
         with mock.patch.dict(sys.modules, {"imageio_ffmpeg": self._fake_imageio()}), \
-             mock.patch.object(screen_capture.subprocess, "Popen", return_value=proc), \
+             mock.patch.object(ffmpeg_writer.subprocess, "Popen", return_value=proc), \
              mock.patch.object(
-                 screen_capture, "_probe_best_encoder", return_value="libx264"
+                 ffmpeg_writer, "_probe_best_encoder", return_value="libx264"
              ):
             return FFmpegVideoWriter(Path("out.mp4"), fps=30.0, width=4, height=4)
 
@@ -517,10 +518,10 @@ class TestFFmpegVideoWriter:
         proc = self._live_proc()
         with mock.patch.dict(sys.modules, {"imageio_ffmpeg": self._fake_imageio()}), \
              mock.patch.object(
-                 screen_capture.subprocess, "Popen", return_value=proc
+                 ffmpeg_writer.subprocess, "Popen", return_value=proc
              ) as popen, \
              mock.patch.object(
-                 screen_capture, "_probe_best_encoder", return_value="h264_nvenc"
+                 ffmpeg_writer, "_probe_best_encoder", return_value="h264_nvenc"
              ):
             FFmpegVideoWriter(Path("out.mp4"), fps=30.0, width=4, height=4, **kwargs)
         return popen.call_args.args[0]
@@ -601,9 +602,9 @@ class TestFfmpegFailoverMidRecording:
         stub = mock.MagicMock()
         stub.get_ffmpeg_exe.return_value = "ffmpeg.exe"
         with mock.patch.dict(sys.modules, {"imageio_ffmpeg": stub}), \
-             mock.patch.object(screen_capture.subprocess, "Popen", return_value=proc), \
+             mock.patch.object(ffmpeg_writer.subprocess, "Popen", return_value=proc), \
              mock.patch.object(
-                 screen_capture, "_probe_best_encoder", return_value="h264_nvenc"
+                 ffmpeg_writer, "_probe_best_encoder", return_value="h264_nvenc"
              ):
             w = FFmpegVideoWriter(Path("o.mp4"), fps=10.0, width=4, height=4)
         proc.stdin.write.side_effect = BrokenPipeError("ffmpeg died")

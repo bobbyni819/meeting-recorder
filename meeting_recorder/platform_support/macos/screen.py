@@ -11,7 +11,7 @@ from typing import Optional
 import numpy as np
 
 from meeting_recorder.platform_support.base import ScreenRecorderBackend, ScreenTarget
-from meeting_recorder.video.screen_capture import FFmpegVideoWriter
+from meeting_recorder.video.ffmpeg_writer import FFmpegVideoWriter
 
 logger = logging.getLogger(__name__)
 
