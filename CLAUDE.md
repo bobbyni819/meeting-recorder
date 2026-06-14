@@ -71,6 +71,7 @@ and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/ui/dashboard.py` — floating overlay (Tkinter GameBarDashboard)
 - `meeting_recorder/transcription/` — faster-whisper pipeline + pyannote diarization
 - `meeting_recorder/storage/action_items.py` — extract action items from transcripts
+- `meeting_recorder/storage/person_dossier.py` — per-person meeting dossier with meetings, actions, talk time, collaborators, and topics
 - `meeting_recorder/storage/auto_tag.py` — topic-based tag suggestions
 - `meeting_recorder/storage/merge.py` — merge multiple recordings
 - `meeting_recorder/storage/comparison.py` — compare recordings, find similar ones
@@ -406,6 +407,7 @@ python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shi
 python -m meeting_recorder import-transcript <dir> [transcript.vtt|transcript.docx]  # import or auto-detect Teams transcript; preserves prior transcript as transcript.original.*
 python -m meeting_recorder import-zoom-captions <dir> [caption_file]  # import Zoom local captions; auto-picks best time match from ~/Documents/Zoom when omitted
 python -m meeting_recorder search <query> # search recordings (FTS5)
+python -m meeting_recorder person "<name>" # build a per-person meeting dossier
 python -m meeting_recorder ask "<question>" [--top-k N] # natural-language Q&A across transcripts using FTS5 retrieval + Gemini, with citations
 python -m meeting_recorder export-markdown <recording-dir> [output.md] # Obsidian-ready note with frontmatter, summary, decisions, action items, transcript
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)

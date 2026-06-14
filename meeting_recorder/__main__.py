@@ -267,6 +267,30 @@ def main() -> None:
         elif cmd == "search":
             from meeting_recorder.search.cli import main as search_main
             sys.exit(search_main(sys.argv[2:]))
+        elif cmd == "person":
+            logging.basicConfig(level=logging.WARNING, format="%(message)s")
+            args = sys.argv[2:]
+            if not args or args[0] in ("-h", "--help"):
+                print('Usage: python -m meeting_recorder person "<name>"')
+                sys.exit(0 if args else 1)
+
+            person_name = " ".join(args).strip()
+            if not person_name:
+                print('Usage: python -m meeting_recorder person "<name>"')
+                sys.exit(1)
+
+            from meeting_recorder.config import Config
+            from meeting_recorder.storage.person_dossier import (
+                build_dossier,
+                format_dossier,
+            )
+
+            dossier = build_dossier(person_name, config=Config.load())
+            if dossier.meeting_count == 0:
+                print(f"No meetings found for '{person_name}'.")
+                sys.exit(0)
+            print(format_dossier(dossier))
+            sys.exit(0)
         elif cmd == "ask":
             logging.basicConfig(level=logging.WARNING, format="%(message)s")
             args = sys.argv[2:]
