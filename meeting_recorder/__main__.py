@@ -267,9 +267,76 @@ def main() -> None:
         elif cmd == "search":
             from meeting_recorder.search.cli import main as search_main
             sys.exit(search_main(sys.argv[2:]))
+        elif cmd == "ask":
+            logging.basicConfig(level=logging.WARNING, format="%(message)s")
+            args = sys.argv[2:]
+            if not args or args[0] in ("-h", "--help"):
+                print(
+                    'Usage: python -m meeting_recorder ask "<question>" '
+                    "[--top-k N]\n\n"
+                    "Ask a natural-language question across indexed meeting "
+                    "transcripts."
+                )
+                sys.exit(0 if args else 1)
+
+            top_k = 5
+            if "--top-k" in args:
+                idx = args.index("--top-k")
+                try:
+                    top_k = int(args[idx + 1])
+                except (IndexError, ValueError):
+                    print("Invalid --top-k value; expected an integer.")
+                    sys.exit(1)
+                args = args[:idx] + args[idx + 2:]
+
+            question = " ".join(args).strip()
+            if not question:
+                print(
+                    'Usage: python -m meeting_recorder ask "<question>" '
+                    "[--top-k N]"
+                )
+                sys.exit(1)
+
+            from meeting_recorder.config import Config
+            from meeting_recorder.search.ask import ask_meetings, format_ask_result
+
+            try:
+                result = ask_meetings(question, top_k=top_k, config=Config.load())
+            except ValueError as e:
+                print(f"Cannot answer question: {e}")
+                sys.exit(1)
+            print(format_ask_result(result))
+            sys.exit(0)
         elif cmd == "stats":
             from meeting_recorder.stats_cli import main as stats_main
             sys.exit(stats_main(sys.argv[2:]))
+        elif cmd == "export-markdown":
+            logging.basicConfig(level=logging.WARNING, format="%(message)s")
+            args = sys.argv[2:]
+            if not args or args[0] in ("-h", "--help"):
+                print(
+                    "Usage: python -m meeting_recorder export-markdown "
+                    "<recording-dir> [output.md]\n\n"
+                    "Export a recording as an Obsidian-ready Markdown note."
+                )
+                sys.exit(0 if args else 1)
+
+            from pathlib import Path as _Path
+
+            from meeting_recorder.storage.markdown_export import save_markdown
+
+            rec_dir = _Path(args[0]).expanduser()
+            if not rec_dir.is_dir():
+                print(f"Not a recording directory: {rec_dir}")
+                sys.exit(1)
+            out_path = _Path(args[1]).expanduser() if len(args) > 1 else None
+            try:
+                saved = save_markdown(rec_dir, out_path)
+            except Exception as e:
+                print(f"Markdown export failed: {e}")
+                sys.exit(1)
+            print(saved)
+            sys.exit(0)
         elif cmd == "dictate":
             logging.basicConfig(level=logging.INFO, format="%(message)s")
             from meeting_recorder.dictation.cli import main as dictate_main

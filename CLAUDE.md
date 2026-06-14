@@ -101,6 +101,7 @@ and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/error_classifier.py` — error categorization with fix suggestions
 - `meeting_recorder/storage/archive.py` — compress old recordings to save disk space
 - `meeting_recorder/storage/transcript_export.py` — SRT/VTT/TXT transcript export
+- `meeting_recorder/storage/markdown_export.py` — Obsidian-ready Markdown notes with frontmatter, summary, decisions, action items, transcript
 - `meeting_recorder/storage/health_summary.py` — recording health scoring with issue detection
 - `meeting_recorder/storage/weekly_report.py` — weekly meeting report generator
 - `meeting_recorder/storage/cost_budget.py` — weekly cost tracking, budget alerts, trends
@@ -113,6 +114,7 @@ and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
 - `meeting_recorder/storage/daily_summary.py` — daily meeting overview with timeline
 - `meeting_recorder/storage/talk_balance.py` — entropy-based talk-time balance scoring
 - `meeting_recorder/storage/transcript_search.py` — full-text search across all transcripts
+- `meeting_recorder/search/ask.py` — cited natural-language Q&A across transcripts via FTS5 retrieval + Gemini
 - `meeting_recorder/storage/engagement_score.py` — composite 0-100 engagement score
 - `meeting_recorder/storage/keyword_alerts.py` — watched keyword monitoring and alerting
 - `meeting_recorder/storage/time_patterns.py` — meeting time-of-day distribution analysis
@@ -404,6 +406,8 @@ python -m meeting_recorder dictate        # solo dictation hotkey loop (Ctrl+Shi
 python -m meeting_recorder import-transcript <dir> [transcript.vtt|transcript.docx]  # import or auto-detect Teams transcript; preserves prior transcript as transcript.original.*
 python -m meeting_recorder import-zoom-captions <dir> [caption_file]  # import Zoom local captions; auto-picks best time match from ~/Documents/Zoom when omitted
 python -m meeting_recorder search <query> # search recordings (FTS5)
+python -m meeting_recorder ask "<question>" [--top-k N] # natural-language Q&A across transcripts using FTS5 retrieval + Gemini, with citations
+python -m meeting_recorder export-markdown <recording-dir> [output.md] # Obsidian-ready note with frontmatter, summary, decisions, action items, transcript
 python -m meeting_recorder stats          # aggregate statistics (--json for raw)
 python -m meeting_recorder stats --weekly # weekly meeting report (--week-offset N)
 python -m meeting_recorder stats --health # recording health summary
@@ -436,8 +440,9 @@ python -m meeting_recorder import-config <file>  # import secrets
 
 ## Transcript export
 - `storage/transcript_export.py`: reads transcript.json, produces SRT/VTT/TXT
+- `storage/markdown_export.py`: creates Obsidian-ready notes with frontmatter, summary, decisions, action items, and transcript
 - Export button in detail view tab bar with format picker menu
-- Saved to recording directory as transcript.srt/.vtt/.txt
+- Saved to recording directory as transcript.srt/.vtt/.txt or via the detail-view `Meeting Note (.md)` export
 
 ## HTML export enhancements
 - `storage/html_export.py` includes: sentiment, participation equity, meeting ROI, key terms

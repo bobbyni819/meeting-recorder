@@ -3486,6 +3486,7 @@ class MainWindow:
                                activebackground=BLUE_ACCENT, activeforeground=TEXT_BRIGHT)
                 for fmt, label in [("srt", "SRT Subtitles (.srt)"), ("vtt", "WebVTT (.vtt)"), ("txt", "Timestamped Text (.txt)")]:
                     menu.add_command(label=label, command=lambda f=fmt: _export_format(f))
+                menu.add_command(label="Meeting Note (.md)", command=_export_markdown)
                 menu.post(event.x_root, event.y_root)
 
             def _export_format(fmt: str):
@@ -3503,6 +3504,14 @@ class MainWindow:
                     export_btn.configure(text="Export failed", fg=AMBER)
                     if self._window:
                         self._schedule_reset(export_btn, 2000, text="\u2913 Export", fg=TEXT_DIM)
+
+            def _export_markdown():
+                try:
+                    from meeting_recorder.storage.markdown_export import save_markdown
+                    path = save_markdown(rec_path)
+                    self.add_notification("success", f"Markdown saved: {path.name}", source="export")
+                except Exception as e:
+                    self.add_notification("error", f"Markdown export failed: {e}", source="export")
 
             export_btn.bind("<Button-1>", _show_export_menu)
             export_btn.bind("<Enter>", lambda e: export_btn.configure(fg=TEXT_COLOR))
