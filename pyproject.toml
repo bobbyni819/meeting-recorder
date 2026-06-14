@@ -50,6 +50,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+macos = [
+    "pyobjc-core",
+    "pyobjc-framework-Cocoa",
+    "pyobjc-framework-Quartz",
+    "pyobjc-framework-ApplicationServices",
+    "rumps",
+    "sounddevice",
+    "pynput",
+    "mss",
+]
 local = [
     "faster-whisper>=1.0",
     "torch>=2.1",

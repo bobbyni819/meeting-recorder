@@ -45,8 +45,8 @@ def get_backends() -> PlatformBackends:
             from meeting_recorder.platform_support.macos import create_backends
         except ImportError as exc:
             raise NotImplementedError(
-                "macOS backend not yet installed. Install the macOS platform "
-                "support package when Phase 2 lands."
+                "macOS backend dependencies are not installed. Install with: "
+                "pip install -e '.[macos]'"
             ) from exc
         return create_backends()
     raise NotImplementedError(f"Platform '{os_name}' is not supported yet.")
