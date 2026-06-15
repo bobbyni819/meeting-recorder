@@ -2,8 +2,9 @@
 output_dir = "~/MeetingRecordings"
 language = "en"
 user_name = "User"
-live_transcription = true  # real-time transcription preview during recording (uses tiny model on CPU)
+live_transcription = true  # real-time transcription preview during recording
 live_transcript_mic = true  # also feed your mic into the live preview (labelled [You])
+live_model_size = "large-v3-turbo"  # live-preview Whisper model ("" = tier default: small). Verified on the RTX 5060: ~33x real-time, near-final accuracy. Options: tiny/base/small/medium/distil-large-v3/large-v3-turbo
 auto_start = false  # auto-detect Zoom/Teams/Webex meetings and start recording
 auto_retry_failed = true  # heal failed/stuck recordings at startup (cheap tail steps: missing summary/upload)
 auto_retry_full_reprocess = false  # auto RE-TRANSCRIBE failed recordings at startup — off to protect free-tier API quota (reprocess manually instead)
