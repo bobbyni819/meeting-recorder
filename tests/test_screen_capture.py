@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -45,6 +46,26 @@ class TestScreenCaptureLatestFrame:
         sc = ScreenCapture(pid=1234, process_name="test.exe", output_path=Path("out.mp4"))
         sc._latest_frame = np.zeros((480, 640, 3), dtype=np.uint8)
         sc.stop()
+        assert sc.latest_frame is None
+
+    def test_stop_from_own_capture_thread_does_not_raise(self):
+        sc = ScreenCapture(pid=1234, process_name="test.exe", output_path=Path("out.mp4"))
+        errors = []
+
+        def _stop_from_capture_thread():
+            sc._thread = threading.current_thread()
+            try:
+                sc.stop()
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=_stop_from_capture_thread, name="screen-capture")
+        thread.start()
+        thread.join(timeout=2.0)
+
+        assert not thread.is_alive()
+        assert errors == []
+        assert sc._stop_event.is_set()
         assert sc.latest_frame is None
 
 

@@ -687,11 +687,22 @@ class CaptureManager:
         if self._stop_event.is_set() or not self._is_recording:
             return
         logger.info("Recorded window closed — auto-stopping recording.")
-        if self._on_stopped:
+        callback = self._on_stopped
+        if callback:
+            def _run_callback() -> None:
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("on_stopped (window-closed) callback error")
+
             try:
-                self._on_stopped()
+                threading.Thread(
+                    target=_run_callback,
+                    name="auto-stop",
+                    daemon=True,
+                ).start()
             except Exception:
-                logger.exception("on_stopped (window-closed) callback error")
+                logger.exception("Could not start window-closed auto-stop thread")
 
     def _monitor_process(self) -> None:
         """Monitor the target process and auto-stop if it exits.

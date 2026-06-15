@@ -393,13 +393,18 @@ class ScreenCapture:
     def stop(self) -> None:
         """Stop the screen capture thread and finalize the video."""
         self._stop_event.set()
-        if self._thread is not None:
+        t = self._thread
+        if t is not None:
             # Generous timeout: the writer thread must drain its queue and
             # the encoder must flush/finalize the container before exit.
-            self._thread.join(timeout=15.0)
-            if self._thread.is_alive():
-                logger.warning("Screen capture thread did not exit within 15s")
-            self._thread = None
+            if t is not threading.current_thread():
+                t.join(timeout=15.0)
+                if t.is_alive():
+                    logger.warning("Screen capture thread did not exit within 15s")
+                else:
+                    self._thread = None
+            else:
+                logger.debug("Skipping screen capture self-join during stop.")
         self._latest_frame = None
         logger.info("Screen capture stopped.")
 
@@ -1088,9 +1093,10 @@ class ScreenCapture:
                     logger.warning(
                         "Could not signal video writer thread (queue full)"
                     )
-                writer_thread.join(timeout=10.0)
-                if writer_thread.is_alive():
-                    logger.warning("Video writer thread did not drain within 10s")
+                if writer_thread is not threading.current_thread():
+                    writer_thread.join(timeout=10.0)
+                    if writer_thread.is_alive():
+                        logger.warning("Video writer thread did not drain within 10s")
             elif writer_thread is None and writer is not None:
                 # Writer created but its thread never started — release directly
                 try:
