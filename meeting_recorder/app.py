@@ -496,6 +496,11 @@ class MeetingRecorderApp:
         if self.config.audio.mic_device:
             mic_device = self._find_mic_device_index(self.config.audio.mic_device)
 
+        live_model_size = (
+            (self.config.recording.live_model_size or "").strip()
+            or self._perf_tier.live_model_size
+        )
+
         # Start capture manager (pass pre-loaded VAD to avoid threading deadlock)
         self._capture_manager = CaptureManager(
             pid=process.pid,
@@ -533,6 +538,7 @@ class MeetingRecorderApp:
             ),
             live_transcription_device=self._perf_tier.live_device,
             live_transcription_compute_type=self._perf_tier.live_compute_type,
+            live_transcription_model_size=live_model_size,
             live_transcription_interval=self._perf_tier.live_interval,
             start_muted_default=self.config.recording.start_muted,
             mute_privacy_first=self.config.recording.mute_privacy_first,

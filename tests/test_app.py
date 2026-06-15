@@ -11,6 +11,7 @@ import copy
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 from unittest.mock import MagicMock
@@ -98,6 +99,44 @@ class TestStartRecording:
         call_kwargs = MockCM.call_args[1]
         assert call_kwargs["pid"] == 1234
         mock_cm_instance.start.assert_called_once()
+
+    def test_live_model_size_config_overrides_tier_default(self, tmp_path):
+        cfg = Config()
+        cfg.recording.live_model_size = "large-v3-turbo"
+        app = _make_app(cfg)
+        app._perf_tier = SimpleNamespace(
+            name="full",
+            video_encoder="nvenc",
+            live_transcription=True,
+            live_transcript_mic=True,
+            live_insights=True,
+            live_device="cuda",
+            live_compute_type="float16",
+            live_interval=2.5,
+            live_model_size="small",
+        )
+        process = _make_process()
+        rec_dir = tmp_path / "rec"
+        rec_dir.mkdir()
+
+        mock_cm_instance = MagicMock()
+        mock_cm_instance.mute_sync = None
+        mock_cm_instance.is_recording = True
+
+        with (
+            mock.patch.object(_app_mod, "CaptureManager", return_value=mock_cm_instance) as MockCM,
+            mock.patch.object(_app_mod, "find_current_meeting", return_value=None),
+            mock.patch.object(_app_mod, "RecordingMetadata") as MockMeta,
+            mock.patch.object(_app_mod, "GameBarDashboard"),
+        ):
+            meta_inst = MagicMock()
+            meta_inst.meeting_subject = ""
+            meta_inst.meeting_attendees = []
+            MockMeta.create.return_value = meta_inst
+            app._recording_store.create_recording_dir = MagicMock(return_value=rec_dir)
+            app._start_recording_for_process(process)
+
+        assert MockCM.call_args.kwargs["live_transcription_model_size"] == "large-v3-turbo"
 
     def test_start_recording_failure_resets_state(self):
         """If _start_recording_for_process raises, state is cleaned up.

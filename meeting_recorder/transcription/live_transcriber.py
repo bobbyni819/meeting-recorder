@@ -1,8 +1,8 @@
 """Real-time transcription preview using a lightweight whisper model.
 
 Two-tier design: this module produces a fast rough draft during the
-meeting (tiny model, CPU); the post-hoc pipeline still produces the
-accurate permanent transcript afterwards. Audio can be fed from multiple
+meeting (tier-selected local Whisper model); the post-hoc pipeline still
+produces the accurate permanent transcript afterwards. Audio can be fed from multiple
 sources ("app" = remote participants, "mic" = the user); each source is
 transcribed from its own rolling buffer and stable text is merged into
 one accumulated, speaker-labelled live transcript.
@@ -88,8 +88,8 @@ class LiveTranscriber:
         Args:
             on_transcript: Callback receiving the latest display text
                 (accumulated tail + provisional, speaker-labelled).
-            model_size: Whisper model size for live preview (tiny recommended).
-            device: Device for inference (cpu recommended for live to not compete with GPU recording).
+            model_size: Whisper model size for live preview.
+            device: Device for inference.
             compute_type: Compute type for the model.
             language: Language code for transcription.
             buffer_seconds: How many seconds of recent audio to keep per source.
@@ -262,28 +262,49 @@ class LiveTranscriber:
             self._stop_event.set()
             return
 
+        requested_model = (self._model_size or "tiny").strip() or "tiny"
         attempts = [(self._device, self._compute_type)]
         if self._device != "cpu":
             attempts.append(("cpu", "int8"))
-        for device, compute_type in attempts:
-            try:
-                logger.info(
-                    "Loading live transcription model: %s on %s (%s)",
-                    self._model_size, device, compute_type,
-                )
-                self._model = WhisperModel(
-                    self._model_size, device=device, compute_type=compute_type,
-                )
-                self._device, self._compute_type = device, compute_type
-                logger.info("Live transcription model loaded on %s.", device)
-                return
-            except Exception:
+
+        model_candidates = [requested_model]
+        if requested_model != "tiny":
+            model_candidates.append("tiny")
+
+        for model_index, model_size in enumerate(model_candidates):
+            if model_index == 1:
                 logger.warning(
-                    "Live model load failed on %s; %s",
-                    device,
-                    "trying CPU" if device != "cpu" else "giving up",
-                    exc_info=True,
+                    "Requested live transcription model %r failed on all "
+                    "devices; falling back to 'tiny'.",
+                    requested_model,
                 )
+            for device, compute_type in attempts:
+                try:
+                    logger.info(
+                        "Loading live transcription model: %s on %s (%s)",
+                        model_size, device, compute_type,
+                    )
+                    self._model = WhisperModel(
+                        model_size, device=device, compute_type=compute_type,
+                    )
+                    self._model_size = model_size
+                    self._device, self._compute_type = device, compute_type
+                    logger.info("Live transcription model loaded on %s.", device)
+                    return
+                except Exception:
+                    on_last_device = (device, compute_type) == attempts[-1]
+                    has_model_fallback = model_index == 0 and requested_model != "tiny"
+                    if on_last_device and has_model_fallback:
+                        next_step = "trying tiny fallback"
+                    elif device != "cpu":
+                        next_step = "trying CPU"
+                    else:
+                        next_step = "giving up"
+                    logger.warning(
+                        "Live model %s load failed on %s; %s",
+                        model_size, device, next_step,
+                        exc_info=True,
+                    )
         self._stop_event.set()
 
     def _transcription_loop(self) -> None:

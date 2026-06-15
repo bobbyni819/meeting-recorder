@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import sys
 import threading
 import time
+import types
 import wave
 from unittest.mock import MagicMock, patch
 
@@ -71,6 +73,76 @@ class TestLiveTranscriberDefaults:
         assert lt._transcribe_interval == 1.0
         assert lt._on_transcript is cb
         assert lt._max_samples == int(5.0 * 8000)
+
+
+class TestModelLoading:
+    """Model loading should degrade gracefully."""
+
+    def test_requested_model_falls_back_to_tiny_after_device_attempts(
+        self, monkeypatch,
+    ):
+        calls = []
+
+        fake_module = types.ModuleType("faster_whisper")
+
+        class FakeWhisperModel:
+            def __init__(self, model_size, device, compute_type):
+                calls.append((model_size, device, compute_type))
+                if model_size == "small":
+                    raise RuntimeError("requested model unavailable")
+                self.model_size = model_size
+
+        fake_module.WhisperModel = FakeWhisperModel
+        monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+        lt = LiveTranscriber(
+            model_size="small",
+            device="cuda",
+            compute_type="float16",
+        )
+        lt._load_model()
+
+        assert lt._model is not None
+        assert lt._model_size == "tiny"
+        assert calls == [
+            ("small", "cuda", "float16"),
+            ("small", "cpu", "int8"),
+            ("tiny", "cuda", "float16"),
+        ]
+        assert not lt._stop_event.is_set()
+
+
+class TestCaptureManagerLiveModelWiring:
+    """CaptureManager should pass the configured live model through."""
+
+    def test_passes_model_size_to_live_transcriber(self, tmp_path):
+        from meeting_recorder.audio.capture_manager import CaptureManager
+
+        with (
+            patch("meeting_recorder.audio.capture_manager.AppAudioCapture"),
+            patch("meeting_recorder.audio.capture_manager.MicAudioCapture"),
+            patch("meeting_recorder.audio.capture_manager.VoiceActivityDetector"),
+            patch("meeting_recorder.audio.capture_manager.AudioLevelMonitor"),
+            patch.object(CaptureManager, "_writer_loop", return_value=None),
+            patch.object(CaptureManager, "_monitor_process", return_value=None),
+            patch.object(CaptureManager, "_level_monitor_loop", return_value=None),
+            patch.object(CaptureManager, "_silence_auto_switch", return_value=None),
+            patch(
+                "meeting_recorder.transcription.live_transcriber.LiveTranscriber"
+            ) as MockLiveTranscriber,
+        ):
+            mgr = CaptureManager(
+                pid=100,
+                output_dir=tmp_path,
+                screen_recording_enabled=False,
+                live_transcription_enabled=True,
+                live_transcription_model_size="small",
+            )
+            mgr.start()
+
+        MockLiveTranscriber.assert_called_once()
+        assert MockLiveTranscriber.call_args.kwargs["model_size"] == "small"
+        MockLiveTranscriber.return_value.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

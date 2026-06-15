@@ -25,6 +25,8 @@ and uploads to Google Drive. Runs as a Windows system-tray app (`launch.pyw`).
 - **Live transcription** (`transcription/live_transcriber.py`): ON by default; accumulates
   a stable rolling transcript (per-source watermarks) to `live_transcript.txt`; mic fed as
   a second `[You]` source; free local concept extraction (topic/keyword) via `on_insight`.
+  Live preview uses the tier-selected local Whisper model (`small` on balanced/full
+  machines) while the final/post-hoc transcript still uses Gemini by default.
 - **Mute sync** (`audio/uia_mute_detector.py`, `mute_sync.py`): UIA-first reads the real
   Zoom/Teams mute-button state (registry "mic open" ≠ soft-mute); packaged-Teams registry;
   `resume_auto_sync()` (dashboard right-click) un-sticks a manual override. Initial-state
@@ -361,6 +363,9 @@ Secret/local fields: `transcription.openai_api_key`, `transcription.gemini_api_k
 - `diarization.enabled = true` (requires HuggingFace token + 3 gated model acceptances)
 - `screen_recording.enabled = true`, `fps = 30`, `quality = 21` (CQ/CRF; lower = crisper, bigger)
 - `recording.echo_gate = false` (drop mic frames that are speaker-echo of the meeting; opt-in, validated safe)
+- `recording.live_model_size = ""` (empty = performance tier default; balanced/full
+  default to `small`, light keeps `tiny`; opt-in options include `tiny`, `base`,
+  `small`, `medium`, `distil-large-v3`, `large-v3-turbo`)
 - `retention.enabled = false`, `max_age_days = 90`, `max_total_gb = 0`
 - Output: `~/MeetingRecordings/`
 

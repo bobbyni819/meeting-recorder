@@ -42,7 +42,7 @@ class PerformanceTier:
     """Resolved capability decisions for the current machine."""
 
     name: str
-    # Live transcription preview at all (tiny model).
+    # Live transcription preview at all.
     live_transcription: bool
     # Feed the user's mic as a second live source.
     live_transcript_mic: bool
@@ -52,6 +52,9 @@ class PerformanceTier:
     video_encoder: str
     # Run live concept extraction (keyword/topic). Always cheap.
     live_insights: bool
+    # Live preview model. "distil-large-v3" and "large-v3-turbo" are excellent
+    # opt-in choices for near-final accuracy on a capable GPU.
+    live_model_size: str = "tiny"
     # Device for the live transcription model. "cuda" is ~10x faster than
     # "cpu" for the tiny model and the GPU is idle during a meeting (cloud
     # transcription; the local fallback only runs post-meeting). Resolved
@@ -69,6 +72,7 @@ _TIER_PRESETS: dict[str, PerformanceTier] = {
     "light": PerformanceTier(
         name="light",
         live_transcription=False,      # protect a weak CPU
+        live_model_size="tiny",        # live is off here; keep legacy default
         live_transcript_mic=False,
         fallback_model_size="small",   # large-v3 on CPU could take hours
         video_encoder="cv2",           # no software libx264 CPU burn
@@ -77,6 +81,7 @@ _TIER_PRESETS: dict[str, PerformanceTier] = {
     "balanced": PerformanceTier(
         name="balanced",
         live_transcription=True,
+        live_model_size="small",
         live_transcript_mic=True,
         fallback_model_size="medium",
         video_encoder="nvenc",         # GPU present; falls back if probe fails
@@ -85,6 +90,7 @@ _TIER_PRESETS: dict[str, PerformanceTier] = {
     "full": PerformanceTier(
         name="full",
         live_transcription=True,
+        live_model_size="small",
         live_transcript_mic=True,
         fallback_model_size="large-v3",
         video_encoder="nvenc",
@@ -182,6 +188,8 @@ def resolve_tier(profile: str, hw: HardwareInfo | None = None) -> PerformanceTie
     # it never contends with the audio writers or the NVENC video encode on a
     # long recording — the recording always takes priority over the preview.
     if hw.has_cuda and preset.live_transcription:
+        # dataclasses.replace preserves live_model_size; only device timing
+        # changes when CUDA is available.
         return replace(
             preset, live_device="cuda", live_compute_type="float16",
             live_interval=2.5,

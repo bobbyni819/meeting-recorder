@@ -79,6 +79,17 @@ class TestTierContracts:
         assert _TIER_PRESETS["full"].fallback_model_size == "large-v3"
         assert _TIER_PRESETS["full"].video_encoder == "nvenc"
 
+    def test_live_model_size_by_tier(self):
+        assert _TIER_PRESETS["light"].live_model_size == "tiny"
+        assert _TIER_PRESETS["balanced"].live_model_size == "small"
+        assert _TIER_PRESETS["full"].live_model_size == "small"
+
+    def test_cuda_resolution_preserves_live_model_size(self):
+        tier = resolve_tier("full", hw=_hw(cuda=True, vram=12.0, cores=16))
+        assert tier.live_device == "cuda"
+        assert tier.live_compute_type == "float16"
+        assert tier.live_model_size == "small"
+
     def test_insights_always_enabled(self):
         """Concept extraction is sub-millisecond; on for every tier."""
         assert all(t.live_insights for t in _TIER_PRESETS.values())

@@ -46,6 +46,7 @@ class TestConfigDefaults:
         assert cfg.output_dir == "~/MeetingRecordings"
         assert cfg.language == "en"
         assert cfg.user_name == "User"
+        assert cfg.live_model_size == ""
 
     def test_default_audio_config(self):
         cfg = AudioConfig()
@@ -564,6 +565,21 @@ class TestConfigValidation:
         cfg.transcription.model_size = "large-v3"
         warnings = cfg.validate()
         assert not any("model" in w.lower() for w in warnings)
+
+    def test_new_whisper_model_names_ok(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.transcription.model_size = "distil-large-v3"
+        cfg.recording.live_model_size = "large-v3-turbo"
+        warnings = cfg.validate()
+        assert not any("model" in w.lower() for w in warnings)
+
+    def test_invalid_live_model_size_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.recording.live_model_size = "not-a-model"
+        warnings = cfg.validate()
+        assert any("recording.live_model_size" in w for w in warnings)
 
     def test_invalid_device_warns(self):
         cfg = Config()

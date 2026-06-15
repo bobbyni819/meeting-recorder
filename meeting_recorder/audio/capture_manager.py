@@ -170,6 +170,7 @@ class CaptureManager:
         on_live_insight: Optional[callable] = None,
         live_transcription_device: str = "cpu",
         live_transcription_compute_type: str = "int8",
+        live_transcription_model_size: str = "tiny",
         live_transcription_interval: float = 3.0,
         start_muted_default: bool = True,
         mute_privacy_first: bool = True,
@@ -213,6 +214,7 @@ class CaptureManager:
         self._on_live_insight = on_live_insight
         self._live_transcription_device = live_transcription_device
         self._live_transcription_compute_type = live_transcription_compute_type
+        self._live_transcription_model_size = live_transcription_model_size
         self._live_transcription_interval = live_transcription_interval
 
         # Echo gate: drops mic frames that are just the meeting audio echoing
@@ -445,6 +447,7 @@ class CaptureManager:
                     on_insight=self._on_live_insight,
                     device=self._live_transcription_device,
                     compute_type=self._live_transcription_compute_type,
+                    model_size=self._live_transcription_model_size,
                     transcribe_interval=self._live_transcription_interval,
                     should_transcribe=lambda: not self._writers_backed_up(),
                 )

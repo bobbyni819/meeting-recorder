@@ -92,6 +92,10 @@ class RecordingConfig:
     language: str = "en"
     user_name: str = "User"
     live_transcription: bool = False
+    # Live preview Whisper model. Empty string means use the machine's
+    # performance-tier default; final/post-hoc transcription is configured
+    # separately under [transcription].
+    live_model_size: str = ""
     # Feed the user's mic into the live preview too (labelled [You]);
     # app audio (other participants) is always fed when live preview is on.
     live_transcript_mic: bool = True
@@ -464,10 +468,20 @@ class Config:
             )
 
         # Model size validation
-        valid_models = {"tiny", "base", "small", "medium", "large", "large-v1", "large-v2", "large-v3"}
+        valid_models = {
+            "tiny", "base", "small", "medium", "large",
+            "large-v1", "large-v2", "large-v3",
+            "distil-large-v3", "large-v3-turbo",
+        }
         if self.transcription.backend == "local" and self.transcription.model_size not in valid_models:
             warnings.append(
                 f"transcription.model_size = '{self.transcription.model_size}' "
+                f"is not a known Whisper model"
+            )
+        live_model_size = (self.recording.live_model_size or "").strip()
+        if live_model_size and live_model_size not in valid_models:
+            warnings.append(
+                f"recording.live_model_size = '{self.recording.live_model_size}' "
                 f"is not a known Whisper model"
             )
 
