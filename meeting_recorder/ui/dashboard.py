@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import textwrap
 import threading
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from meeting_recorder.audio.level_monitor import MIN_DB
@@ -26,6 +28,9 @@ EXPANDED_HEIGHT = 280
 COLLAPSED_WIDTH = 380
 COLLAPSED_HEIGHT = 44
 PREVIEW_HEIGHT = 115  # 101px thumbnail + 14px padding
+TRANSCRIPT_TOOLBAR_HEIGHT = 24
+TRANSCRIPT_MIN_LINES = 2
+TRANSCRIPT_LINE_SCALE = 1.6
 
 # Dashboard uses AMBER as warning color
 AMBER_WARNING = AMBER
@@ -39,6 +44,7 @@ class DashboardContext:
     is_muted: bool = True
     is_process_specific: bool = True
     show_screen_preview: bool = False
+    recording_dir: str | Path | None = None
 
 
 class GameBarDashboard:
@@ -65,6 +71,8 @@ class GameBarDashboard:
         show_transcript: bool = True,
         transcript_font_size: int = 13,
         transcript_lines: int = 7,
+        transcript_path: str | Path | None = None,
+        transcript_pool_lines: int = 2000,
         position_x: int = -1,
         position_y: int = -1,
         position: str = "top-right",
@@ -82,7 +90,10 @@ class GameBarDashboard:
         self._start_collapsed = start_collapsed
         self._show_transcript = show_transcript
         self._transcript_font_size = max(8, int(transcript_font_size))
-        self._transcript_lines = max(2, int(transcript_lines))
+        self._transcript_lines = max(TRANSCRIPT_MIN_LINES, int(transcript_lines))
+        self._default_transcript_lines = self._transcript_lines
+        self._transcript_path = Path(transcript_path) if transcript_path else None
+        self._transcript_pool_lines = max(100, int(transcript_pool_lines))
         self._position_x = position_x
         self._position_y = position_y
         self._position = position
@@ -104,6 +115,10 @@ class GameBarDashboard:
         self._mute_tooltip: Optional[tk.Toplevel] = None
         self._pause_btn: Optional[tk.Label] = None
         self._transcript_label: Optional[tk.Label] = None
+        self._transcript_frame: Optional[tk.Frame] = None
+        self._transcript_expand_btn: Optional[tk.Label] = None
+        self._transcript_font_inc_btn: Optional[tk.Label] = None
+        self._transcript_font_dec_btn: Optional[tk.Label] = None
         self._transcript_window = None  # LiveTranscriptWindow pop-out
         self._last_transcript_text: str = ""
         self._capture_warning_label: Optional[tk.Label] = None
@@ -115,6 +130,10 @@ class GameBarDashboard:
         self._ctrl_elapsed_label: Optional[tk.Label] = None
         self._collapsed_dot: Optional[tk.Label] = None
         self._collapsed_status_label: Optional[tk.Label] = None
+        self._resize_handle: Optional[tk.Label] = None
+        self._resize_start_y = 0
+        self._resize_start_height = 0
+        self._resize_active = False
 
         # VU state
         self._app_vu_fraction = 0.0
@@ -309,12 +328,7 @@ class GameBarDashboard:
         if not self._show_transcript:
             return
         try:
-            # Keep roughly as many chars as the visible area can show: wider
-            # at smaller fonts, taller with more lines. Trim from the FRONT so
-            # the newest speech stays on screen (rolling tail).
-            chars_per_line = max(20, int(2400 / self._transcript_font_size))
-            budget = chars_per_line * self._transcript_lines
-            strip = text if len(text) <= budget else "..." + text[-(budget - 3):]
+            strip = self._inline_transcript_tail(text)
             self._window.after(0, self._set_transcript, strip)
         except tk.TclError:
             pass
@@ -332,7 +346,10 @@ class GameBarDashboard:
                 return
             if tw is None:
                 self._transcript_window = LiveTranscriptWindow(
-                    self._window, font_size=self._transcript_font_size + 4,
+                    self._window,
+                    font_size=self._transcript_font_size + 4,
+                    transcript_path=self._resolve_transcript_path(),
+                    transcript_pool_lines=self._transcript_pool_lines,
                 )
             self._transcript_window.show()
             if self._last_transcript_text:
@@ -386,6 +403,7 @@ class GameBarDashboard:
         self._window.attributes("-alpha", self._opacity)
         self._window.overrideredirect(True)
         self._window.configure(bg=BG_COLOR)
+        self._window.resizable(False, True)
 
         # Position
         self._apply_position()
@@ -409,12 +427,9 @@ class GameBarDashboard:
         else:
             self._is_collapsed = False
             self._expanded_frame.pack(fill=tk.BOTH, expand=True)
-            height = EXPANDED_HEIGHT
-            if not self._show_transcript:
-                height -= 60
-            if self._show_screen_preview:
-                height += PREVIEW_HEIGHT
+            height = self._expanded_height()
             self._window.geometry(f"{EXPANDED_WIDTH}x{height}")
+            self._window.minsize(EXPANDED_WIDTH, height)
 
         # Dragging
         self._window.bind("<Button-1>", self._start_drag)
@@ -422,6 +437,7 @@ class GameBarDashboard:
 
         # Right-click context menu
         self._window.bind("<Button-3>", self._show_context_menu)
+        self._window.bind("<Configure>", self._on_window_configure)
 
     def _build_expanded(self, parent: tk.Frame) -> None:
         """Build the expanded view widgets."""
@@ -600,14 +616,47 @@ class GameBarDashboard:
 
         # --- Transcript preview (height scales with font size and lines) ---
         if self._show_transcript:
-            # ~1.6 px line height per point, plus padding, so larger fonts and
-            # more lines give a genuinely bigger rolling readable area.
-            preview_height = int(
-                self._transcript_font_size * 1.6 * self._transcript_lines + 12
-            )
+            preview_height = self._transcript_preview_height()
             transcript_frame = tk.Frame(parent, bg=BG_COLOR, height=preview_height)
             transcript_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
             transcript_frame.pack_propagate(False)
+            self._transcript_frame = transcript_frame
+
+            toolbar = tk.Frame(
+                transcript_frame, bg=BG_COLOR, height=TRANSCRIPT_TOOLBAR_HEIGHT,
+            )
+            toolbar.pack(fill=tk.X)
+            toolbar.pack_propagate(False)
+
+            self._transcript_expand_btn = tk.Label(
+                toolbar, text=" Expand ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4, pady=1,
+            )
+            self._transcript_expand_btn.pack(side=tk.RIGHT, padx=(4, 0), pady=2)
+            self._transcript_expand_btn.bind(
+                "<Button-1>", lambda e: self._toggle_transcript_window()
+            )
+            self._bind_button_hover(self._transcript_expand_btn)
+
+            self._transcript_font_inc_btn = tk.Label(
+                toolbar, text=" A+ ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4, pady=1,
+            )
+            self._transcript_font_inc_btn.pack(side=tk.RIGHT, padx=(4, 0), pady=2)
+            self._transcript_font_inc_btn.bind(
+                "<Button-1>", lambda e: self._bump_transcript_font(1)
+            )
+            self._bind_button_hover(self._transcript_font_inc_btn)
+
+            self._transcript_font_dec_btn = tk.Label(
+                toolbar, text=" A- ", font=("Segoe UI", 8),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=4, pady=1,
+            )
+            self._transcript_font_dec_btn.pack(side=tk.RIGHT, padx=(4, 0), pady=2)
+            self._transcript_font_dec_btn.bind(
+                "<Button-1>", lambda e: self._bump_transcript_font(-1)
+            )
+            self._bind_button_hover(self._transcript_font_dec_btn)
 
             self._transcript_label = tk.Label(
                 transcript_frame,
@@ -617,16 +666,6 @@ class GameBarDashboard:
                 wraplength=355, justify=tk.LEFT, anchor=tk.NW,
             )
             self._transcript_label.pack(fill=tk.BOTH, expand=True)
-
-            # Pop-out button: opens a larger, scrollable, resizable reader.
-            expand_btn = tk.Label(
-                transcript_frame, text="⤢", font=("Segoe UI", 11),
-                fg=TEXT_DIM, bg=BG_COLOR, cursor="hand2",
-            )
-            expand_btn.place(relx=1.0, rely=0.0, anchor="ne")
-            expand_btn.bind(
-                "<Button-1>", lambda e: self._toggle_transcript_window()
-            )
 
         # --- Footer (32px) ---
         footer_frame = tk.Frame(parent, bg=BG_COLOR, height=32)
@@ -652,6 +691,15 @@ class GameBarDashboard:
             set_btn.bind("<Button-1>", lambda e: self._on_open_settings())
             set_btn.bind("<Enter>", lambda e: set_btn.configure(bg=BUTTON_HOVER))
             set_btn.bind("<Leave>", lambda e: set_btn.configure(bg=BUTTON_BG))
+
+        self._resize_handle = tk.Label(
+            footer_frame, text="\u2630", font=("Segoe UI", 8),
+            fg=TEXT_DIM, bg=BG_COLOR, cursor="sb_v_double_arrow",
+        )
+        self._resize_handle.pack(side=tk.RIGHT, padx=(0, 8), pady=4)
+        self._resize_handle.bind("<Button-1>", self._start_vertical_resize)
+        self._resize_handle.bind("<B1-Motion>", self._do_vertical_resize)
+        self._resize_handle.bind("<ButtonRelease-1>", self._stop_vertical_resize)
 
     def _build_collapsed(self, parent: tk.Frame) -> None:
         """Build the collapsed mini-indicator view."""
@@ -795,6 +843,142 @@ class GameBarDashboard:
         if self._transcript_label:
             self._transcript_label.configure(text=f'"{text}"')
 
+    def _inline_transcript_tail(self, text: str) -> str:
+        """Return the newest text that fits the compact wrapped strip."""
+        chars_per_line = max(24, int(620 / self._transcript_font_size))
+        visual_lines: list[str] = []
+        for paragraph in text.splitlines() or [text]:
+            wrapped = textwrap.wrap(
+                paragraph,
+                width=chars_per_line,
+                replace_whitespace=False,
+                drop_whitespace=True,
+            )
+            visual_lines.extend(wrapped or [""])
+        if len(visual_lines) <= self._transcript_lines:
+            return "\n".join(visual_lines)
+        tail = visual_lines[-self._transcript_lines:]
+        tail[0] = "..." + tail[0]
+        return "\n".join(tail)
+
+    def _bump_transcript_font(self, delta: int) -> None:
+        """Adjust the inline transcript font and persist the preference."""
+        self._transcript_font_size = max(
+            8, min(36, self._transcript_font_size + int(delta))
+        )
+        if self._transcript_label:
+            self._transcript_label.configure(
+                font=("Segoe UI", self._transcript_font_size)
+            )
+        self._resize_transcript_area_for_height()
+        self._persist_transcript_preferences()
+
+    def _persist_transcript_preferences(self) -> None:
+        try:
+            from meeting_recorder.config import Config
+
+            cfg = Config.load()
+            cfg.dashboard.transcript_font_size = self._transcript_font_size
+            cfg.dashboard.transcript_pool_lines = self._transcript_pool_lines
+            cfg.save()
+        except Exception:
+            logger.debug("Could not persist dashboard transcript settings", exc_info=True)
+
+    def _bind_button_hover(self, widget: tk.Label) -> None:
+        widget.bind("<Enter>", lambda e: widget.configure(bg=BUTTON_HOVER))
+        widget.bind("<Leave>", lambda e: widget.configure(bg=BUTTON_BG))
+
+    def _transcript_preview_height(self, lines: Optional[int] = None) -> int:
+        line_count = self._transcript_lines if lines is None else lines
+        text_height = int(
+            self._transcript_font_size * TRANSCRIPT_LINE_SCALE * line_count + 12
+        )
+        return TRANSCRIPT_TOOLBAR_HEIGHT + text_height
+
+    def _expanded_height(self) -> int:
+        height = EXPANDED_HEIGHT
+        if not self._show_transcript:
+            height -= 60
+        if self._show_screen_preview:
+            height += PREVIEW_HEIGHT
+        return height
+
+    def _resolve_transcript_path(self) -> Optional[Path]:
+        if self._transcript_path is not None:
+            return self._transcript_path
+        ctx = self._context
+        if ctx and ctx.recording_dir:
+            return Path(ctx.recording_dir) / "live_transcript.txt"
+        try:
+            from meeting_recorder.config import Config
+
+            base = Config.load().output_dir
+            if not base.exists():
+                return None
+            dirs = [p for p in base.iterdir() if p.is_dir()]
+            if not dirs:
+                return None
+            newest = max(dirs, key=lambda p: p.stat().st_mtime)
+            return newest / "live_transcript.txt"
+        except Exception:
+            logger.debug("Could not resolve live transcript path", exc_info=True)
+            return None
+
+    def _on_window_configure(self, event) -> None:
+        if event.widget is not self._window or self._is_collapsed:
+            return
+        self._resize_transcript_area_for_height(event.height)
+
+    def _resize_transcript_area_for_height(
+        self, window_height: Optional[int] = None
+    ) -> None:
+        if not self._show_transcript or self._transcript_frame is None:
+            return
+        if self._window is None:
+            return
+        try:
+            current_height = window_height or self._window.winfo_height()
+            compact_frame_height = self._transcript_preview_height(
+                self._default_transcript_lines
+            )
+            base_without_transcript = self._expanded_height() - compact_frame_height
+            frame_height = max(
+                compact_frame_height, current_height - base_without_transcript
+            )
+            text_height = max(24, frame_height - TRANSCRIPT_TOOLBAR_HEIGHT - 12)
+            lines = max(
+                TRANSCRIPT_MIN_LINES,
+                int(text_height / (self._transcript_font_size * TRANSCRIPT_LINE_SCALE)),
+            )
+            self._transcript_lines = lines
+            self._transcript_frame.configure(height=int(frame_height))
+        except tk.TclError:
+            pass
+
+    def _start_vertical_resize(self, event) -> str:
+        if self._window is None or self._is_collapsed:
+            return "break"
+        self._resize_active = True
+        self._resize_start_y = event.y_root
+        self._resize_start_height = self._window.winfo_height()
+        return "break"
+
+    def _do_vertical_resize(self, event) -> str:
+        if self._window is None or not self._resize_active or self._is_collapsed:
+            return "break"
+        delta = event.y_root - self._resize_start_y
+        min_height = self._expanded_height()
+        new_height = max(min_height, self._resize_start_height + delta)
+        x = self._window.winfo_x()
+        y = self._window.winfo_y()
+        self._window.geometry(f"{EXPANDED_WIDTH}x{new_height}+{x}+{y}")
+        self._resize_transcript_area_for_height(new_height)
+        return "break"
+
+    def _stop_vertical_resize(self, _event) -> str:
+        self._resize_active = False
+        return "break"
+
     # ------------------------------------------------------------------
     # Pulsing red dot
     # ------------------------------------------------------------------
@@ -847,11 +1031,7 @@ class GameBarDashboard:
             # Expand
             self._collapsed_frame.pack_forget()
             self._expanded_frame.pack(fill=tk.BOTH, expand=True)
-            height = EXPANDED_HEIGHT
-            if not self._show_transcript:
-                height -= 60
-            if self._show_screen_preview:
-                height += PREVIEW_HEIGHT
+            height = self._expanded_height()
             self._window.geometry(f"{EXPANDED_WIDTH}x{height}")
             self._is_collapsed = False
         else:
@@ -1064,6 +1244,8 @@ class GameBarDashboard:
         self._drag_y = event.y
 
     def _do_drag(self, event) -> None:
+        if self._resize_active:
+            return
         if self._window:
             x = self._window.winfo_x() + event.x - self._drag_x
             y = self._window.winfo_y() + event.y - self._drag_y

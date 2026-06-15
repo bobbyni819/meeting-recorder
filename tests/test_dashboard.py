@@ -144,6 +144,9 @@ class TestDashboardConfig:
         assert cfg.start_collapsed is False
         assert cfg.show_transcript is True
         assert cfg.show_screen_preview is True
+        assert cfg.transcript_font_size == 13
+        assert cfg.transcript_lines == 7
+        assert cfg.transcript_pool_lines == 2000
 
     def test_config_has_dashboard(self):
         cfg = Config()
@@ -161,6 +164,8 @@ class TestDashboardConfig:
                 "opacity": 0.8,
                 "position": "bottom-left",
                 "start_collapsed": True,
+                "transcript_font_size": 15,
+                "transcript_pool_lines": 1500,
             }
         }
         cfg = Config._from_dict(data)
@@ -171,6 +176,8 @@ class TestDashboardConfig:
         # Defaults preserved for missing keys
         assert cfg.dashboard.auto_show is True
         assert cfg.dashboard.show_transcript is True
+        assert cfg.dashboard.transcript_font_size == 15
+        assert cfg.dashboard.transcript_pool_lines == 1500
 
     def test_unknown_keys_ignored(self):
         data = {
@@ -243,6 +250,68 @@ class TestDashboardStateMethods:
         dash = GameBarDashboard()
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dash.update_screen_preview(frame)  # should not raise
+
+    def test_inline_transcript_font_bump_persists_config(self):
+        dash = GameBarDashboard(transcript_font_size=13)
+        dash._transcript_label = mock.Mock()
+        cfg = Config()
+
+        with mock.patch("meeting_recorder.config.Config.load", return_value=cfg), \
+                mock.patch.object(cfg, "save") as save:
+            dash._bump_transcript_font(1)
+
+        assert dash._transcript_font_size == 14
+        dash._transcript_label.configure.assert_any_call(font=("Segoe UI", 14))
+        assert cfg.dashboard.transcript_font_size == 14
+        assert cfg.dashboard.transcript_pool_lines == 2000
+        save.assert_called_once()
+
+    def test_inline_transcript_tail_keeps_visible_latest_lines(self):
+        dash = GameBarDashboard(transcript_font_size=13, transcript_lines=3)
+        text = " ".join(f"word{i}" for i in range(80))
+        strip = dash._inline_transcript_tail(text)
+        assert strip.startswith("...")
+        assert "word79" in strip
+        assert strip.count("\n") <= 2
+
+    def test_toggle_transcript_window_passes_recording_tail_path(self, tmp_path):
+        dash = GameBarDashboard(transcript_pool_lines=1234)
+        dash._window = mock.Mock()
+        dash._context = DashboardContext(recording_dir=tmp_path)
+        instance = mock.Mock()
+        instance.is_visible = False
+
+        with mock.patch(
+            "meeting_recorder.ui.live_transcript_window.LiveTranscriptWindow",
+            return_value=instance,
+        ) as cls:
+            dash._toggle_transcript_window()
+
+        cls.assert_called_once()
+        kwargs = cls.call_args.kwargs
+        assert kwargs["transcript_path"] == tmp_path / "live_transcript.txt"
+        assert kwargs["transcript_pool_lines"] == 1234
+        instance.show.assert_called_once()
+
+    def test_transcript_controls_created_when_tk_available(self):
+        tk = pytest.importorskip("tkinter")
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            pytest.skip("no display for Tk")
+        root.withdraw()
+        try:
+            dash = GameBarDashboard(show_transcript=True)
+            parent = tk.Frame(root)
+            dash._build_expanded(parent)
+            assert dash._transcript_expand_btn is not None
+            assert "Expand" in dash._transcript_expand_btn.cget("text")
+            assert dash._transcript_font_inc_btn is not None
+            assert "A+" in dash._transcript_font_inc_btn.cget("text")
+            assert dash._transcript_font_dec_btn is not None
+            assert "A-" in dash._transcript_font_dec_btn.cget("text")
+        finally:
+            root.destroy()
 
 
 # ---------------------------------------------------------------------------

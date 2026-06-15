@@ -35,10 +35,12 @@ def test_opens_as_toplevel_of_master(root):
 def test_renders_pushed_text(root):
     win = LiveTranscriptWindow(root)
     win.show()
-    win.update_text("[You] testing the transcript window")
+    history = "\n".join(f"[Speaker] transcript line {i}" for i in range(300))
+    win.update_text(history)
     root.update()
     root.update_idletasks()
-    assert "testing the transcript" in win._text.get("1.0", "end")
+    assert "transcript line 0" in win._text.get("1.0", "end")
+    assert "transcript line 299" in win._text.get("1.0", "end")
     win.close()
 
 
@@ -73,3 +75,61 @@ def test_update_before_show_is_noop(root):
     # Not shown yet — must not raise
     win.update_text("ignored")
     assert win._window is None
+
+
+def test_scroll_lock_respects_user_position(root):
+    win = LiveTranscriptWindow(root)
+    fake_text = _FakeText((0.1, 0.5))
+    win._text = fake_text
+    win._set_text("new text")
+    assert fake_text.contents == "new text"
+    assert fake_text.see_calls == []
+
+    fake_text = _FakeText((0.0, 0.99))
+    win._text = fake_text
+    win._set_text("newer text")
+    assert fake_text.contents == "newer text"
+    assert fake_text.see_calls == [tk.END]
+
+
+def test_reads_tail_from_live_transcript_file(root, tmp_path):
+    transcript_path = tmp_path / "live_transcript.txt"
+    transcript_path.write_text(
+        "\n".join(f"tail line {i}" for i in range(2500)),
+        encoding="utf-8",
+    )
+
+    win = LiveTranscriptWindow(
+        root,
+        transcript_path=transcript_path,
+        transcript_pool_lines=2000,
+    )
+    win.show()
+    root.update()
+    text = win._text.get("1.0", "end")
+    assert "tail line 0" not in text
+    assert "tail line 500" in text
+    assert "tail line 2499" in text
+    win.close()
+
+
+class _FakeText:
+    def __init__(self, yview):
+        self._yview = yview
+        self.contents = ""
+        self.see_calls = []
+
+    def yview(self):
+        return self._yview
+
+    def config(self, **_kwargs):
+        return None
+
+    def delete(self, _start, _end):
+        self.contents = ""
+
+    def insert(self, _index, text):
+        self.contents += text
+
+    def see(self, index):
+        self.see_calls.append(index)

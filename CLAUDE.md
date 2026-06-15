@@ -306,6 +306,13 @@ PyAudioWPatch mic (44.1kHz 2ch) →  resample_to_16khz_mono  →  Silero VAD →
 
 ## Main window UI features
 - `ui/main_window.py` — full desktop GUI with idle and recording views
+- **Dashboard live transcript** (`ui/dashboard.py`, `ui/live_transcript_window.py`):
+  inline strip has visible `Expand`, `A-`, and `A+` controls; font size persists
+  to `dashboard.transcript_font_size`. The overlay has a bottom resize grip, and
+  taller dashboard windows recompute visible transcript lines. The pop-out reader
+  tails `live_transcript.txt` when available, keeping about
+  `dashboard.transcript_pool_lines` recent lines (default 2000) beyond the
+  transcriber's smaller in-memory rolling window while preserving scroll-lock.
 - `ui/diagnostics_window.py` — system health checks (GPU, audio, config)
 - `ui/notification_center.py` — NotificationStore + NotificationWindow for system alerts
 - `ui/calendar_view.py` — monthly calendar showing recording days, click to filter

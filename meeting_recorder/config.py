@@ -206,6 +206,7 @@ class DashboardConfig:
     # lines of rolling context to keep. Larger = easier to read along.
     transcript_font_size: int = 13
     transcript_lines: int = 7
+    transcript_pool_lines: int = 2000
 
 
 @dataclass
