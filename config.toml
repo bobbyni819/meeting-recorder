@@ -53,17 +53,19 @@ toggle_dashboard = "ctrl+shift+d"  # show/hide recording dashboard
 
 [screen_recording]
 enabled = true
-fps = 30.0  # frames per second; raise to 60 for smoother video, lower to 15 to save CPU/disk
+fps = 15.0  # frames per second; raise to 30/60 for smoother video, lower to save CPU/disk. Measured 2026-09-01: the grab loop only sustains ~10-20 fps on real meeting windows anyway (42-68% duplicate frames at 30fps), so 15 halves encoder/pipe load and file size with no visible content loss.
 quality = 21  # video quality (CQ/CRF): LOWER = crisper text/slides, bigger file. 18 ~lossless, 21 high, 28 small. Resolution = the captured window's native size, so maximize the window for higher resolution.
 
 [outlook]
 enabled = true         # auto-detect meeting name from Outlook calendar
 buffer_minutes = 10    # search window: current time ± N minutes
+read_details = false   # read organizer/attendees/body too — these COM properties fire Outlook's "access email address information" security prompt (Trust Center is GPO-locked on Duke machines), so off = prompt-free subject/time/location only
 
 [google_drive]
 enabled = true         # upload recordings to Google Drive after transcription
 credentials_path = "~/.config/google/client_secret.json"
 folder_id = ""         # leave empty to auto-create "MeetingRecordings" folder
+upload_audio = false   # also upload raw WAVs (~130 MB/meeting); off = transcripts/summaries/notes only (video never uploads)
 
 [summary]
 enabled = true         # generate AI summary after transcription

@@ -107,7 +107,7 @@ class GeminiSummaryProvider:
     Uses the current ``google-genai`` SDK (not the deprecated ``google.generativeai``).
     """
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
         self.model = model
 
@@ -126,6 +126,68 @@ class GeminiSummaryProvider:
             return response.text
 
 
+class LunaSummaryProvider:
+    """gpt-5.6-luna via the local Codex CLI (``bobby_brain.codex_llm``).
+
+    Runs on Bobby's Codex subscription — no metered API spend. Falls back to
+    a secondary provider (normally Gemini on the free-tier key) whenever the
+    toolkit is missing or the call fails, so the automatic post-recording
+    summary never silently disappears. ``model`` reflects what actually
+    answered, so summary.json's model_used stays honest after a fallback.
+    """
+
+    def __init__(
+        self,
+        fallback: SummaryProvider | None = None,
+        model: str = "gpt-5.6-luna",
+        timeout: int = 300,
+    ):
+        self.model = model
+        self.timeout = timeout
+        self.fallback = fallback
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        try:
+            from bobby_brain.codex_llm import ask
+        except ImportError:
+            ask = None
+            logger.warning(
+                "bobby_brain.codex_llm not installed; Luna summary unavailable."
+            )
+
+        if ask is not None:
+            try:
+                reply = ask(
+                    f"{system_prompt}\n\n{user_prompt}",
+                    model=self.model,
+                    timeout=self.timeout,
+                )
+                if reply.ok and reply.text.strip():
+                    return _strip_json_fences(reply.text)
+                logger.warning(
+                    "Luna summary failed (%s); falling back.",
+                    reply.error or "empty output",
+                )
+            except Exception as e:
+                logger.warning("Luna summary raised (%s); falling back.", e)
+
+        if self.fallback is None:
+            raise RuntimeError("Luna summary failed and no fallback is configured.")
+        text = self.fallback.generate(system_prompt, user_prompt)
+        self.model = getattr(self.fallback, "model", "fallback")
+        return text
+
+
+def _strip_json_fences(text: str) -> str:
+    """Unwrap a ```json ...``` fenced block if the model added one."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1])
+    return stripped
+
+
 def create_provider(config) -> SummaryProvider:
     """Factory to create the appropriate summary provider.
 
@@ -136,8 +198,22 @@ def create_provider(config) -> SummaryProvider:
         A SummaryProvider instance.
 
     Raises:
-        ValueError: If provider is unknown or api_key is empty.
+        ValueError: If provider is unknown, or api_key is empty for a
+            provider that needs one (luna needs no key; with a key present
+            it gains a Gemini fallback).
     """
+    if config.provider == "luna":
+        fallback = None
+        if config.api_key:
+            fallback = GeminiSummaryProvider(
+                api_key=config.api_key,
+                model="gemini-2.5-flash",
+            )
+        # The shared [summary] model field usually names a Gemini model (it is
+        # kept in sync with transcription); only honor it if it's a GPT model.
+        model = config.model if (config.model or "").startswith("gpt") else "gpt-5.6-luna"
+        return LunaSummaryProvider(fallback=fallback, model=model)
+
     if not config.api_key:
         raise ValueError("Summary API key is required.")
 
@@ -148,7 +224,7 @@ def create_provider(config) -> SummaryProvider:
         model = config.model or "claude-sonnet-4-20250514"
         return AnthropicSummaryProvider(api_key=config.api_key, model=model)
     elif config.provider == "gemini":
-        model = config.model or "gemini-2.0-flash"
+        model = config.model or "gemini-2.5-flash"
         return GeminiSummaryProvider(api_key=config.api_key, model=model)
     else:
         raise ValueError(f"Unknown summary provider: {config.provider}")

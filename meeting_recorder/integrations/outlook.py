@@ -36,7 +36,9 @@ class CalendarEvent:
         return asdict(self)
 
 
-def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
+def find_current_meeting(
+    buffer_minutes: int = 10, read_details: bool = False
+) -> Optional[CalendarEvent]:
     """Find the Outlook calendar event happening right now.
 
     Searches events within a time window around the current time to account
@@ -44,6 +46,9 @@ def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
 
     Args:
         buffer_minutes: Minutes before/after current time to search.
+        read_details: Also read organizer/attendees/body. These properties
+            trigger Outlook's programmatic-access security prompt; leave False
+            to stay prompt-free (subject/time/location only).
 
     Returns:
         CalendarEvent if a matching event is found, None otherwise.
@@ -95,12 +100,18 @@ def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
 
                 if overlap > best_overlap:
                     best_overlap = overlap
-                    attendee_list = _extract_attendees(item)
-                    body_preview = (item.Body or "")[:500].strip()
+                    if read_details:
+                        attendee_list = _extract_attendees(item)
+                        organizer = item.Organizer or ""
+                        body_preview = (item.Body or "")[:500].strip()
+                    else:
+                        attendee_list = []
+                        organizer = ""
+                        body_preview = ""
 
                     best_match = CalendarEvent(
                         subject=item.Subject or "",
-                        organizer=item.Organizer or "",
+                        organizer=organizer,
                         attendees=attendee_list,
                         start_time=item_start.isoformat(),
                         end_time=item_end.isoformat(),
@@ -132,12 +143,15 @@ def find_current_meeting(buffer_minutes: int = 10) -> Optional[CalendarEvent]:
 def get_upcoming_meetings(
     window_minutes: int = 60,
     reference_time: datetime | None = None,
+    read_details: bool = False,
 ) -> list[CalendarEvent]:
     """Get calendar events around a reference time.
 
     Args:
         window_minutes: Search window size (±minutes from reference).
         reference_time: Center of the search window.  Defaults to now.
+        read_details: Also read organizer/attendees (security-prompt-guarded
+            COM properties — see find_current_meeting).
 
     Returns events from ``reference_time - window_minutes`` through
     ``reference_time + window_minutes``, sorted by start time.
@@ -176,8 +190,8 @@ def get_upcoming_meetings(
                 item_end = _com_date_to_datetime(item.End)
                 events.append(CalendarEvent(
                     subject=item.Subject or "",
-                    organizer=item.Organizer or "",
-                    attendees=_extract_attendees(item),
+                    organizer=(item.Organizer or "") if read_details else "",
+                    attendees=_extract_attendees(item) if read_details else [],
                     start_time=item_start.isoformat(),
                     end_time=item_end.isoformat(),
                     location=item.Location or "",

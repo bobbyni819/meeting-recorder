@@ -456,7 +456,7 @@ def _check_api() -> int:
 
                 with genai.Client(api_key=gemini_key) as client:
                     response = client.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-2.5-flash",
                         contents="Say 'ok' and nothing else.",
                     )
                 if response.text:
@@ -779,7 +779,7 @@ def _check_api_structured() -> CheckCategory:
                 from google import genai
                 with genai.Client(api_key=gemini_key) as client:
                     response = client.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-2.5-flash",
                         contents="Say 'ok' and nothing else.",
                     )
                 if response.text:

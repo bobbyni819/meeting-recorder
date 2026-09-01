@@ -164,6 +164,7 @@ def retry_tail(
                 uploader = GoogleDriveUploader(
                     credentials_path=creds_path,
                     folder_id=config.google_drive.folder_id,
+                    upload_audio=config.google_drive.upload_audio,
                 )
                 folder_id = uploader.upload_recording(recording_dir)
                 if folder_id:

@@ -144,11 +144,27 @@ class MicAudioCapture:
             # Silence for VAD_CHUNK_SAMPLES at 16kHz mono int16
             silence = b"\x00" * (VAD_CHUNK_SAMPLES * 2)
 
+            consecutive_errors = 0
             while not self._stop_event.is_set():
                 try:
                     audio_data = stream.read(native_chunk, exception_on_overflow=False)
+                    consecutive_errors = 0
                 except IOError as e:
-                    logger.warning("Mic read error: %s", e)
+                    # A dead stream raises on every read; back off instead of
+                    # spinning (same log-flood class as desktop_audio), and
+                    # give up after ~30s of continuous failure.
+                    consecutive_errors += 1
+                    if consecutive_errors <= 3 or consecutive_errors % 100 == 0:
+                        logger.warning(
+                            "Mic read error (#%d): %s", consecutive_errors, e
+                        )
+                    if consecutive_errors >= 300:
+                        logger.error(
+                            "Mic stream failing continuously; stopping capture "
+                            "thread."
+                        )
+                        break
+                    self._stop_event.wait(0.1)
                     continue
 
                 # Convert to numpy int16

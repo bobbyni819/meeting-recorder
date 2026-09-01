@@ -150,11 +150,29 @@ class DesktopAudioCapture:
                 chunk_samples, self.chunk_duration_ms,
             )
 
+            consecutive_errors = 0
             while not self._stop_event.is_set():
                 try:
                     audio_data = stream.read(chunk_samples, exception_on_overflow=False)
+                    consecutive_errors = 0
                 except IOError as e:
-                    logger.warning("Desktop loopback read error: %s", e)
+                    # A dead stream ("Stream closed") raises on every read; an
+                    # unbounded `continue` here once spun at full speed and
+                    # wrote 164k identical warnings into a 9 GB log. Back off,
+                    # and give up after ~30s of continuous failure.
+                    consecutive_errors += 1
+                    if consecutive_errors <= 3 or consecutive_errors % 100 == 0:
+                        logger.warning(
+                            "Desktop loopback read error (#%d): %s",
+                            consecutive_errors, e,
+                        )
+                    if consecutive_errors >= 300:
+                        logger.error(
+                            "Desktop loopback stream failing continuously; "
+                            "stopping capture thread."
+                        )
+                        break
+                    self._stop_event.wait(0.1)
                     continue
 
                 audio_f32 = np.frombuffer(audio_data, dtype=np.float32)

@@ -33,10 +33,9 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 # File extensions to upload.  Video files are intentionally excluded —
 # they're large (500MB-2GB) and dominate upload time.  Users who want
-# the video can access it locally; Drive stores transcripts/summary/audio.
+# the video can access it locally; Drive stores transcripts/summary/notes.
 UPLOAD_EXTENSIONS = {
     ".json", ".txt", ".srt", ".md",  # Transcripts, summaries, notes
-    ".wav",                          # Audio (for re-processing)
 }
 
 # Files to always upload by name
@@ -45,8 +44,13 @@ UPLOAD_FILENAMES = {
     "transcript.json", "transcript.txt", "transcript.srt", "transcript_raw.txt",
     "summary.json", "summary.md",
     "notes.md", "decisions.json", "action_items.json",
-    "app_audio.wav", "mic_audio.wav", "mixed.wav",
 }
+
+# Audio files uploaded only when upload_audio is enabled (~130 MB per meeting
+# of raw PCM; the transcript already exists by upload time, so audio on Drive
+# is purely a re-processing convenience).
+AUDIO_EXTENSIONS = {".wav"}
+AUDIO_FILENAMES = {"app_audio.wav", "mic_audio.wav", "mixed.wav"}
 
 # Files to NEVER upload (keeps screen recording local-only — too large)
 UPLOAD_BLOCKLIST = {"screen.mp4", "thumbnail.jpg"}
@@ -55,15 +59,23 @@ UPLOAD_BLOCKLIST = {"screen.mp4", "thumbnail.jpg"}
 class GoogleDriveUploader:
     """Handles OAuth2 authentication and file uploads to Google Drive."""
 
-    def __init__(self, credentials_path: Path, folder_id: str = ""):
+    def __init__(
+        self,
+        credentials_path: Path,
+        folder_id: str = "",
+        upload_audio: bool = False,
+    ):
         """
         Args:
             credentials_path: Path to the OAuth2 credentials JSON file.
             folder_id: Google Drive folder ID to upload into.
                        Empty string creates a top-level "MeetingRecordings" folder.
+            upload_audio: Also upload the raw WAVs (~130 MB per meeting).
+                          Default off — Drive gets transcripts/summaries only.
         """
         self._credentials_path = credentials_path
         self._folder_id = folder_id
+        self._upload_audio = upload_audio
         self._service = None
 
     def authenticate(self) -> bool:
@@ -168,7 +180,14 @@ class GoogleDriveUploader:
                 # Skip blocklist (videos, thumbnails — too large to be worth uploading)
                 if file_path.name in UPLOAD_BLOCKLIST:
                     continue
-                if file_path.name not in UPLOAD_FILENAMES and file_path.suffix not in UPLOAD_EXTENSIONS:
+                is_audio = (
+                    file_path.name in AUDIO_FILENAMES
+                    or file_path.suffix in AUDIO_EXTENSIONS
+                )
+                if is_audio:
+                    if not self._upload_audio:
+                        continue
+                elif file_path.name not in UPLOAD_FILENAMES and file_path.suffix not in UPLOAD_EXTENSIONS:
                     continue
 
                 if self._upload_file(file_path, recording_folder_id):

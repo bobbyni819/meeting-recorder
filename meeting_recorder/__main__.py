@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import faulthandler
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -496,24 +497,28 @@ def main() -> None:
             ))
             sys.exit(0)
 
-    # Configure logging
+    # Configure logging. Rotating handler: the plain FileHandler grew a 9 GB
+    # log (a device-error loop can emit thousands of lines/min, and
+    # faster_whisper logs 2 lines per live-preview pass).
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(
-                "meeting_recorder.log", encoding="utf-8", mode="a"
+            logging.handlers.RotatingFileHandler(
+                "meeting_recorder.log", encoding="utf-8", mode="a",
+                maxBytes=50 * 1024 * 1024, backupCount=3,
             ),
         ],
     )
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     logger = logging.getLogger(__name__)
 
-    # Enable faulthandler to print traceback on segfault/abort to the log file.
-    # This catches C-level crashes (e.g. in Tk, audio libs) that bypass Python
-    # exception handling entirely.
-    _fault_file = open("meeting_recorder.log", "a", encoding="utf-8")
+    # Enable faulthandler to print traceback on segfault/abort. Separate file:
+    # an open handle on meeting_recorder.log would block the rotating
+    # handler's os.rename on Windows, silently disabling rotation.
+    _fault_file = open("meeting_recorder-faults.log", "a", encoding="utf-8")
     faulthandler.enable(file=_fault_file)
 
     # Install global exception hooks to catch unhandled exceptions on ANY thread

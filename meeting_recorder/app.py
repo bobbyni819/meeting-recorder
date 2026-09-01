@@ -462,7 +462,8 @@ class MeetingRecorderApp:
         meeting_subject = ""
         if self.config.outlook.enabled:
             calendar_event = find_current_meeting(
-                buffer_minutes=self.config.outlook.buffer_minutes
+                buffer_minutes=self.config.outlook.buffer_minutes,
+                read_details=self.config.outlook.read_details,
             )
             if calendar_event:
                 meeting_subject = calendar_event.subject
@@ -969,6 +970,7 @@ class MeetingRecorderApp:
             uploader = GoogleDriveUploader(
                 credentials_path=creds_path,
                 folder_id=cfg.google_drive.folder_id,
+                upload_audio=cfg.google_drive.upload_audio,
             )
             folder_id = uploader.upload_recording(recording_dir)
             if folder_id:
@@ -1063,7 +1065,11 @@ class MeetingRecorderApp:
                     ref = datetime.fromisoformat(metadata.start_time)
                 except ValueError:
                     ref = None
-            events = get_upcoming_meetings(window_minutes=30, reference_time=ref)
+            events = get_upcoming_meetings(
+                window_minutes=30,
+                reference_time=ref,
+                read_details=self.config.outlook.read_details,
+            )
             return [e.subject for e in events if e.subject]
         except Exception:
             logger.debug("Calendar candidate fetch failed", exc_info=True)

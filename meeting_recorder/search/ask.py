@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 
 
 MAX_CONTEXT_CHARS = 24000
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 _STOPWORDS = {
     "a",

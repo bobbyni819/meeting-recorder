@@ -223,6 +223,13 @@ class ScreenRecordingConfig:
 class OutlookConfig:
     enabled: bool = True
     buffer_minutes: int = 10
+    # Read organizer/attendees/body from calendar items. These COM properties
+    # are guarded by Outlook's programmatic-access security prompt ("A program
+    # is trying to access email address information"), which fires on every
+    # recording when Trust Center is group-policy-locked. Off = subject/time/
+    # location only, prompt-free; costs the attendee roster hint in
+    # transcription and attendee analytics.
+    read_details: bool = False
 
 
 @dataclass
@@ -230,6 +237,8 @@ class GoogleDriveConfig:
     enabled: bool = False
     credentials_path: str = "~/.config/google/client_secret.json"
     folder_id: str = ""
+    # Also upload raw WAVs (~130 MB/meeting). Off = transcripts/summaries only.
+    upload_audio: bool = False
 
 
 @dataclass
