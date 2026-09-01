@@ -19,10 +19,17 @@ Constraints honoured here:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+try:
+    from bobby_brain.codex_llm import ask_json
+except ImportError:
+    ask_json = None
 
 logger = logging.getLogger(__name__)
 
@@ -115,52 +122,127 @@ def rename_recording_dir(
 
 def select_meeting_title(
     transcript_excerpt: str,
-    candidate_subjects: list[str],
+    candidate_subjects: list[object],
     summary_config=None,
+    *,
+    recording_start_time: str = "",
+    duration_seconds: float = 0.0,
+    llm_backend: str = "luna",
+    gemini_api_key: str = "",
+    gemini_model: str = "",
 ) -> tuple[Optional[str], str]:
     """Pick the meeting title from calendar candidates, or derive one.
 
     Returns (title, source) where source is one of:
-        "single"    — exactly one candidate; used verbatim, no LLM call
         "calendar"  — LLM chose a candidate from the list (matches calendar)
         "generated" — LLM produced a new title (no candidate fit)
         "none"      — could not decide; caller should keep the current name
 
-    Only makes an LLM call when there are 2+ candidates (the genuine
-    double-booking case the user asked to disambiguate). Zero candidates
-    returns "none" to avoid spending quota on every ad-hoc recording.
+    One or more candidates are always arbitrated against transcript content;
+    zero candidates returns "none" to avoid naming every ad-hoc recording.
+    Plain string candidates remain supported for callers without calendar
+    event details.
     """
-    candidates = [s.strip() for s in candidate_subjects if s and s.strip()]
-    if len(candidates) == 1:
-        return candidates[0], "single"
+    candidates = _normalize_candidates(candidate_subjects)
     if not candidates:
         return None, "none"
 
-    # 2+ candidates: ask the LLM which one the transcript matches.
-    title = _llm_pick_title(transcript_excerpt, candidates, summary_config)
-    if title is None:
-        return None, "none"
-    # Match (case-insensitive) against a candidate to report the source.
-    for cand in candidates:
-        if title.strip().lower() == cand.lower():
-            return cand, "calendar"
-    return title.strip(), "generated"
+    return _llm_pick_title(
+        transcript_excerpt,
+        candidates,
+        summary_config,
+        recording_start_time=recording_start_time,
+        duration_seconds=duration_seconds,
+        llm_backend=llm_backend,
+        gemini_api_key=gemini_api_key,
+        gemini_model=gemini_model,
+    )
 
 
 _PICK_PROMPT = """\
-Several meetings were booked in this time slot. Based ONLY on what the \
-transcript is about, choose which calendar event this recording is.
+Decide whether this recording actually matches one of its candidate calendar \
+events. Use the recording timing and transcript content together.
 
-Candidate calendar events (choose one EXACTLY as written if it matches):
+Recording start: {recording_start}
+Recording duration: {duration_seconds} seconds
+
+Candidate calendar events (indices are zero-based):
 {candidates}
 
-If the transcript clearly matches one event, return that event's title \
-EXACTLY as written above. If none of them fit, return a short (3-7 word) \
-descriptive title of your own. Return ONLY the title text, nothing else.
+If the transcript clearly matches one event, copy that event's title exactly. \
+If none fit, generate a short 3-7 word title from the transcript content.
+
+Return only JSON with this exact shape:
+{{"title": "...", "source": "calendar"|"generated", \
+"matched_candidate_index": 0|null}}
 
 Transcript excerpt:
 {excerpt}
 """
+
+
+@dataclass(frozen=True)
+class _TitleCandidate:
+    """Normalized calendar event context used by the title arbiters."""
+
+    subject: str
+    start_time: str = ""
+    end_time: str = ""
+    attendees: tuple[str, ...] = ()
+
+
+def _normalize_candidates(candidates: list[object]) -> list[_TitleCandidate]:
+    """Normalize CalendarEvent-like objects and legacy strings."""
+    normalized: list[_TitleCandidate] = []
+    for candidate in candidates or []:
+        try:
+            if isinstance(candidate, str):
+                subject = candidate.strip()
+                start_time = ""
+                end_time = ""
+                attendees: tuple[str, ...] = ()
+            else:
+                subject = str(getattr(candidate, "subject", "") or "").strip()
+                start_time = str(getattr(candidate, "start_time", "") or "")
+                end_time = str(getattr(candidate, "end_time", "") or "")
+                raw_attendees = getattr(candidate, "attendees", None) or []
+                attendees = tuple(
+                    str(attendee).strip() for attendee in raw_attendees
+                    if str(attendee).strip()
+                )
+            if subject:
+                normalized.append(_TitleCandidate(
+                    subject=subject,
+                    start_time=start_time,
+                    end_time=end_time,
+                    attendees=attendees,
+                ))
+        except Exception:
+            logger.debug("Ignoring malformed smart-name candidate", exc_info=True)
+    return normalized
+
+
+def _build_pick_prompt(
+    transcript_excerpt: str,
+    candidates: list[_TitleCandidate],
+    recording_start_time: str,
+    duration_seconds: float,
+) -> str:
+    """Build the shared Luna/Gemini arbitration prompt."""
+    event_lines = []
+    for index, candidate in enumerate(candidates):
+        details = [f"{index}. {candidate.subject}"]
+        details.append(f"   start: {candidate.start_time or 'unknown'}")
+        details.append(f"   end: {candidate.end_time or 'unknown'}")
+        if candidate.attendees:
+            details.append(f"   attendees: {', '.join(candidate.attendees)}")
+        event_lines.append("\n".join(details))
+    return _PICK_PROMPT.format(
+        recording_start=recording_start_time or "unknown",
+        duration_seconds=float(duration_seconds or 0.0),
+        candidates="\n".join(event_lines),
+        excerpt=str(transcript_excerpt or "")[:4000],
+    )
 
 
 # Title words too generic to disambiguate meetings by.
@@ -205,34 +287,171 @@ def _best_candidate_by_content(
 
 def _llm_pick_title(
     transcript_excerpt: str,
-    candidates: list[str],
+    candidates: list[_TitleCandidate],
     summary_config,
-) -> Optional[str]:
+    *,
+    recording_start_time: str = "",
+    duration_seconds: float = 0.0,
+    llm_backend: str = "luna",
+    gemini_api_key: str = "",
+    gemini_model: str = "",
+) -> tuple[Optional[str], str]:
     """Disambiguate among candidate meeting titles.
 
-    Prefers a small LLM call (smarter), but falls back to free local
-    content-scoring rather than blindly picking the first candidate, so a
-    free-tier 503 doesn't mislabel an overlapping meeting.
+    The configured rung starts a no-raise chain: Luna -> Gemini -> local
+    content scorer. ``gemini`` and ``local`` skip earlier rungs.
     """
-    local_best = _best_candidate_by_content(transcript_excerpt, candidates)
-    if summary_config is None or not getattr(summary_config, "api_key", ""):
-        return local_best
     try:
-        from meeting_recorder.summary.summarizer import create_provider
+        subjects = [candidate.subject for candidate in candidates]
+        if not subjects:
+            return None, "none"
+        local_best = _best_candidate_by_content(
+            str(transcript_excerpt or ""), subjects,
+        )
+        prompt = _build_pick_prompt(
+            transcript_excerpt,
+            candidates,
+            recording_start_time,
+            duration_seconds,
+        )
+        backend = str(llm_backend or "luna").strip().lower()
+        if backend not in {"luna", "gemini", "local"}:
+            logger.warning(
+                "Unknown smart rename LLM %r; using local scorer", llm_backend,
+            )
+            backend = "local"
 
-        numbered = "\n".join(f"- {c}" for c in candidates)
-        prompt = _PICK_PROMPT.format(
-            candidates=numbered, excerpt=transcript_excerpt[:4000],
-        )
-        provider = create_provider(summary_config)
-        raw = provider.generate(
-            "You label meeting recordings. Reply with only the title.", prompt,
-        )
-        title = (raw or "").strip().strip('"').splitlines()[0].strip()
-        return title or local_best
+        if backend == "luna" and ask_json is not None:
+            try:
+                reply_value = ask_json(
+                    prompt,
+                    model="gpt-5.6-luna",
+                    timeout=60,
+                )
+                if isinstance(reply_value, tuple) and len(reply_value) == 2:
+                    data, reply = reply_value
+                    if getattr(reply, "ok", False):
+                        selection = _validate_title_response(data, candidates)
+                        if selection is not None:
+                            return selection
+            except Exception:
+                logger.debug(
+                    "Luna title selection failed; trying Gemini",
+                    exc_info=True,
+                )
+
+        if backend in {"luna", "gemini"}:
+            try:
+                provider_name = str(
+                    getattr(summary_config, "provider", "") or ""
+                ).lower()
+                summary_gemini_key = (
+                    getattr(summary_config, "api_key", "") or ""
+                    if provider_name in {"gemini", "luna"}
+                    else ""
+                )
+                api_key = gemini_api_key or summary_gemini_key
+                if api_key:
+                    from meeting_recorder.summary.summarizer import (
+                        GeminiSummaryProvider,
+                    )
+
+                    summary_model = str(
+                        getattr(summary_config, "model", "") or ""
+                    ) if provider_name in {"gemini", "luna"} else ""
+                    configured_model = str(gemini_model or summary_model)
+                    model = (
+                        configured_model
+                        if configured_model.startswith("gemini")
+                        else "gemini-2.5-flash"
+                    )
+                    provider = GeminiSummaryProvider(
+                        api_key=api_key,
+                        model=model,
+                    )
+                    raw = provider.generate(
+                        "You label meeting recordings. Reply with valid JSON only.",
+                        prompt,
+                    )
+                    selection = _validate_title_response(
+                        _parse_json_object(raw), candidates,
+                    )
+                    if selection is not None:
+                        return selection
+            except Exception:
+                logger.debug(
+                    "Gemini title selection failed; using local content match",
+                    exc_info=True,
+                )
+
+        return local_best, "calendar"
     except Exception:
         logger.debug(
-            "LLM title selection failed; using local content match",
+            "Smart title selection failed unexpectedly",
             exc_info=True,
         )
-        return local_best
+        try:
+            subjects = [
+                candidate.subject for candidate in candidates if candidate.subject
+            ]
+            if subjects:
+                return _best_candidate_by_content(
+                    str(transcript_excerpt or ""), subjects,
+                ), "calendar"
+        except Exception:
+            logger.debug("Local title selection also failed", exc_info=True)
+        return None, "none"
+
+
+def _parse_json_object(raw: Any) -> object | None:
+    """Extract a JSON object from a provider response without raising."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    try:
+        return json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match is None:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+
+def _validate_title_response(
+    data: object,
+    candidates: list[_TitleCandidate],
+) -> Optional[tuple[str, str]]:
+    """Validate and canonicalize the structured arbiter response."""
+    if not isinstance(data, dict):
+        return None
+    title = data.get("title")
+    source = data.get("source")
+    index = data.get("matched_candidate_index")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    title = title.strip()
+
+    if source == "calendar":
+        if isinstance(index, bool) or not isinstance(index, int):
+            return None
+        if index < 0 or index >= len(candidates):
+            return None
+        canonical = candidates[index].subject
+        if title.casefold() != canonical.casefold():
+            return None
+        return canonical, "calendar"
+
+    if source == "generated":
+        if index is not None:
+            return None
+        if any(title.casefold() == candidate.subject.casefold() for candidate in candidates):
+            return None
+        word_count = len(re.findall(r"\b[\w'-]+\b", title))
+        if not 3 <= word_count <= 7:
+            return None
+        return title, "generated"
+
+    return None

@@ -702,11 +702,13 @@ class MainWindow:
         self._start_btn.bind("<Enter>", lambda e: self._start_btn.configure(bg=GREEN))
         self._start_btn.bind("<Leave>", lambda e: self._start_btn.configure(bg=GREEN_DARK))
 
-        # Action buttons row
+        # Action buttons \u2014 wrapped grid. A single pack(side=LEFT) row needed
+        # >1,400px; Tk clips overflow at WIN_WIDTH=520, which made most
+        # buttons unreachable.
         action_frame = tk.Frame(parent, bg=BG_COLOR)
         action_frame.pack(pady=(0, 4))
 
-        for text, callback in [
+        self._build_button_grid(action_frame, [
             ("\u29bf Record Window...", self._on_record_window),
             ("\U0001f4e5 Import Audio...", self._import_audio_dialog),
             ("\U0001f50d Search", self._on_search),
@@ -719,21 +721,13 @@ class MainWindow:
             ("\U0001f465 People", self._show_attendee_directory),
             ("\U0001f4c5 Calendar", self._show_calendar),
             ("\U0001f9ea Diagnostics", self._show_diagnostics),
-        ]:
-            btn = tk.Label(
-                action_frame, text=f"  {text}  ", font=("Segoe UI", 9),
-                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8, pady=4,
-            )
-            btn.pack(side=tk.LEFT, padx=3)
-            btn.bind("<Button-1>", lambda e, cb=callback: self._fire(cb))
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BUTTON_HOVER, fg=TEXT_COLOR))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BUTTON_BG, fg=TEXT_DIM))
+        ], per_row=4)
 
-        # Analytics buttons row
+        # Analytics buttons \u2014 wrapped grid (19 buttons)
         analytics_frame = tk.Frame(parent, bg=BG_COLOR)
         analytics_frame.pack(pady=(0, 12))
 
-        for text, callback in [
+        self._build_button_grid(analytics_frame, [
             ("\u2600 Today", self._show_today_panel),
             ("\U0001f4c4 Weekly", self._show_weekly_panel),
             ("\u2611 Follow-ups", self._show_followups_panel),
@@ -753,15 +747,7 @@ class MainWindow:
             ("\u2705 Actions", self._show_action_tracker_panel),
             ("\u2753 Questions", self._show_questions_panel),
             ("\U0001f4cb Prep", self._show_prep_panel),
-        ]:
-            btn = tk.Label(
-                analytics_frame, text=f"  {text}  ", font=("Segoe UI", 9),
-                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8, pady=4,
-            )
-            btn.pack(side=tk.LEFT, padx=3)
-            btn.bind("<Button-1>", lambda e, cb=callback: self._fire(cb))
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BUTTON_HOVER, fg=TEXT_COLOR))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BUTTON_BG, fg=TEXT_DIM))
+        ], per_row=5)
 
         # Divider
         tk.Frame(parent, bg=BG_HEADER, height=1).pack(fill=tk.X, padx=16)
@@ -7090,6 +7076,18 @@ class MainWindow:
         tw.pack(fill=tk.BOTH, expand=True)
         tw.insert("1.0", text)
         tw.configure(state=tk.DISABLED)
+
+    def _build_button_grid(self, frame, items, per_row: int) -> None:
+        """Lay pseudo-buttons out in a wrapping grid so none get clipped."""
+        for i, (text, callback) in enumerate(items):
+            btn = tk.Label(
+                frame, text=f"  {text}  ", font=("Segoe UI", 9),
+                fg=TEXT_DIM, bg=BUTTON_BG, cursor="hand2", padx=8, pady=4,
+            )
+            btn.grid(row=i // per_row, column=i % per_row, padx=3, pady=2, sticky="ew")
+            btn.bind("<Button-1>", lambda e, cb=callback: self._fire(cb))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BUTTON_HOVER, fg=TEXT_COLOR))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BUTTON_BG, fg=TEXT_DIM))
 
     def _fire(self, callback) -> None:
         """Fire a callback in a background thread."""

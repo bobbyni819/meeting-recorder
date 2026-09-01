@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
 from meeting_recorder.storage import smart_naming
+from meeting_recorder.integrations.outlook import CalendarEvent
 
 
 class TestSanitizeSubject:
@@ -85,12 +87,215 @@ class TestRenameRecordingDir:
 
 
 class TestSelectMeetingTitle:
-    def test_single_candidate_no_llm(self):
+    def test_single_unrelated_candidate_is_arbitrated_and_generated(self):
+        event = CalendarEvent(
+            subject="Weekly Standup",
+            start_time="2026-06-18T10:00:00",
+            end_time="2026-06-18T10:30:00",
+            attendees=["Sam", "Priya"],
+        )
+        response = {
+            "title": "Protein Assay Planning",
+            "source": "generated",
+            "matched_candidate_index": None,
+        }
+        with mock.patch.object(
+            smart_naming, "ask_json",
+            return_value=(response, SimpleNamespace(ok=True)),
+        ) as ask:
+            title, source = smart_naming.select_meeting_title(
+                "We reviewed protein assay controls and sample preparation.",
+                [event],
+                summary_config=None,
+                recording_start_time="2026-06-18T10:03:00",
+                duration_seconds=1420.0,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Protein Assay Planning", "generated")
+        prompt = ask.call_args.args[0]
+        assert "2026-06-18T10:03:00" in prompt
+        assert "1420.0 seconds" in prompt
+        assert "2026-06-18T10:00:00" in prompt
+        assert "2026-06-18T10:30:00" in prompt
+        assert "Sam, Priya" in prompt
+
+    def test_luna_success_skips_gemini(self):
+        response = {
+            "title": "Budget Review",
+            "source": "calendar",
+            "matched_candidate_index": 0,
+        }
+        cfg = mock.MagicMock(api_key="key")
+        with mock.patch.object(
+            smart_naming, "ask_json",
+            return_value=(response, SimpleNamespace(ok=True)),
+        ), mock.patch(
+            "meeting_recorder.summary.summarizer.create_provider"
+        ) as create_provider:
+            title, source = smart_naming.select_meeting_title(
+                "We discussed the budget.",
+                ["Budget Review", "1:1 with Sam"],
+                cfg,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Budget Review", "calendar")
+        create_provider.assert_not_called()
+
+    def test_luna_exception_falls_through_to_gemini(self):
+        cfg = SimpleNamespace(
+            provider="gemini", api_key="key", model="gemini-2.5-flash",
+        )
+        gemini_response = (
+            '{"title": "Production Incident Postmortem", "source": "generated", '
+            '"matched_candidate_index": null}'
+        )
+        with mock.patch.object(
+            smart_naming, "ask_json", side_effect=TimeoutError("luna timeout"),
+        ), mock.patch(
+            "meeting_recorder.summary.summarizer.GeminiSummaryProvider"
+        ) as provider_cls:
+            provider_cls.return_value.generate.return_value = gemini_response
+            title, source = smart_naming.select_meeting_title(
+                "We investigated last night's production outage.",
+                ["Budget Review", "1:1 with Sam"],
+                cfg,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Production Incident Postmortem", "generated")
+        provider_cls.assert_called_once_with(
+            api_key="key", model="gemini-2.5-flash",
+        )
+
+    def test_gemini_rung_never_reuses_non_gemini_summary_provider(self):
+        cfg = SimpleNamespace(
+            provider="openai", api_key="openai-key", model="gpt-4o-mini",
+        )
+        with mock.patch.object(
+            smart_naming, "ask_json", side_effect=RuntimeError("unavailable"),
+        ), mock.patch(
+            "meeting_recorder.summary.summarizer.GeminiSummaryProvider"
+        ) as gemini_provider, mock.patch(
+            "meeting_recorder.summary.summarizer.create_provider"
+        ) as create_provider:
+            title, source = smart_naming.select_meeting_title(
+                "We discussed the Apollo launch plan.",
+                ["Budget Review", "Apollo Launch"],
+                cfg,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Apollo Launch", "calendar")
+        gemini_provider.assert_not_called()
+        create_provider.assert_not_called()
+
+    def test_explicit_gemini_credentials_work_with_non_gemini_summary_provider(self):
+        cfg = SimpleNamespace(
+            provider="openai", api_key="openai-key", model="gpt-4o-mini",
+        )
+        response = (
+            '{"title": "Apollo Launch", "source": "calendar", '
+            '"matched_candidate_index": 1}'
+        )
+        with mock.patch.object(
+            smart_naming, "ask_json", side_effect=RuntimeError("unavailable"),
+        ), mock.patch(
+            "meeting_recorder.summary.summarizer.GeminiSummaryProvider"
+        ) as provider_cls:
+            provider_cls.return_value.generate.return_value = response
+            title, source = smart_naming.select_meeting_title(
+                "We discussed the Apollo launch plan.",
+                ["Budget Review", "Apollo Launch"],
+                cfg,
+                llm_backend="luna",
+                gemini_api_key="gemini-key",
+                gemini_model="gemini-2.5-flash",
+            )
+
+        assert (title, source) == ("Apollo Launch", "calendar")
+        provider_cls.assert_called_once_with(
+            api_key="gemini-key", model="gemini-2.5-flash",
+        )
+
+    def test_both_llms_fail_falls_through_to_local_content_match(self):
+        cfg = mock.MagicMock(api_key="key")
+        transcript = (
+            "I'm more familiar with net logo for agent-based models, ABM. "
+            "Regan asked about the implementation."
+        )
+        with mock.patch.object(
+            smart_naming, "ask_json", side_effect=RuntimeError("unavailable"),
+        ), mock.patch(
+            "meeting_recorder.summary.summarizer.create_provider",
+            side_effect=RuntimeError("503"),
+        ):
+            title, source = smart_naming.select_meeting_title(
+                transcript,
+                ["Data+ Program breakfast 10 AM talk", "Regan ABM sync"],
+                cfg,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Regan ABM sync", "calendar")
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {},
+            {
+                "title": "Budget Review",
+                "source": "calendar",
+                "matched_candidate_index": 99,
+            },
+            {
+                "title": "Budget Review",
+                "source": "calendar",
+                "matched_candidate_index": "0",
+            },
+        ],
+    )
+    def test_malformed_luna_response_falls_through_without_raising(self, response):
+        cfg = mock.MagicMock(api_key="")
+        with mock.patch.object(
+            smart_naming, "ask_json",
+            return_value=(response, SimpleNamespace(ok=True)),
+        ):
+            title, source = smart_naming.select_meeting_title(
+                "We discussed the Apollo launch plan.",
+                ["Budget Review", "Apollo Launch"],
+                cfg,
+                llm_backend="luna",
+            )
+
+        assert (title, source) == ("Apollo Launch", "calendar")
+
+    def test_local_mode_skips_both_llms(self):
+        cfg = mock.MagicMock(api_key="key")
+        with mock.patch.object(smart_naming, "ask_json") as luna, mock.patch(
+            "meeting_recorder.summary.summarizer.create_provider"
+        ) as create_provider:
+            title, source = smart_naming.select_meeting_title(
+                "The launch plan for Apollo is ready.",
+                ["Budget Review", "Apollo Launch"],
+                cfg,
+                llm_backend="local",
+            )
+
+        assert (title, source) == ("Apollo Launch", "calendar")
+        luna.assert_not_called()
+        create_provider.assert_not_called()
+
+    def test_string_candidate_seam_remains_supported(self):
         title, source = smart_naming.select_meeting_title(
-            "some transcript", ["Weekly Standup"], summary_config=None,
+            "Weekly standup blockers and priorities",
+            ["Weekly Standup"],
+            summary_config=None,
+            llm_backend="local",
         )
         assert title == "Weekly Standup"
-        assert source == "single"
+        assert source == "calendar"
 
     def test_zero_candidates_returns_none(self):
         title, source = smart_naming.select_meeting_title(
@@ -99,55 +304,13 @@ class TestSelectMeetingTitle:
         assert title is None
         assert source == "none"
 
-    def test_multiple_candidates_llm_picks_calendar_match(self):
-        cfg = mock.MagicMock(api_key="key")
-        with mock.patch(
-            "meeting_recorder.summary.summarizer.create_provider"
-        ) as mk:
-            mk.return_value.generate.return_value = "Budget Review"
-            title, source = smart_naming.select_meeting_title(
-                "we discussed the budget", ["Budget Review", "1:1 with Sam"], cfg,
-            )
-        assert title == "Budget Review"
-        assert source == "calendar"
-
-    def test_multiple_candidates_llm_generates_when_no_fit(self):
-        cfg = mock.MagicMock(api_key="key")
-        with mock.patch(
-            "meeting_recorder.summary.summarizer.create_provider"
-        ) as mk:
-            mk.return_value.generate.return_value = "Incident Postmortem"
-            title, source = smart_naming.select_meeting_title(
-                "the outage last night", ["Budget Review", "1:1 with Sam"], cfg,
-            )
-        assert title == "Incident Postmortem"
-        assert source == "generated"
-
     def test_multiple_candidates_no_key_uses_first(self):
         cfg = mock.MagicMock(api_key="")
         title, source = smart_naming.select_meeting_title(
             "transcript", ["First Meeting", "Second Meeting"], cfg,
+            llm_backend="gemini",
         )
         assert title == "First Meeting"
-
-    def test_llm_failure_falls_back_to_content_match(self):
-        """On LLM 503, pick the candidate the transcript actually matches."""
-        cfg = mock.MagicMock(api_key="key")
-        transcript = (
-            "I'm more familiar with net logo for agent-based models, ABM. "
-            "Regan asked about the implementation."
-        )
-        with mock.patch(
-            "meeting_recorder.summary.summarizer.create_provider",
-            side_effect=RuntimeError("503"),
-        ):
-            title, source = smart_naming.select_meeting_title(
-                transcript,
-                ["Data+ Program breakfast 10 AM talk", "Regan ABM sync"],
-                cfg,
-            )
-        # The ABM meeting wins on content, not the first (breakfast) candidate
-        assert title == "Regan ABM sync"
 
 
 class TestBestCandidateByContent:

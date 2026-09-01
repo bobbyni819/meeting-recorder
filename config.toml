@@ -12,6 +12,7 @@ start_muted = true  # start every recording with the mic muted (you usually join
 mute_privacy_first = true  # only record mic when positively confirmed unmuted; re-mutes if the meeting mute button becomes unreadable (toolbar hidden) — never records the room behind your back
 mute_remute_seconds = 12.0  # how long the mute button can stay unreadable while unmuted before privacy-first re-mutes
 smart_rename = true  # rename the folder from transcript content (disambiguates same-slot meetings via calendar); only the folder moves, files inside are untouched
+smart_rename_llm = "luna"  # title arbitration starts with luna, gemini, or the free local scorer
 capture_speaker_events = false  # EXPERIMENTAL: poll Zoom/Teams UI for active speaker to name diarized speakers (needs live-meeting validation; writes additive speaker_events.jsonl)
 echo_gate = false  # drop mic frames that are just the meeting audio echoing through your speakers (uses the loopback as reference). Stops other participants bleeding into the mic track. Only affects speaker (non-headphone) users; never drops your own speech. Off pending live validation.
 
@@ -69,9 +70,9 @@ upload_audio = false   # also upload raw WAVs (~130 MB/meeting); off = transcrip
 
 [summary]
 enabled = true         # generate AI summary after transcription
-provider = "gemini"    # "openai", "anthropic", or "gemini"
+provider = "luna"      # "luna" (gpt-5.6-luna via local Codex CLI, $0, auto-falls back to gemini), "gemini", "openai", "anthropic"
 api_key = ""
-model = "gemini-2.5-flash"  # gemini-2.0-flash free tier was zeroed (429 limit: 0) — keep in sync with transcription model
+model = "gemini-2.5-flash"  # used by the gemini fallback; a non-gpt value here is ignored by luna (keep in sync with transcription model)
 max_transcript_tokens = 0  # 0 = no limit
 
 [retention]

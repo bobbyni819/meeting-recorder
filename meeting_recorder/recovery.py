@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 # A recording stuck in status "processing" longer than this is treated as
 # a crash leftover (post-processing never survives an app restart).
 STALE_PROCESSING_SECONDS = 3600.0
+# A capture left in status "recording" after a crash is safe to recover once
+# its metadata has not changed for this long. Fresh captures must stay alone.
+STALE_RECORDING_SECONDS = 30 * 60.0
 
 
 def load_transcript_segments(recording_dir: Path) -> list[TranscriptSegment]:
@@ -77,8 +80,13 @@ def find_recoverable(recordings_dir: Path) -> RecoverableRecordings:
         if status == "error":
             if _is_retryable(meta.get("error_message", "")):
                 result.failed_retryable.append(rec_dir)
-        elif status == "processing":
-            if now - meta_path.stat().st_mtime > STALE_PROCESSING_SECONDS:
+        elif status in {"processing", "recording"}:
+            stale_after = (
+                STALE_RECORDING_SECONDS
+                if status == "recording"
+                else STALE_PROCESSING_SECONDS
+            )
+            if now - meta_path.stat().st_mtime > stale_after:
                 result.stuck_processing.append(rec_dir)
         elif status == "completed":
             if meta.get("summary_failed") or meta.get("upload_pending"):
@@ -127,8 +135,9 @@ def retry_tail(
             )
 
             summary_config = copy.deepcopy(config.summary)
+            # luna also gets the key: it powers the Gemini fallback rung.
             if (
-                summary_config.provider == "gemini"
+                summary_config.provider in ("gemini", "luna")
                 and not summary_config.api_key
                 and config.transcription.gemini_api_key
             ):
@@ -166,15 +175,22 @@ def retry_tail(
                     folder_id=config.google_drive.folder_id,
                     upload_audio=config.google_drive.upload_audio,
                 )
-                folder_id = uploader.upload_recording(recording_dir)
-                if folder_id:
-                    metadata.google_drive_folder_id = folder_id
-                    metadata.upload_pending = False
-                    performed.append("drive-upload")
-                    logger.info(
-                        "Tail retry: Drive upload complete for %s",
-                        recording_dir.name,
-                    )
+                result = uploader.upload_recording(recording_dir)
+                if result:
+                    metadata.google_drive_folder_id = result.folder_id
+                    metadata.upload_pending = not result.complete
+                    if result.complete:
+                        performed.append("drive-upload")
+                        logger.info(
+                            "Tail retry: Drive upload complete for %s",
+                            recording_dir.name,
+                        )
+                    else:
+                        logger.warning(
+                            "Tail retry: Drive upload still incomplete for %s (%s)",
+                            recording_dir.name,
+                            ", ".join(result.failed_files),
+                        )
         except Exception:
             logger.exception(
                 "Tail retry: Drive upload failed for %s", recording_dir.name,

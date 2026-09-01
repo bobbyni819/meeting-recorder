@@ -707,7 +707,7 @@ class SettingsWindow:
         self._summary_provider_var = tk.StringVar(value=self.config.summary.provider)
         ttk.Combobox(
             parent, textvariable=self._summary_provider_var, width=12,
-            values=["openai", "anthropic", "gemini"], state="readonly",
+            values=["openai", "anthropic", "gemini", "luna"], state="readonly",
         ).grid(row=row, column=1, sticky=tk.W, pady=2)
 
         row += 1

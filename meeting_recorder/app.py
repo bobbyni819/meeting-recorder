@@ -71,6 +71,9 @@ class MeetingRecorderApp:
 
         # Post-processing thread (non-daemon, so quit() can wait for it)
         self._post_thread: Optional[threading.Thread] = None
+        # Set when startup recovery finds an active capture. Post-processing
+        # schedules another sweep once that capture has safely finished.
+        self._startup_retry_deferred = False
 
         # Prevents double-invocation of stop_recording() from concurrent callers
         # (e.g. user clicks Stop while process-exit auto-stop fires simultaneously)
@@ -831,8 +834,9 @@ class MeetingRecorderApp:
 
             # Auto-share Gemini API key with summary provider if needed
             summary_config = copy.deepcopy(cfg.summary)
+            # luna also gets the key: it powers the Gemini fallback rung.
             if (
-                summary_config.provider == "gemini"
+                summary_config.provider in ("gemini", "luna")
                 and not summary_config.api_key
                 and cfg.transcription.gemini_api_key
             ):
@@ -849,14 +853,19 @@ class MeetingRecorderApp:
 
             # Smart rename from transcript content. Runs BEFORE the parallel
             # pool so the search index and Drive upload see the final name.
-            if self.config.recording.smart_rename:
+            if cfg.recording.smart_rename:
                 new_dir = self._smart_rename_recording(
-                    recording_dir, segments, metadata, summary_config,
+                    recording_dir,
+                    segments,
+                    metadata,
+                    summary_config,
+                    config=cfg,
                 )
                 if new_dir is not None:
                     recording_dir = new_dir
 
-            # Run summary, indexing, quality scoring, and Drive upload in parallel
+            # Build all local artifacts in parallel. Drive runs afterward so
+            # it cannot miss a summary file that is still being generated.
             _update_progress("saving & indexing...")
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -870,10 +879,6 @@ class MeetingRecorderApp:
                 futures.append(pool.submit(
                     self._score_quality, recording_dir, metadata,
                 ))
-                if cfg.google_drive.enabled:
-                    futures.append(pool.submit(
-                        self._upload_to_google_drive, recording_dir, metadata, cfg,
-                    ))
                 futures.append(pool.submit(
                     self._auto_tag_recording, recording_dir, metadata,
                 ))
@@ -886,7 +891,14 @@ class MeetingRecorderApp:
                 for f in as_completed(futures):
                     f.result()  # propagate exceptions (each method catches its own)
 
-            # Final save: parallel tasks (summary, Drive upload) modify metadata
+            # Persist summary/quality/tag fields before Drive reads metadata.json.
+            # Upload-specific fields are saved locally by the uploader callback;
+            # remote files stay immutable-by-name to keep retries idempotent.
+            self._save_metadata(metadata, recording_dir)
+            if cfg.google_drive.enabled:
+                self._upload_to_google_drive(recording_dir, metadata, cfg)
+
+            # Final save: parallel tasks and Drive upload modify metadata
             # fields that finalize() didn't know about. Persist them now.
             self._save_metadata(metadata, recording_dir)
 
@@ -952,6 +964,8 @@ class MeetingRecorderApp:
                 metadata.set_error(str(e), recording_dir)
             _hide_progress()
 
+        self._schedule_deferred_retry_sweep()
+
     def _upload_to_google_drive(
         self,
         recording_dir: Path,
@@ -972,12 +986,21 @@ class MeetingRecorderApp:
                 folder_id=cfg.google_drive.folder_id,
                 upload_audio=cfg.google_drive.upload_audio,
             )
-            folder_id = uploader.upload_recording(recording_dir)
-            if folder_id:
-                metadata.google_drive_folder_id = folder_id
-                metadata.upload_pending = False
+            result = uploader.upload_recording(recording_dir)
+            if result:
+                metadata.google_drive_folder_id = result.folder_id
+                metadata.upload_pending = not result.complete
                 self._save_metadata(metadata, recording_dir)
-                logger.info("Google Drive upload complete: %s", folder_id)
+                if result.complete:
+                    logger.info(
+                        "Google Drive upload complete: %s", result.folder_id,
+                    )
+                else:
+                    logger.warning(
+                        "Google Drive upload incomplete: %s (%s)",
+                        result.folder_id,
+                        ", ".join(result.failed_files),
+                    )
             else:
                 logger.warning("Google Drive upload returned no folder ID.")
                 metadata.upload_pending = True
@@ -996,6 +1019,7 @@ class MeetingRecorderApp:
     def _smart_rename_recording(
         self, recording_dir: Path, segments, metadata: RecordingMetadata,
         summary_config,
+        config: Optional[Config] = None,
     ) -> Optional[Path]:
         """Rename the folder to match the meeting, disambiguating by content.
 
@@ -1006,12 +1030,15 @@ class MeetingRecorderApp:
         try:
             from meeting_recorder.storage import smart_naming
 
+            cfg = config or self.config
             # Gather candidate calendar events overlapping this recording.
-            candidates = self._calendar_candidates(metadata)
-            if metadata.meeting_subject and metadata.meeting_subject not in candidates:
-                candidates.append(metadata.meeting_subject)
-            # 0 candidates → keep the current name (don't spend quota naming
-            # ad-hoc meetings); 1 → use it; 2+ → disambiguate by transcript.
+            candidates = self._calendar_candidates(metadata, cfg)
+            if metadata.meeting_subject and not any(
+                event.subject == metadata.meeting_subject for event in candidates
+            ):
+                candidates.append(CalendarEvent(subject=metadata.meeting_subject))
+            # Zero candidates keep the current name; every non-empty candidate
+            # list is checked against transcript content before renaming.
             if not candidates:
                 return None
 
@@ -1019,7 +1046,14 @@ class MeetingRecorderApp:
                 f"{s.speaker or 'Speaker'}: {s.text}" for s in segments[:60]
             )
             title, source = smart_naming.select_meeting_title(
-                excerpt, candidates, summary_config,
+                excerpt,
+                candidates,
+                summary_config,
+                recording_start_time=metadata.start_time,
+                duration_seconds=metadata.duration_seconds,
+                llm_backend=cfg.recording.smart_rename_llm,
+                gemini_api_key=cfg.transcription.gemini_api_key,
+                gemini_model=cfg.transcription.gemini_model,
             )
             if not title:
                 return None
@@ -1050,9 +1084,14 @@ class MeetingRecorderApp:
             logger.exception("Smart rename failed (non-fatal)")
             return None
 
-    def _calendar_candidates(self, metadata: RecordingMetadata) -> list[str]:
-        """Calendar event subjects overlapping this recording's time slot."""
-        if not self.config.outlook.enabled:
+    def _calendar_candidates(
+        self,
+        metadata: RecordingMetadata,
+        config: Optional[Config] = None,
+    ) -> list[CalendarEvent]:
+        """Calendar events overlapping this recording's time slot."""
+        cfg = config or self.config
+        if not cfg.outlook.enabled:
             return []
         try:
             from datetime import datetime
@@ -1068,9 +1107,9 @@ class MeetingRecorderApp:
             events = get_upcoming_meetings(
                 window_minutes=30,
                 reference_time=ref,
-                read_details=self.config.outlook.read_details,
+                read_details=cfg.outlook.read_details,
             )
-            return [e.subject for e in events if e.subject]
+            return [event for event in events if event.subject]
         except Exception:
             logger.debug("Calendar candidate fetch failed", exc_info=True)
             return []
@@ -1643,10 +1682,36 @@ class MeetingRecorderApp:
 
         _rec_dir = recording_dir
         _meta = metadata
+        _elapsed_seconds = _meta.duration_seconds
+        if not _elapsed_seconds:
+            app_audio = _rec_dir / "app_audio.wav"
+            try:
+                import wave
+
+                with wave.open(str(app_audio), "rb") as wav_file:
+                    frame_rate = wav_file.getframerate()
+                    if frame_rate > 0:
+                        _elapsed_seconds = (
+                            wav_file.getnframes() / float(frame_rate)
+                        )
+                        logger.info(
+                            "Recovered re-process duration from %s: %.1fs",
+                            app_audio,
+                            _elapsed_seconds,
+                        )
+            except Exception:
+                logger.warning(
+                    "Could not derive re-process duration from %s; "
+                    "falling back to metadata timing",
+                    app_audio,
+                    exc_info=True,
+                )
 
         def _reprocess_wrapper() -> None:
             try:
-                self._post_process(_rec_dir, _meta, self.config, _meta.duration_seconds)
+                self._post_process(
+                    _rec_dir, _meta, self.config, _elapsed_seconds,
+                )
             finally:
                 self._post_thread = None
 
@@ -1675,7 +1740,7 @@ class MeetingRecorderApp:
         # Never run heavy re-processing while a meeting is being recorded —
         # both would hit the (often free-tier) transcription API at once.
         if self._capture_manager and self._capture_manager.is_recording:
-            logger.info("Startup retry sweep skipped: recording in progress")
+            self._defer_startup_retry_sweep("recording in progress")
             return
 
         try:
@@ -1700,6 +1765,9 @@ class MeetingRecorderApp:
         # transcribed recording) are cheap and bounded — always run them.
         for rec_dir in found.incomplete_tail:
             if self._capture_manager and self._capture_manager.is_recording:
+                self._defer_startup_retry_sweep(
+                    "recording began during tail retries",
+                )
                 return
             try:
                 performed = recovery.retry_tail(
@@ -1732,7 +1800,9 @@ class MeetingRecorderApp:
                 if self._post_thread and self._post_thread.is_alive():
                     self._post_thread.join(timeout=600)
                 if self._capture_manager and self._capture_manager.is_recording:
-                    logger.info("Retry sweep paused: recording in progress")
+                    self._defer_startup_retry_sweep(
+                        "recording began during full re-processing",
+                    )
                     return
                 try:
                     self.reprocess_recording(rec_dir)
@@ -1742,6 +1812,28 @@ class MeetingRecorderApp:
                     logger.exception("Sweep re-process failed for %s", rec_dir.name)
 
         self._main_window.refresh_history()
+
+    def _defer_startup_retry_sweep(self, reason: str) -> None:
+        """Remember an interrupted recovery sweep for the next idle period."""
+        self._startup_retry_deferred = True
+        logger.info(
+            "Startup retry sweep deferred: %s; will retry after post-processing",
+            reason,
+        )
+
+    def _schedule_deferred_retry_sweep(self) -> None:
+        """Re-run a startup sweep deferred by an active recording."""
+        if not getattr(self, "_startup_retry_deferred", False):
+            return
+        if self._capture_manager and self._capture_manager.is_recording:
+            return
+        self._startup_retry_deferred = False
+        logger.info("Scheduling deferred startup retry sweep")
+        threading.Thread(
+            target=self._startup_retry_sweep,
+            daemon=True,
+            name="deferred-retry-sweep",
+        ).start()
 
     def reprocess_all_failed(self) -> None:
         """Re-process all recordings with status 'error', one at a time."""

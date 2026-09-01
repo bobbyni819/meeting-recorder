@@ -47,6 +47,7 @@ class TestConfigDefaults:
         assert cfg.language == "en"
         assert cfg.user_name == "User"
         assert cfg.live_model_size == ""
+        assert cfg.smart_rename_llm == "luna"
 
     def test_default_audio_config(self):
         cfg = AudioConfig()
@@ -486,6 +487,15 @@ class TestConfigValidation:
         warnings = cfg.validate()
         assert len(warnings) == 1
         assert "backend" in warnings[0]
+
+    def test_invalid_smart_rename_llm_warns(self):
+        cfg = Config()
+        cfg.diarization.enabled = False
+        cfg.recording.smart_rename_llm = "expensive-model"
+
+        warnings = cfg.validate()
+
+        assert any("smart_rename_llm" in warning for warning in warnings)
 
     def test_invalid_summary_provider_warns(self):
         cfg = Config()

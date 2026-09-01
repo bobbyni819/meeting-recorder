@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +55,21 @@ AUDIO_FILENAMES = {"app_audio.wav", "mic_audio.wav", "mixed.wav"}
 
 # Files to NEVER upload (keeps screen recording local-only — too large)
 UPLOAD_BLOCKLIST = {"screen.mp4", "thumbnail.jpg"}
+
+
+@dataclass(frozen=True)
+class DriveUploadResult:
+    """Outcome of one idempotent recording-folder upload."""
+
+    folder_id: str
+    uploaded_files: tuple[str, ...] = ()
+    failed_files: tuple[str, ...] = ()
+    skipped_files: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """Return True only when every selected local file is on Drive."""
+        return bool(self.folder_id) and not self.failed_files
 
 
 class GoogleDriveUploader:
@@ -143,17 +159,17 @@ class GoogleDriveUploader:
             logger.exception("Failed to build Drive service")
             return False
 
-    def upload_recording(self, recording_dir: Path) -> Optional[str]:
+    def upload_recording(self, recording_dir: Path) -> Optional[DriveUploadResult]:
         """Upload a recording folder to Google Drive.
 
-        Creates a subfolder in the target Drive folder with the recording
-        directory name, then uploads selected files into it.
+        Reuses a same-named subfolder in the target Drive folder and skips
+        same-named files already present, so retries only fill missing files.
 
         Args:
             recording_dir: Local path to the recording directory.
 
         Returns:
-            The Google Drive folder ID of the uploaded recording, or None on failure.
+            A detailed upload result, or None when no Drive folder was available.
         """
         if not self._service:
             if not self.authenticate():
@@ -165,16 +181,24 @@ class GoogleDriveUploader:
             if not parent_id:
                 return None
 
-            # Create subfolder for this recording
+            # Reuse a same-named recording folder so retries are idempotent.
             folder_name = recording_dir.name
-            recording_folder_id = self._create_folder(folder_name, parent_id)
+            recording_folder_id = self._find_child_folder(folder_name, parent_id)
+            reused_folder = bool(recording_folder_id)
+            if not recording_folder_id:
+                recording_folder_id = self._create_folder(folder_name, parent_id)
             if not recording_folder_id:
                 return None
 
-            # Upload files
-            uploaded = 0
+            existing_names = (
+                self._list_child_names(recording_folder_id)
+                if reused_folder
+                else set()
+            )
+            uploaded: list[str] = []
             failed: list[str] = []
-            for file_path in recording_dir.iterdir():
+            skipped: list[str] = []
+            for file_path in sorted(recording_dir.iterdir()):
                 if not file_path.is_file():
                     continue
                 # Skip blocklist (videos, thumbnails — too large to be worth uploading)
@@ -190,24 +214,84 @@ class GoogleDriveUploader:
                 elif file_path.name not in UPLOAD_FILENAMES and file_path.suffix not in UPLOAD_EXTENSIONS:
                     continue
 
+                if file_path.name in existing_names:
+                    skipped.append(file_path.name)
+                    continue
                 if self._upload_file(file_path, recording_folder_id):
-                    uploaded += 1
+                    uploaded.append(file_path.name)
                 else:
                     failed.append(file_path.name)
 
             if failed:
                 logger.warning(
-                    "Drive upload partial: %d succeeded, %d failed (%s)",
-                    uploaded, len(failed), ", ".join(failed),
+                    "Drive upload partial: %d uploaded, %d skipped, %d failed (%s)",
+                    len(uploaded), len(skipped), len(failed), ", ".join(failed),
                 )
             logger.info(
-                "Uploaded %d files to Google Drive: %s", uploaded, folder_name
+                "Drive upload: %d uploaded, %d already present: %s",
+                len(uploaded), len(skipped), folder_name,
             )
-            return recording_folder_id
+            return DriveUploadResult(
+                folder_id=recording_folder_id,
+                uploaded_files=tuple(uploaded),
+                failed_files=tuple(failed),
+                skipped_files=tuple(skipped),
+            )
 
         except Exception:
             logger.exception("Failed to upload recording to Google Drive")
             return None
+
+    def _find_child_folder(self, name: str, parent_id: str) -> Optional[str]:
+        """Return a same-named child folder ID, or None when absent."""
+        escaped_name = self._escape_query_value(name)
+        escaped_parent = self._escape_query_value(parent_id)
+        query = (
+            f"name = '{escaped_name}' and '{escaped_parent}' in parents and "
+            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
+        result = self._service.files().list(
+            q=query,
+            spaces="drive",
+            fields="files(id, name, createdTime)",
+            orderBy="createdTime",
+        ).execute()
+        folders = result.get("files", [])
+        if not folders:
+            return None
+        if len(folders) > 1:
+            logger.warning(
+                "Multiple Drive folders named %s under %s; using oldest: %s",
+                name, parent_id, folders[0].get("id"),
+            )
+        return folders[0].get("id")
+
+    def _list_child_names(self, parent_id: str) -> set[str]:
+        """List every non-trashed child filename in a Drive folder."""
+        escaped_parent = self._escape_query_value(parent_id)
+        names: set[str] = set()
+        page_token = None
+        while True:
+            kwargs = {
+                "q": f"'{escaped_parent}' in parents and trashed = false",
+                "spaces": "drive",
+                "fields": "nextPageToken, files(id, name)",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            result = self._service.files().list(**kwargs).execute()
+            names.update(
+                item["name"] for item in result.get("files", [])
+                if isinstance(item.get("name"), str)
+            )
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                return names
+
+    @staticmethod
+    def _escape_query_value(value: str) -> str:
+        """Escape a literal embedded in a Google Drive query."""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
     def _get_or_create_root_folder(self) -> Optional[str]:
         """Get or create the MeetingRecordings folder in Drive root.

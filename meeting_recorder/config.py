@@ -125,6 +125,8 @@ class RecordingConfig:
     # disambiguating between meetings booked in the same slot via the
     # calendar. Only the folder moves; files inside are untouched.
     smart_rename: bool = True
+    # Title arbitration starts with Luna, Gemini, or the free local scorer.
+    smart_rename_llm: str = "luna"
     # EXPERIMENTAL: poll the Zoom/Teams UI for the active speaker during the
     # meeting and use it to put real names on diarized speakers. Off by
     # default — the accessibility names vary by app version and need a
@@ -244,7 +246,7 @@ class GoogleDriveConfig:
 @dataclass
 class SummaryConfig:
     enabled: bool = False
-    provider: str = "openai"      # "openai", "anthropic", or "gemini"
+    provider: str = "openai"      # "openai", "anthropic", "gemini", or "luna" (gpt-5.6-luna via local Codex CLI, Gemini fallback)
     api_key: str = ""
     model: str = ""               # empty = provider default
     max_transcript_tokens: int = 0  # 0 = no limit
@@ -427,7 +429,15 @@ class Config:
                 f"is not valid (expected one of: {', '.join(sorted(valid_backends))})"
             )
 
-        valid_providers = {"openai", "anthropic", "gemini"}
+        valid_smart_rename_llms = {"luna", "gemini", "local"}
+        if self.recording.smart_rename_llm not in valid_smart_rename_llms:
+            warnings.append(
+                f"recording.smart_rename_llm = '{self.recording.smart_rename_llm}' "
+                f"is not valid (expected one of: "
+                f"{', '.join(sorted(valid_smart_rename_llms))})"
+            )
+
+        valid_providers = {"openai", "anthropic", "gemini", "luna"}
         if self.summary.enabled and self.summary.provider not in valid_providers:
             warnings.append(
                 f"summary.provider = '{self.summary.provider}' "

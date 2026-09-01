@@ -20,6 +20,8 @@ import pytest
 
 from meeting_recorder.config import Config
 from meeting_recorder.audio.process_finder import MeetingProcess
+from meeting_recorder.integrations.outlook import CalendarEvent
+from meeting_recorder.storage.metadata import RecordingMetadata
 
 # Inject mock modules for native UI packages that may not be installed
 # in the test environment.  Unlike mock.patch.dict, this persists so the
@@ -485,3 +487,212 @@ class TestPostProcessMetadata:
         assert disk_data["has_summary"] is True
         assert disk_data["summary_provider"] == "gemini"
         assert disk_data["summary_model"] == "gemini-2.0-flash"
+
+    def test_drive_upload_waits_for_summary_artifacts(self, tmp_path):
+        app = _make_app()
+        metadata = RecordingMetadata.create(
+            app_name="Zoom", app_pid=100, sample_rate=16000,
+            channels=1, language="en", transcription_backend="local",
+        )
+        _make_dummy_wav(tmp_path / "app_audio.wav")
+        _make_dummy_wav(tmp_path / "mic_audio.wav")
+        app._pipeline.process.return_value = []
+        app._pipeline.last_speaker_mapping = None
+        release_summary = threading.Event()
+        upload_saw_summary = []
+        upload_metadata_has_summary = []
+
+        def delayed_summary(recording_dir, _segments, summary_metadata, _config):
+            release_summary.wait(timeout=1.0)
+            (recording_dir / "summary.md").write_text("summary", encoding="utf-8")
+            summary_metadata.has_summary = True
+
+        def observe_upload(recording_dir, *_args):
+            upload_saw_summary.append((recording_dir / "summary.md").exists())
+            import json
+            on_disk = json.loads(
+                (recording_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            upload_metadata_has_summary.append(on_disk["has_summary"])
+            release_summary.set()
+
+        cfg = Config()
+        cfg.recording.smart_rename = False
+        cfg.summary.enabled = True
+        cfg.google_drive.enabled = True
+        with (
+            mock.patch.object(_app_mod, "mix_tracks_streaming"),
+            mock.patch.object(_app_mod, "save_all_formats"),
+            mock.patch.object(app, "_generate_summary", side_effect=delayed_summary),
+            mock.patch.object(app, "_upload_to_google_drive", side_effect=observe_upload),
+            mock.patch.object(app, "_index_recording"),
+            mock.patch.object(app, "_score_quality"),
+            mock.patch.object(app, "_auto_tag_recording"),
+            mock.patch.object(app, "_extract_action_items"),
+            mock.patch.object(app, "_extract_decisions"),
+            mock.patch.object(_app_mod, "notifications"),
+        ):
+            app._post_process(tmp_path, metadata, cfg)
+
+        assert upload_saw_summary == [True]
+        assert upload_metadata_has_summary == [True]
+
+
+class TestSmartRenameContext:
+    def test_calendar_candidates_preserve_event_details(self):
+        app = _make_app()
+        app.config.outlook.enabled = True
+        event = CalendarEvent(
+            subject="Budget Review",
+            start_time="2026-06-18T10:00:00",
+            end_time="2026-06-18T10:30:00",
+            attendees=["Sam"],
+        )
+        metadata = RecordingMetadata(start_time="2026-06-18T10:02:00")
+
+        with mock.patch(
+            "meeting_recorder.integrations.outlook.get_upcoming_meetings",
+            return_value=[event],
+        ):
+            candidates = app._calendar_candidates(metadata)
+
+        assert candidates == [event]
+        assert candidates[0].attendees == ["Sam"]
+
+    def test_smart_rename_uses_supplied_config_snapshot(self, tmp_path):
+        from meeting_recorder.storage import smart_naming
+        from meeting_recorder.transcription.local_whisper import TranscriptSegment
+
+        app = _make_app()
+        app.config.recording.smart_rename_llm = "luna"
+        app.config.transcription.gemini_api_key = "live-key"
+        snapshot = copy.deepcopy(app.config)
+        snapshot.recording.smart_rename_llm = "local"
+        snapshot.transcription.gemini_api_key = "snapshot-key"
+        snapshot.transcription.gemini_model = "gemini-snapshot"
+        metadata = RecordingMetadata(
+            app_name="Zoom",
+            meeting_subject="Budget Review",
+            start_time="2026-06-18T10:00:00",
+            duration_seconds=900.0,
+        )
+        recording_dir = tmp_path / "2026-06-18_10-00-00_Budget_Review_Zoom"
+        recording_dir.mkdir()
+        segments = [TranscriptSegment(0.0, 1.0, "budget", "Sam")]
+
+        with mock.patch.object(
+            app, "_calendar_candidates", return_value=[],
+        ), mock.patch.object(
+            smart_naming, "select_meeting_title",
+            return_value=("Budget Review", "calendar"),
+        ) as select_title:
+            app._smart_rename_recording(
+                recording_dir,
+                segments,
+                metadata,
+                snapshot.summary,
+                config=snapshot,
+            )
+
+        assert select_title.call_args.kwargs["llm_backend"] == "local"
+        assert select_title.call_args.kwargs["gemini_api_key"] == "snapshot-key"
+        assert select_title.call_args.kwargs["gemini_model"] == "gemini-snapshot"
+
+
+class TestDriveUploadState:
+    def test_partial_upload_keeps_pending_true(self, tmp_path):
+        from meeting_recorder.integrations.google_drive import DriveUploadResult
+
+        app = _make_app()
+        metadata = RecordingMetadata(upload_pending=True)
+        result = DriveUploadResult(
+            folder_id="drive-folder",
+            uploaded_files=("metadata.json",),
+            failed_files=("summary.md",),
+        )
+        with mock.patch.object(
+            _app_mod, "is_google_drive_available", return_value=True,
+        ), mock.patch.object(
+            _app_mod, "GoogleDriveUploader",
+        ) as uploader_cls, mock.patch.object(app, "_save_metadata"):
+            uploader_cls.return_value.upload_recording.return_value = result
+            app._upload_to_google_drive(tmp_path, metadata)
+
+        assert metadata.google_drive_folder_id == "drive-folder"
+        assert metadata.upload_pending is True
+
+
+class TestReprocessDuration:
+    def test_zero_metadata_duration_uses_app_wav_duration(self, tmp_path):
+        app = _make_app()
+        _make_dummy_wav(tmp_path / "app_audio.wav", duration_s=1.25, rate=8000)
+        metadata = RecordingMetadata(
+            start_time="2026-06-18T09:00:00",
+            duration_seconds=0.0,
+            status="recording",
+        )
+        metadata.save(tmp_path)
+        captured = []
+        called = threading.Event()
+
+        def capture_post_process(*args):
+            captured.append(args)
+            called.set()
+
+        with mock.patch.object(
+            _app_mod, "TranscriptionPipeline", return_value=app._pipeline,
+        ), mock.patch.object(
+            app, "_post_process", side_effect=capture_post_process,
+        ):
+            app.reprocess_recording(tmp_path)
+            assert called.wait(timeout=2.0)
+
+        assert captured[0][3] == pytest.approx(1.25)
+
+
+class TestStartupRecoveryDeferral:
+    def test_active_recording_defers_startup_sweep(self):
+        app = _make_app()
+        app._capture_manager = SimpleNamespace(is_recording=True)
+
+        with mock.patch("time.sleep"):
+            app._startup_retry_sweep()
+
+        assert app._startup_retry_deferred is True
+
+    def test_recording_started_mid_sweep_marks_it_deferred(self, tmp_path):
+        from meeting_recorder.recovery import RecoverableRecordings
+
+        app = _make_app()
+
+        class CaptureState:
+            checks = 0
+
+            @property
+            def is_recording(self):
+                self.checks += 1
+                return self.checks >= 2
+
+        app._capture_manager = CaptureState()
+        found = RecoverableRecordings(incomplete_tail=[tmp_path / "pending"])
+        with mock.patch("time.sleep"), mock.patch(
+            "meeting_recorder.recovery.find_recoverable", return_value=found,
+        ), mock.patch(
+            "meeting_recorder.recovery.retry_tail",
+        ) as retry_tail:
+            app._startup_retry_sweep()
+
+        assert app._startup_retry_deferred is True
+        retry_tail.assert_not_called()
+
+    def test_deferred_sweep_is_rescheduled_after_recording(self):
+        app = _make_app()
+        app._startup_retry_deferred = True
+        app._capture_manager = None
+
+        with mock.patch.object(_app_mod.threading, "Thread") as thread_cls:
+            app._schedule_deferred_retry_sweep()
+
+        assert app._startup_retry_deferred is False
+        assert thread_cls.call_args.kwargs["target"] == app._startup_retry_sweep
+        thread_cls.return_value.start.assert_called_once_with()

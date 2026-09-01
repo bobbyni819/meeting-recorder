@@ -129,11 +129,12 @@ class GeminiSummaryProvider:
 class LunaSummaryProvider:
     """gpt-5.6-luna via the local Codex CLI (``bobby_brain.codex_llm``).
 
-    Runs on Bobby's Codex subscription — no metered API spend. Falls back to
-    a secondary provider (normally Gemini on the free-tier key) whenever the
-    toolkit is missing or the call fails, so the automatic post-recording
-    summary never silently disappears. ``model`` reflects what actually
-    answered, so summary.json's model_used stays honest after a fallback.
+    Runs on the machine's Codex subscription — no metered API spend. Falls
+    back to a secondary provider (normally Gemini on a free-tier key)
+    whenever the toolkit is missing or the call fails, so the automatic
+    post-recording summary never silently disappears. ``model`` reflects
+    what actually answered, so summary.json's model_used stays honest
+    after a fallback.
     """
 
     def __init__(

@@ -180,8 +180,8 @@ def _check_config() -> int:
         sc = config.summary
         if sc.enabled and not sc.api_key:
             # Check Gemini fallback
-            if sc.provider == "gemini" and tc.gemini_api_key:
-                print(_ok("Summary provider: gemini (using transcription API key)"))
+            if sc.provider in ("gemini", "luna") and tc.gemini_api_key:
+                print(_ok(f"Summary provider: {sc.provider} (using transcription API key)"))
             else:
                 print(_warn(f"Summary enabled ({sc.provider}) but api_key is empty"))
         elif sc.enabled:
@@ -588,8 +588,8 @@ def _check_config_structured() -> CheckCategory:
 
         sc = config.summary
         if sc.enabled and not sc.api_key:
-            if sc.provider == "gemini" and tc.gemini_api_key:
-                cat.results.append(CheckResult("ok", "Summary provider: gemini (using transcription API key)"))
+            if sc.provider in ("gemini", "luna") and tc.gemini_api_key:
+                cat.results.append(CheckResult("ok", f"Summary provider: {sc.provider} (using transcription API key)"))
             else:
                 cat.results.append(CheckResult("warn", f"Summary enabled ({sc.provider}) but api_key is empty"))
         elif sc.enabled:

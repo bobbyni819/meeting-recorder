@@ -645,8 +645,10 @@ class CaptureManager:
                         last_flush = now
                         frames_since_flush = 0
                 else:
-                    # Wait with event so stop() wakes us immediately
-                    self._stop_event.wait(0.01)
+                    # Wait with event so stop() wakes us immediately. 30 ms
+                    # matches the chunk cadence; 10 ms was 100 wakes/s per
+                    # writer thread for no extra data.
+                    self._stop_event.wait(0.03)
 
             # Flush remaining
             remaining = buffer.get_all()

@@ -23,6 +23,8 @@ The split is intentional — `meeting-recorder` was already taken on PyPI, so th
 - Optional speaker diarization via pyannote.audio
 - System-tray app with hotkey controls; saves recordings + transcripts to a configurable folder
 - Optional Outlook calendar integration: auto-tags recordings with the meeting that was on your calendar
+- Transcript-aware smart naming checks rich calendar-event context through a configurable Luna → Gemini → local fallback chain (`recording.smart_rename_llm`)
+- Crash recovery finds stale captures, while idempotent Google Drive retries reuse folders and upload only missing files
 
 ## Install
 

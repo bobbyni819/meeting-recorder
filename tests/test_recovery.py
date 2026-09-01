@@ -84,6 +84,22 @@ class TestFindRecoverable:
         found = recovery.find_recoverable(tmp_path)
         assert found.stuck_processing == []
 
+    def test_stale_recording_status_is_recoverable(self, tmp_path):
+        meta_path = _write_meta(tmp_path / "crash_orphan", status="recording")
+        old = time.time() - recovery.STALE_RECORDING_SECONDS - 60
+        os.utime(meta_path, (old, old))
+
+        found = recovery.find_recoverable(tmp_path)
+
+        assert found.stuck_processing == [tmp_path / "crash_orphan"]
+
+    def test_fresh_recording_status_is_not_recoverable(self, tmp_path):
+        _write_meta(tmp_path / "active_capture", status="recording")
+
+        found = recovery.find_recoverable(tmp_path)
+
+        assert found.stuck_processing == []
+
     def test_missing_dir_returns_empty(self, tmp_path):
         found = recovery.find_recoverable(tmp_path / "nope")
         assert found.failed_retryable == []
@@ -169,6 +185,30 @@ class TestRetryTail:
         assert performed == []
         assert len(calls) == 1
         assert calls[0][1] == tmp_path
+
+    def test_partial_drive_upload_keeps_pending_flag(self, tmp_path):
+        from meeting_recorder.integrations.google_drive import DriveUploadResult
+
+        _write_meta(tmp_path, upload_pending=True, has_summary=True)
+        cfg = self._config(tmp_path, summary=False, drive=True)
+        result = DriveUploadResult(
+            folder_id="drive-folder",
+            uploaded_files=("transcript.txt",),
+            failed_files=("summary.md",),
+        )
+        with mock.patch(
+            "meeting_recorder.integrations.google_drive.is_google_drive_available",
+            return_value=True,
+        ), mock.patch(
+            "meeting_recorder.integrations.google_drive.GoogleDriveUploader"
+        ) as uploader_cls:
+            uploader_cls.return_value.upload_recording.return_value = result
+            performed = recovery.retry_tail(tmp_path, cfg)
+
+        assert performed == []
+        meta = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["google_drive_folder_id"] == "drive-folder"
+        assert meta["upload_pending"] is True
 
 
 class TestReprocessHeadless:
